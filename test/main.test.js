@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { run } from "../src/main.js";
+import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
 import { createFakeCore } from "./helpers/fake-core.js";
+import { REVIEWING_LINE } from "./helpers/run-action.js";
 
 const VALID_INPUTS = {
   "github-token": "token-value",
   "openai-api-key": "key-value",
 };
-const eventName = "pull_request";
 
 /** A core whose first log call fails, to simulate an unexpected error. */
 function createFailingCore(thrown, inputs = VALID_INPUTS) {
@@ -18,19 +19,22 @@ function createFailingCore(thrown, inputs = VALID_INPUTS) {
   return core;
 }
 
-test("starts on a pull_request event with complete inputs", async () => {
+test("starts on a pull_request event and names the pull request", async () => {
   const core = createFakeCore(VALID_INPUTS);
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
-  assert.deepEqual(core.messages("info"), ["ReviewOps started."]);
+  assert.deepEqual(core.messages("info"), [
+    "ReviewOps started.",
+    REVIEWING_LINE,
+  ]);
   assert.deepEqual(core.messages("setFailed"), []);
 });
 
 test("masks the credentials before it logs anything", async () => {
   const core = createFakeCore(VALID_INPUTS);
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.deepEqual(
     core.calls.slice(0, 2).map((call) => call.method),
@@ -38,11 +42,24 @@ test("masks the credentials before it logs anything", async () => {
   );
 });
 
-for (const otherEvent of ["push", "pull_request_target"]) {
-  test(`skips the run on event "${otherEvent}" without failing`, async () => {
+test("keeps the title of the pull request out of the log", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const payload = loadEvent();
+  payload.pull_request.title = "TITLE-WRITTEN-BY-THE-AUTHOR";
+
+  await run({ core, context: createFakeContext({ payload }) });
+
+  assert.doesNotMatch(
+    JSON.stringify(core.calls),
+    /TITLE-WRITTEN-BY-THE-AUTHOR/,
+  );
+});
+
+for (const eventName of ["push", "pull_request_target", undefined]) {
+  test(`skips the run on event "${eventName}" without failing`, async () => {
     const core = createFakeCore();
 
-    await run({ core, eventName: otherEvent });
+    await run({ core, context: createFakeContext({ eventName }) });
 
     assert.equal(core.messages("notice").length, 1);
     assert.match(core.messages("notice")[0], /was skipped/);
@@ -51,44 +68,10 @@ for (const otherEvent of ["push", "pull_request_target"]) {
   });
 }
 
-/**
- * Sets GITHUB_EVENT_NAME for one test and restores it afterwards. The runner
- * sets this variable too, so a test must never rely on it being absent.
- */
-function withEventNameInEnvironment(t, value) {
-  const previous = process.env.GITHUB_EVENT_NAME;
-  t.after(() => {
-    if (previous === undefined) delete process.env.GITHUB_EVENT_NAME;
-    else process.env.GITHUB_EVENT_NAME = previous;
-  });
-  if (value === undefined) delete process.env.GITHUB_EVENT_NAME;
-  else process.env.GITHUB_EVENT_NAME = value;
-}
-
-test("takes the event name from the environment when none is passed", async (t) => {
-  withEventNameInEnvironment(t, "pull_request");
-  const core = createFakeCore(VALID_INPUTS);
-
-  await run({ core });
-
-  assert.deepEqual(core.messages("info"), ["ReviewOps started."]);
-});
-
-test("skips the run when the environment names no event", async (t) => {
-  withEventNameInEnvironment(t, undefined);
-  const core = createFakeCore();
-
-  await run({ core });
-
-  assert.equal(core.messages("notice").length, 1);
-  assert.match(core.messages("notice")[0], /triggered by "unknown"/);
-  assert.deepEqual(core.messages("setFailed"), []);
-});
-
 test("fails with a helpful message when the API key is missing", async () => {
   const core = createFakeCore({ "github-token": "token-value" });
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.equal(core.messages("setFailed").length, 1);
   assert.match(core.messages("setFailed")[0], /`openai-api-key` is missing/);
@@ -98,15 +81,24 @@ test("fails with a helpful message when the API key is missing", async () => {
 test("fails when the token was passed as an empty value", async () => {
   const core = createFakeCore({ "openai-api-key": "key-value" });
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.match(core.messages("setFailed")[0], /`github-token` is empty/);
+});
+
+test("fails with a clear message when the event has no pull request", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await run({ core, context: createFakeContext({ payload: {} }) });
+
+  assert.equal(core.messages("setFailed").length, 1);
+  assert.match(core.messages("setFailed")[0], /carries no pull request/);
 });
 
 test("turns an unexpected error into a failed step instead of throwing", async () => {
   const core = createFailingCore(new Error("something broke"));
 
-  await assert.doesNotReject(run({ core, eventName }));
+  await assert.doesNotReject(run({ core, context: createFakeContext() }));
 
   assert.deepEqual(core.messages("setFailed"), ["something broke"]);
 });
@@ -116,7 +108,7 @@ test("redacts credentials in the failure message and in the stack trace", async 
     new Error("request with token-value and key-value was rejected"),
   );
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.deepEqual(core.messages("setFailed"), [
     "request with *** and *** was rejected",
@@ -130,7 +122,7 @@ test("redacts credentials in the failure message and in the stack trace", async 
 test("sends the stack trace to the debug log only", async () => {
   const core = createFailingCore(new Error("something broke"));
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.equal(core.messages("debug").length, 1);
   assert.match(core.messages("debug")[0], /something broke\n\s+at /);
@@ -143,7 +135,7 @@ test("still fails the step when the debug log itself breaks", async () => {
     throw new Error("debug log is broken");
   };
 
-  await assert.doesNotReject(run({ core, eventName }));
+  await assert.doesNotReject(run({ core, context: createFakeContext() }));
 
   assert.deepEqual(core.messages("setFailed"), ["something broke"]);
 });
@@ -151,7 +143,7 @@ test("still fails the step when the debug log itself breaks", async () => {
 test("names the error type when an error has no message", async () => {
   const core = createFailingCore(new TypeError(""));
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.deepEqual(core.messages("setFailed"), ["TypeError"]);
 });
@@ -159,7 +151,7 @@ test("names the error type when an error has no message", async () => {
 test("reports a thrown string as it is", async () => {
   const core = createFailingCore("plain failure");
 
-  await run({ core, eventName });
+  await run({ core, context: createFakeContext() });
 
   assert.deepEqual(core.messages("setFailed"), ["plain failure"]);
   assert.deepEqual(core.messages("debug"), []);
@@ -169,7 +161,7 @@ for (const thrown of [{ code: 500, token: "token-value" }, undefined, "  "]) {
   test(`reports a fixed message when ${JSON.stringify(thrown)} is thrown`, async () => {
     const core = createFailingCore(thrown);
 
-    await run({ core, eventName });
+    await run({ core, context: createFakeContext() });
 
     assert.deepEqual(core.messages("setFailed"), [
       "ReviewOps failed without an error message.",

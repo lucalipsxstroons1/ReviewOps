@@ -1,4 +1,6 @@
 import * as actionsCore from "@actions/core";
+import { context as actionsContext } from "@actions/github";
+import { readPullRequest } from "./github/context.js";
 import { assertInputs, readInputs } from "./inputs.js";
 import { createRedactor } from "./redact.js";
 
@@ -7,26 +9,25 @@ import { createRedactor } from "./redact.js";
 const SUPPORTED_EVENT = "pull_request";
 
 /**
- * Entry point of the action. Every failure ends in `core.setFailed()`.
+ * Runs the action. Every failure inside ends in `core.setFailed()`.
  *
- * The event name comes straight from the environment. Importing
- * `@actions/github` here would parse the event file while the module loads,
- * and a failure at that point happens before this function can catch it.
+ * Loading this module can fail as well: `@actions/github` parses the event
+ * file while it loads. `src/index.js` catches that case.
  *
- * @param {object} [deps] Replacements for the runner, used by tests.
+ * @param {object} [deps] Replacements for the runner modules, used by tests.
  * @param {typeof import("@actions/core")} [deps.core]
- * @param {string} [deps.eventName] Name of the event that triggered the run.
+ * @param {typeof import("@actions/github").context} [deps.context]
  */
 export async function run({
   core = actionsCore,
-  eventName = process.env.GITHUB_EVENT_NAME,
+  context = actionsContext,
 } = {}) {
   let redact = String;
 
   try {
-    if (eventName !== SUPPORTED_EVENT) {
+    if (context.eventName !== SUPPORTED_EVENT) {
       core.notice(
-        `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${eventName ?? "unknown"}" and was skipped.`,
+        `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${context.eventName ?? "unknown"}" and was skipped.`,
       );
       return;
     }
@@ -36,6 +37,13 @@ export async function run({
     assertInputs(inputs);
 
     core.info("ReviewOps started.");
+
+    // Only checked values reach the log: the title of the pull request is
+    // written by its author and stays out.
+    const pullRequest = readPullRequest(context);
+    core.info(
+      `Reviewing ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
+    );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));
