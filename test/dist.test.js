@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { apiFile, apiFiles, startGitHubApi } from "./helpers/github-api.js";
 import {
   API_KEY,
   PULL_REQUEST_EVENT,
@@ -24,6 +25,10 @@ import {
 // is checked in; `npm run build` refreshes it.
 const BUNDLE = fromRoot("dist/index.js");
 const runBundle = (env) => startAction(BUNDLE, env);
+
+/** Environment of a complete pull_request run against the local API server. */
+const pullRequestRun = (api) =>
+  withInputs({ ...PULL_REQUEST_EVENT, GITHUB_API_URL: api.url });
 
 test("the build empties dist/ before it writes the bundle", () => {
   // The bundle consists of numbered files. Without this, a file from an
@@ -41,17 +46,54 @@ test("the bundle and the files it needs are present", () => {
   }
 });
 
-test("the bundle starts on a pull_request event and names the pull request", () => {
-  const result = runBundle(withInputs(PULL_REQUEST_EVENT));
+test("the bundle names the pull request and lists its files", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [...apiFiles(2), apiFile("docs/old.md", { status: "removed" })],
+  });
+
+  const result = await runBundle(pullRequestRun(api));
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^ReviewOps started\.$/m);
   assert.ok(result.stdout.includes(REVIEWING_LINE));
+  assert.match(
+    result.stdout,
+    /^Found 3 changed files: 2 to review, 1 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped docs\/old\.md: the file was deleted\.$/m,
+  );
   assert.equal(result.stderr, "");
 });
 
-test("the bundle fails the step when the API key is missing", () => {
-  const result = runBundle({
+test("the bundle loads more than 100 files completely", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(120) });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 120 changed files: 120 to review, 0 skipped\.$/m,
+  );
+});
+
+test("the bundle fails the step with status and hint on an API error", async (t) => {
+  const api = await startGitHubApi(t, { status: 404 });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::GitHub API request failed \(HTTP 404\)\./m,
+  );
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle fails the step when the API key is missing", async () => {
+  const result = await runBundle({
     ...PULL_REQUEST_EVENT,
     "INPUT_GITHUB-TOKEN": TOKEN,
   });
@@ -61,28 +103,30 @@ test("the bundle fails the step when the API key is missing", () => {
   assert.equal(result.stderr, "");
 });
 
-test("the bundle skips other events with exit code 0", () => {
-  const result = runBundle({ GITHUB_EVENT_NAME: "push" });
+test("the bundle skips other events with exit code 0", async () => {
+  const result = await runBundle({ GITHUB_EVENT_NAME: "push" });
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^::notice::.*was skipped/m);
 });
 
-test("the bundle keeps both credentials out of the log", () => {
-  const result = runBundle(withInputs(PULL_REQUEST_EVENT));
+test("the bundle keeps both credentials out of the log", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runBundle(pullRequestRun(api));
 
   const log = withoutMaskCommands(result.output);
   assert.equal(log.includes(TOKEN), false);
   assert.equal(log.includes(API_KEY), false);
 });
 
-test("the bundle turns a failure while loading into a failed step", (t) => {
+test("the bundle turns a failure while loading into a failed step", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "reviewops-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const eventPath = join(directory, "event.json");
   writeFileSync(eventPath, "{ this is not json");
 
-  const result = runBundle(
+  const result = await runBundle(
     withInputs({ ...PULL_REQUEST_EVENT, GITHUB_EVENT_PATH: eventPath }),
   );
 

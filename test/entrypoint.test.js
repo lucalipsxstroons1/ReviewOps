@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { apiFile, apiFiles, startGitHubApi } from "./helpers/github-api.js";
 import {
   API_KEY,
   PULL_REQUEST_EVENT,
@@ -16,6 +17,10 @@ import {
 
 const runAction = (env) => startAction(fromRoot("src/index.js"), env);
 
+/** Environment of a complete pull_request run against the local API server. */
+const pullRequestRun = (api, env = {}) =>
+  withInputs({ ...PULL_REQUEST_EVENT, GITHUB_API_URL: api.url, ...env });
+
 /** Writes an event file with the given content and removes it after the test. */
 function eventFile(t, content) {
   const directory = mkdtempSync(join(tmpdir(), "reviewops-"));
@@ -25,17 +30,93 @@ function eventFile(t, content) {
   return path;
 }
 
-test("starts on a pull_request event and names the pull request", () => {
-  const result = runAction(withInputs(PULL_REQUEST_EVENT));
+test("names the pull request and lists its files", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [...apiFiles(2), apiFile("docs/old.md", { status: "removed" })],
+  });
+
+  const result = await runAction(pullRequestRun(api));
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^ReviewOps started\.$/m);
   assert.ok(result.stdout.includes(REVIEWING_LINE));
+  assert.match(
+    result.stdout,
+    /^Found 3 changed files: 2 to review, 1 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped docs\/old\.md: the file was deleted\.$/m,
+  );
   assert.equal(result.stderr, "");
+  assert.deepEqual(
+    api.requests.map((request) => request.path),
+    ["/repos/octo-org/demo/pulls/42/files?per_page=100"],
+  );
 });
 
-test("fails the step with a helpful message when the API key is missing", () => {
-  const result = runAction({
+test("loads a pull request with more than 100 files completely", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(120) });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 120 changed files: 120 to review, 0 skipped\.$/m,
+  );
+  assert.equal(api.requests.length, 2);
+});
+
+test("writes a file name with a line break as one harmless line", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [apiFile("docs/a.md\n::error::injected", { status: "removed" })],
+  });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.ok(
+    result.stdout.includes("Skipped docs/a.md\\u000a::error::injected: "),
+  );
+  assert.doesNotMatch(result.stdout, /^::error::/m);
+});
+
+for (const [status, expected] of [
+  [
+    401,
+    /^::error::GitHub API request failed \(HTTP 401\)\. The token was rejected/m,
+  ],
+  [403, /^::error::GitHub API request failed \(HTTP 403\)\./m],
+  [
+    404,
+    /^::error::GitHub API request failed \(HTTP 404\)\. The pull request was not found/m,
+  ],
+]) {
+  test(`fails the step with status and hint on API error ${status}`, async (t) => {
+    const api = await startGitHubApi(t, { status });
+
+    const result = await runAction(pullRequestRun(api, { RUNNER_DEBUG: "1" }));
+
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, expected);
+    assert.equal(result.stderr, "");
+    assert.equal(withoutMaskCommands(result.output).includes(TOKEN), false);
+  });
+}
+
+test("fails the step when the API cannot be reached", async () => {
+  // No server is started: the default address of the tests refuses connections.
+  const result = await runAction(withInputs(PULL_REQUEST_EVENT));
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::GitHub could not be reached\./m);
+  assert.equal(result.stderr, "");
+  assert.equal(withoutMaskCommands(result.output).includes(TOKEN), false);
+});
+
+test("fails the step with a helpful message when the API key is missing", async () => {
+  const result = await runAction({
     ...PULL_REQUEST_EVENT,
     "INPUT_GITHUB-TOKEN": TOKEN,
   });
@@ -46,8 +127,8 @@ test("fails the step with a helpful message when the API key is missing", () => 
 });
 
 for (const eventName of ["push", "pull_request_target"]) {
-  test(`exits with code 0 and a notice on event "${eventName}"`, () => {
-    const result = runAction({ GITHUB_EVENT_NAME: eventName });
+  test(`exits with code 0 and a notice on event "${eventName}"`, async () => {
+    const result = await runAction({ GITHUB_EVENT_NAME: eventName });
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /^::notice::.*was skipped/m);
@@ -57,12 +138,11 @@ for (const eventName of ["push", "pull_request_target"]) {
 }
 
 for (const debug of [false, true]) {
-  test(`keeps both credentials out of the log (debug: ${debug})`, () => {
-    const result = runAction(
-      withInputs({
-        ...PULL_REQUEST_EVENT,
-        ...(debug ? { RUNNER_DEBUG: "1" } : {}),
-      }),
+  test(`keeps both credentials out of the log (debug: ${debug})`, async (t) => {
+    const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+    const result = await runAction(
+      pullRequestRun(api, debug ? { RUNNER_DEBUG: "1" } : {}),
     );
 
     const maskCommands = result.stdout
@@ -79,8 +159,8 @@ for (const debug of [false, true]) {
   });
 }
 
-test("prints a stack trace only as a debug command", () => {
-  const result = runAction({
+test("prints a stack trace only as a debug command", async () => {
+  const result = await runAction({
     ...PULL_REQUEST_EVENT,
     "INPUT_GITHUB-TOKEN": TOKEN,
   });
@@ -97,8 +177,8 @@ test("prints a stack trace only as a debug command", () => {
   assert.equal(withoutMaskCommands(result.output).includes(TOKEN), false);
 });
 
-test("fails the step when the event has no pull request", (t) => {
-  const result = runAction(
+test("fails the step when the event has no pull request", async (t) => {
+  const result = await runAction(
     withInputs({
       ...PULL_REQUEST_EVENT,
       GITHUB_EVENT_PATH: eventFile(t, "{}"),
@@ -110,9 +190,9 @@ test("fails the step when the event has no pull request", (t) => {
   assert.equal(result.stderr, "");
 });
 
-test("turns a failure while loading into a failed step", (t) => {
+test("turns a failure while loading into a failed step", async (t) => {
   // @actions/github parses the event file while it is imported.
-  const result = runAction(
+  const result = await runAction(
     withInputs({
       ...PULL_REQUEST_EVENT,
       GITHUB_EVENT_PATH: eventFile(t, "{ this is not json"),
@@ -125,14 +205,17 @@ test("turns a failure while loading into a failed step", (t) => {
   assert.equal(result.stderr, "");
 });
 
-test("never reports an unhandled rejection", () => {
+test("never reports an unhandled rejection", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
   for (const env of [
     PULL_REQUEST_EVENT,
     { GITHUB_EVENT_NAME: "push" },
+    pullRequestRun(api),
     withInputs(PULL_REQUEST_EVENT),
     {},
   ]) {
-    const result = runAction(env);
+    const result = await runAction(env);
 
     assert.doesNotMatch(result.output, /unhandled|UnhandledPromiseRejection/i);
     assert.notEqual(result.status, null);

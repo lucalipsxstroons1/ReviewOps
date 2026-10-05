@@ -22,7 +22,9 @@ Der Backlog liegt in den GitHub Issues dieses Repositories. Die Milestones „Ph
 - Workflows binden fremde Actions über einen vollen Commit-SHA ein, die Version steht als Kommentar dahinter. Sie bekommen nur die Rechte, die sie brauchen.
 - Module bekommen `core`, `context` und andere Runner-Objekte als Parameter, statt sie selbst zu importieren. Nur `src/main.js` verdrahtet die echten Module. So lassen sich alle Zweige mit `test/helpers/fake-core.js` und `test/helpers/fake-context.js` testen.
 - `src/index.js` lädt `main.js` erst zur Laufzeit (`await import`) und meldet Fehler beim Laden über `core.setFailed()`. Manche Pakete arbeiten schon beim Laden, `@actions/github` liest zum Beispiel die Event-Datei ein. Deshalb gehört in `index.js` kein weiterer statischer Import außer `@actions/core`.
-- Werte aus dem Event (Titel, Branch-Namen, Texte) stammen vom PR-Autor. Ins Log und in Fehlermeldungen kommen nur geprüfte Werte wie Nummer, SHA und Repository-Name.
+- Werte aus dem Event und aus dem PR (Titel, Branch-Namen, Dateinamen, Patches) stammen vom PR-Autor. Ins Log und in Fehlermeldungen kommen nur geprüfte Werte wie Nummer, SHA und Repository-Name. Dateinamen gehen vorher durch `printable()` aus `src/printable.js`, Patch-Inhalte werden nie geloggt.
+- Tests rufen nie die echte GitHub-API auf. Unit-Tests nutzen `createFakeOctokit()`, alles andere den lokalen Testserver `startGitHubApi()` aus `test/helpers/github-api.js`. Prozess-Tests zeigen ohne eigene Angabe auf eine tote lokale Adresse.
+- In Quelldateien stehen keine unsichtbaren Zeichen und keine Unicode-Escapes für sie. Sonderzeichen entstehen über `String.fromCodePoint()` oder Unicode-Kategorien wie `\p{Zl}`. `test/source-hygiene.test.js` prüft das.
 
 ## Logging
 
