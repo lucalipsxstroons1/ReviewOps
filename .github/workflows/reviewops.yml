@@ -1,0 +1,34 @@
+name: ReviewOps
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# The token of this workflow may read the code and write reviews, nothing else.
+permissions:
+  contents: read
+  pull-requests: write
+
+# A newer push makes the review of the older one pointless.
+concurrency:
+  group: reviewops-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: AI review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needed to load the action from this repository. Third-party actions
+      # are pinned to a commit, because a tag can be moved to other code.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No github-token is passed: the action falls back to the token of this run.
+      - name: Review the pull request
+        uses: ./
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}

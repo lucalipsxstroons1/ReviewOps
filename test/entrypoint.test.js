@@ -1,46 +1,18 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import {
+  API_KEY,
+  TOKEN,
+  fromRoot,
+  startAction,
+  withInputs,
+  withoutMaskCommands,
+} from "./helpers/run-action.js";
 
-const ENTRY_POINT = fileURLToPath(new URL("../src/index.js", import.meta.url));
-
-// Recognisable stand-ins. They must not look like real credentials.
-const TOKEN = "TESTTOKEN-not-a-real-token-123456";
-const API_KEY = "TESTKEY-not-a-real-key-654321";
-
-/**
- * Starts the action the way the runner does: as its own process, configured
- * only through environment variables.
- */
-function runAction(env) {
-  const inherited = Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([name]) => !/^(GITHUB_|INPUT_|RUNNER_)/.test(name),
-    ),
-  );
-  const result = spawnSync(process.execPath, [ENTRY_POINT], {
-    env: { ...inherited, ...env },
-    encoding: "utf8",
-  });
-  return { ...result, output: result.stdout + result.stderr };
-}
-
-const withInputs = (env) => ({
-  "INPUT_GITHUB-TOKEN": TOKEN,
-  "INPUT_OPENAI-API-KEY": API_KEY,
-  ...env,
-});
-
-/** Output as it reaches the log: mask commands are consumed by the runner. */
-const withoutMaskCommands = (output) =>
-  output
-    .split(/\r?\n/)
-    .filter((line) => !line.startsWith("::add-mask::"))
-    .join("\n");
+const runAction = (env) => startAction(fromRoot("src/index.js"), env);
 
 test("starts and exits with code 0 on a pull_request event", () => {
   const result = runAction(withInputs({ GITHUB_EVENT_NAME: "pull_request" }));
