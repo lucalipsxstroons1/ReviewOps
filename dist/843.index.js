@@ -1,8 +1,8 @@
-export const id = 713;
-export const ids = [713];
+export const id = 843;
+export const ids = [843];
 export const modules = {
 
-/***/ 7713:
+/***/ 5843:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -15,6 +15,136 @@ __webpack_require__.d(__webpack_exports__, {
 var lib_core = __webpack_require__(6257);
 // EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js + 22 modules
 var github = __webpack_require__(2413);
+;// CONCATENATED MODULE: ./src/diff/parse.js
+// `@@ -a,b +c,d @@ section`. A missing length means one line. Line numbers
+// with more than nine digits do not occur and would lose precision.
+const HUNK_HEADER =
+  /^@@ -(\d{1,9})(?:,(\d{1,9}))? \+(\d{1,9})(?:,(\d{1,9}))? @@(.*)$/s;
+
+// A row such as "\ No newline at end of file" describes the row before it.
+// It is not a line of the file.
+const NOTE_MARKER = "\\";
+
+/**
+ * Thrown when a patch does not have the shape of a unified diff. The message
+ * names positions only, never the content of the patch.
+ */
+class PatchFormatError extends Error {
+  name = "PatchFormatError";
+}
+
+/**
+ * Parses the patch of one file, as GitHub returns it for a pull request: one
+ * or more hunks, without the file header of a full diff.
+ *
+ * The lines of a hunk are counted against the lengths in its header, the way
+ * `git apply` does it. A line of code that looks like a header is therefore
+ * read as code.
+ *
+ * This is a pure function: it uses nothing but its argument.
+ *
+ * @param {string} patch
+ * @returns {{
+ *   hunks: {
+ *     section: string,
+ *     lines: { type: "added" | "removed" | "context", line: number | null, content: string }[],
+ *   }[],
+ *   commentableLines: number[],
+ * }} `line` is the line number in the new file, `null` for removed lines.
+ *   `commentableLines` holds the numbers of all added lines in ascending order.
+ * @throws {PatchFormatError} When the patch cannot be read.
+ */
+function parse_parsePatch(patch) {
+  if (typeof patch !== "string" || patch === "") {
+    throw new PatchFormatError("The diff is empty.");
+  }
+
+  const rows = patch.split("\n");
+  const hunks = [];
+  const commentableLines = [];
+  let index = 0;
+  let nextFreeLine = 1;
+
+  while (index < rows.length) {
+    // A patch that ends with a line break leaves one empty row behind.
+    if (rows[index] === "" && index === rows.length - 1) break;
+
+    const header = HUNK_HEADER.exec(rows[index]);
+    if (!header) {
+      throw new PatchFormatError(
+        `Row ${index + 1} of the diff is not a hunk header.`,
+      );
+    }
+    index++;
+
+    const number = hunks.length + 1;
+    let oldLeft = Number(header[2] ?? 1);
+    let newLeft = Number(header[4] ?? 1);
+    let line = Number(header[3]);
+
+    // Line numbers start at 1 and only go up from hunk to hunk.
+    if (newLeft > 0 && line < nextFreeLine) {
+      throw new PatchFormatError(
+        `Hunk ${number} of the diff starts at a line that is not possible.`,
+      );
+    }
+
+    const lines = [];
+    while (oldLeft > 0 || newLeft > 0) {
+      if (index >= rows.length) {
+        throw new PatchFormatError(
+          `Hunk ${number} of the diff ends before all its lines were read.`,
+        );
+      }
+      const row = rows[index++];
+      const marker = row[0];
+      if (marker === NOTE_MARKER) continue;
+
+      // Like `git apply`, an empty row counts as an empty context line.
+      const type =
+        marker === "+"
+          ? "added"
+          : marker === "-"
+            ? "removed"
+            : marker === " " || row === ""
+              ? "context"
+              : null;
+      const inOldFile = type !== "added";
+      const inNewFile = type !== "removed";
+
+      if (
+        type === null ||
+        (inOldFile && oldLeft === 0) ||
+        (inNewFile && newLeft === 0)
+      ) {
+        throw new PatchFormatError(
+          `Row ${index} of the diff does not fit into hunk ${number}.`,
+        );
+      }
+
+      lines.push({
+        type,
+        line: inNewFile ? line : null,
+        content: row.slice(1),
+      });
+      if (type === "added") commentableLines.push(line);
+      if (inOldFile) oldLeft--;
+      if (inNewFile) {
+        newLeft--;
+        line++;
+      }
+    }
+
+    // The note can follow the last line of a hunk.
+    while (index < rows.length && rows[index][0] === NOTE_MARKER) index++;
+
+    nextFreeLine = Math.max(nextFreeLine, line);
+    hunks.push({ section: header[5].trim(), lines });
+  }
+
+  return { hunks, commentableLines };
+}
+
 ;// CONCATENATED MODULE: ./src/github/context.js
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
@@ -336,6 +466,7 @@ function createRedactor(secrets) {
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -343,6 +474,8 @@ const SUPPORTED_EVENT = "pull_request";
 // A pull request can skip thousands of files, for example when it deletes a
 // directory. The log names the first ones and counts the rest.
 const MAX_SKIPPED_LINES = 50;
+
+const UNREADABLE_DIFF = "the diff could not be read";
 
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
@@ -354,11 +487,13 @@ const MAX_SKIPPED_LINES = 50;
  * @param {typeof import("@actions/core")} [deps.core]
  * @param {typeof import("@actions/github").context} [deps.context]
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
+ * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  */
 async function run({
   core = lib_core,
   context = github/* context */._,
   getOctokit = github/* getOctokit */.Q,
+  parsePatch = parse_parsePatch,
 } = {}) {
   let redact = String;
 
@@ -384,12 +519,18 @@ async function run({
     );
 
     const octokit = getOctokit(inputs.githubToken);
-    const { files, skipped, truncated } = await listChangedFiles(
-      octokit,
-      pullRequest,
-    );
+    const listing = await listChangedFiles(octokit, pullRequest);
+
+    // Line numbers are calculated here and never taken from the model.
+    const { diffs, unreadable } = parseDiffs(listing.files, parsePatch);
+    // Unreadable diffs come first: the list below is cut off, and these are
+    // the files someone has to look at.
+    const skipped = [
+      ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...listing.skipped,
+    ];
     core.info(
-      `Found ${files.length + skipped.length} changed files: ${files.length} to review, ${skipped.length} skipped.`,
+      `Found ${diffs.length + skipped.length} changed files: ${diffs.length} to review, ${skipped.length} skipped.`,
     );
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
@@ -400,11 +541,27 @@ async function run({
         `${skipped.length - MAX_SKIPPED_LINES} more skipped files are not listed.`,
       );
     }
-    if (truncated) {
+    if (unreadable.length > 0) {
+      core.warning(
+        `Diffs that could not be read: ${unreadable.length}. These files are not reviewed.`,
+      );
+      for (const { path, detail } of unreadable) {
+        core.debug(`${printable(path)}: ${detail}`);
+      }
+    }
+    if (listing.truncated) {
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
       );
     }
+
+    const addedLines = diffs.reduce(
+      (sum, diff) => sum + diff.commentableLines.length,
+      0,
+    );
+    core.info(
+      `Parsed the diffs of ${diffs.length} files: ${addedLines} added lines can receive comments.`,
+    );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));
@@ -420,6 +577,26 @@ async function run({
       // A broken debug log must not hide the failure reported above.
     }
   }
+}
+
+/**
+ * Parses the patch of every file. A file whose patch cannot be read is set
+ * aside instead of failing the run: one odd file must not prevent the review
+ * of all others. Any other error is a defect and is passed on.
+ */
+function parseDiffs(files, parsePatch) {
+  const diffs = [];
+  const unreadable = [];
+  for (const file of files) {
+    try {
+      diffs.push({ ...file, ...parsePatch(file.patch) });
+    } catch (error) {
+      if (!(error instanceof PatchFormatError)) throw error;
+      // The message names positions in the patch, never its content.
+      unreadable.push({ path: file.path, detail: error.message });
+    }
+  }
+  return { diffs, unreadable };
 }
 
 /** Turns anything that was thrown into a message a person can act on. */

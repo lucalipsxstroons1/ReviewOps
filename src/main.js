@@ -3,6 +3,10 @@ import {
   context as actionsContext,
   getOctokit as actionsGetOctokit,
 } from "@actions/github";
+import {
+  PatchFormatError,
+  parsePatch as diffParsePatch,
+} from "./diff/parse.js";
 import { readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
 import { assertInputs, readInputs } from "./inputs.js";
@@ -17,6 +21,8 @@ const SUPPORTED_EVENT = "pull_request";
 // directory. The log names the first ones and counts the rest.
 const MAX_SKIPPED_LINES = 50;
 
+const UNREADABLE_DIFF = "the diff could not be read";
+
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
  *
@@ -27,11 +33,13 @@ const MAX_SKIPPED_LINES = 50;
  * @param {typeof import("@actions/core")} [deps.core]
  * @param {typeof import("@actions/github").context} [deps.context]
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
+ * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  */
 export async function run({
   core = actionsCore,
   context = actionsContext,
   getOctokit = actionsGetOctokit,
+  parsePatch = diffParsePatch,
 } = {}) {
   let redact = String;
 
@@ -57,12 +65,18 @@ export async function run({
     );
 
     const octokit = getOctokit(inputs.githubToken);
-    const { files, skipped, truncated } = await listChangedFiles(
-      octokit,
-      pullRequest,
-    );
+    const listing = await listChangedFiles(octokit, pullRequest);
+
+    // Line numbers are calculated here and never taken from the model.
+    const { diffs, unreadable } = parseDiffs(listing.files, parsePatch);
+    // Unreadable diffs come first: the list below is cut off, and these are
+    // the files someone has to look at.
+    const skipped = [
+      ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...listing.skipped,
+    ];
     core.info(
-      `Found ${files.length + skipped.length} changed files: ${files.length} to review, ${skipped.length} skipped.`,
+      `Found ${diffs.length + skipped.length} changed files: ${diffs.length} to review, ${skipped.length} skipped.`,
     );
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
@@ -73,11 +87,27 @@ export async function run({
         `${skipped.length - MAX_SKIPPED_LINES} more skipped files are not listed.`,
       );
     }
-    if (truncated) {
+    if (unreadable.length > 0) {
+      core.warning(
+        `Diffs that could not be read: ${unreadable.length}. These files are not reviewed.`,
+      );
+      for (const { path, detail } of unreadable) {
+        core.debug(`${printable(path)}: ${detail}`);
+      }
+    }
+    if (listing.truncated) {
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
       );
     }
+
+    const addedLines = diffs.reduce(
+      (sum, diff) => sum + diff.commentableLines.length,
+      0,
+    );
+    core.info(
+      `Parsed the diffs of ${diffs.length} files: ${addedLines} added lines can receive comments.`,
+    );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));
@@ -93,6 +123,26 @@ export async function run({
       // A broken debug log must not hide the failure reported above.
     }
   }
+}
+
+/**
+ * Parses the patch of every file. A file whose patch cannot be read is set
+ * aside instead of failing the run: one odd file must not prevent the review
+ * of all others. Any other error is a defect and is passed on.
+ */
+function parseDiffs(files, parsePatch) {
+  const diffs = [];
+  const unreadable = [];
+  for (const file of files) {
+    try {
+      diffs.push({ ...file, ...parsePatch(file.patch) });
+    } catch (error) {
+      if (!(error instanceof PatchFormatError)) throw error;
+      // The message names positions in the patch, never its content.
+      unreadable.push({ path: file.path, detail: error.message });
+    }
+  }
+  return { diffs, unreadable };
 }
 
 /** Turns anything that was thrown into a message a person can act on. */
