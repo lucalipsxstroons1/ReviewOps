@@ -12,4 +12,9 @@ export default defineConfig([
       globals: globals.node,
     },
   },
+  {
+    // Action code logs through @actions/core only, so the runner can mask secrets.
+    files: ["src/**/*.js"],
+    rules: { "no-console": "error" },
+  },
 ]);

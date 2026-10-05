@@ -1,6 +1,6 @@
 ---
 name: ship
-description: "Schließt ein umgesetztes und geprüftes Issue ab: committen, Branch pushen, Pull Request öffnen und Checks auswerten. Mit dem Zusatz merge zusätzlich den Pull Request mergen, die Checkboxen im Issue abhaken und lokal aufräumen. Läuft nur auf ausdrücklichen Aufruf."
+description: "Schließt ein umgesetztes und geprüftes Issue ab: committen, Branch pushen, Pull Request öffnen und Checks auswerten. Mit dem Zusatz merge zusätzlich den Pull Request mergen, die Checkboxen im Issue abhaken und main aktualisieren. Läuft nur auf ausdrücklichen Aufruf."
 argument-hint: "[issue-nummer] [merge]"
 disable-model-invocation: true
 ---
@@ -27,8 +27,8 @@ Commit, Push und Pull Request sind nach außen sichtbar und lassen sich nicht sa
 ## Stufe 2: mergen und abhaken (nur mit `merge`)
 
 1. **Bereitschaft prüfen.** Die Checks sind grün und der Pull Request ist mergebar: `gh pr view <pr> --json mergeable,statusCheckRollup`.
-2. **Mergen.** `gh pr merge <pr> --squash --delete-branch`. Ein Squash-Merge ergibt auf `main` genau einen Commit je Issue.
-3. **Lokal aufräumen.** `git switch main`, `git pull --ff-only`, und den lokalen Branch löschen, falls er noch existiert.
+2. **Mergen.** `gh pr merge <pr> --squash --subject <betreff> --body-file <datei>`. Ein Squash-Merge ergibt auf `main` genau einen Commit je Issue. Betreff und Text übernimmst du aus dem Commit des Branches, sonst hängt GitHub die PR-Nummer zusätzlich an den Betreff.
+3. **`main` aktualisieren.** `git switch main`, `git pull --ff-only`. Der Issue-Branch bleibt stehen, lokal und auf GitHub: Der Maintainer will die Branches behalten. Lösche ihn nur auf ausdrücklichen Wunsch.
 4. **Abhaken.** Zeige die Checkboxen des Issues an und hake nur ab, was nachweislich erledigt ist:
 
    ```
