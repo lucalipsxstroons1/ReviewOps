@@ -1,0 +1,5 @@
+# Store and check out all text files with LF, on every platform.
+* text=auto eol=lf
+
+# The bundle is generated: collapse it in diffs and keep it out of language statistics.
+dist/** linguist-generated=true

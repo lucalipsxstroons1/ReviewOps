@@ -1,0 +1,8 @@
+dist/
+coverage/
+
+# Written by npm; its format is not ours to enforce.
+package-lock.json
+
+# Prose keeps its hand-made layout (tables, skill texts).
+*.md
