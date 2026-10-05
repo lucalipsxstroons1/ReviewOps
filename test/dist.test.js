@@ -64,6 +64,30 @@ test("the bundle names the pull request and lists its files", async (t) => {
     result.stdout,
     /^Skipped docs\/old\.md: the file was deleted\.$/m,
   );
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 2 files: 2 added lines can receive comments\.$/m,
+  );
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle skips a file whose diff cannot be read", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [...apiFiles(1), apiFile("src/odd.js", { patch: "not a diff" })],
+  });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped src\/odd\.js: the diff could not be read\.$/m,
+  );
+  assert.match(result.stdout, /^::warning::Diffs that could not be read: 1\./m);
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 1 files: 1 added lines can receive comments\.$/m,
+  );
   assert.equal(result.stderr, "");
 });
 

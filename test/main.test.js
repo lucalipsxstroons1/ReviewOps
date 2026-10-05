@@ -16,14 +16,20 @@ const VALID_INPUTS = {
  * Runs the action with stand-ins for everything outside of it. Without an
  * explicit client, the API answers with two ordinary files.
  */
-function runWith(core, { context = createFakeContext(), octokit } = {}) {
+function runWith(
+  core,
+  { context = createFakeContext(), octokit, parsePatch } = {},
+) {
   const client = octokit ?? createFakeOctokit(apiFiles(2));
   const tokens = [];
   const getOctokit = (token) => {
     tokens.push(token);
     return client;
   };
-  return run({ core, context, getOctokit }).then(() => ({ tokens, client }));
+  return run({ core, context, getOctokit, parsePatch }).then(() => ({
+    tokens,
+    client,
+  }));
 }
 
 /** A core whose first log call fails, to simulate an unexpected error. */
@@ -104,8 +110,116 @@ test("logs how many files it found and why it skipped some", async () => {
     "Found 4 changed files: 2 to review, 2 skipped.",
     `Skipped docs/old.md: ${SKIP_REASONS.removed}.`,
     `Skipped assets/logo.png: ${SKIP_REASONS.noPatch}.`,
+    "Parsed the diffs of 2 files: 2 added lines can receive comments.",
   ]);
   assert.deepEqual(core.messages("warning"), []);
+});
+
+test("counts the added lines of all files as comment targets", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/new.js", {
+      status: "added",
+      additions: 3,
+      deletions: 0,
+      patch: "@@ -0,0 +1,3 @@\n+a\n+b\n+c",
+    }),
+    apiFile("src/changed.js", {
+      additions: 1,
+      deletions: 2,
+      patch: "@@ -4,4 +4,3 @@\n a\n-b\n-c\n+d\n e",
+    }),
+    apiFile("src/shorter.js", {
+      additions: 0,
+      deletions: 1,
+      patch: "@@ -7,3 +7,2 @@\n a\n-b\n c",
+    }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 3 changed files: 3 to review, 0 skipped.",
+    "Parsed the diffs of 3 files: 4 added lines can receive comments.",
+  ]);
+});
+
+test("skips a file whose diff cannot be read and reviews the others", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/good.js"),
+    apiFile("src/odd.js", { patch: "@@ -1,5 +1,5 @@\n CONTENT-FROM-AUTHOR" }),
+    apiFile("src/odder.js", { patch: "CONTENT-FROM-AUTHOR" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 3 changed files: 1 to review, 2 skipped.",
+    "Skipped src/odd.js: the diff could not be read.",
+    "Skipped src/odder.js: the diff could not be read.",
+    "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+  ]);
+  assert.deepEqual(core.messages("warning"), [
+    "Diffs that could not be read: 2. These files are not reviewed.",
+  ]);
+  // Where the patch is broken goes to the debug log, its content does not.
+  assert.deepEqual(core.messages("debug"), [
+    "src/odd.js: Hunk 1 of the diff ends before all its lines were read.",
+    "src/odder.js: Row 1 of the diff is not a hunk header.",
+  ]);
+  assert.doesNotMatch(JSON.stringify(core.calls), /CONTENT-FROM-AUTHOR/);
+});
+
+test("names an unreadable file even when many other files are skipped", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    ...removedFiles(60),
+    apiFile("src/odd.js", { patch: "not a diff" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  const lines = core.messages("info").slice(2);
+  assert.equal(lines[0], "Found 61 changed files: 0 to review, 61 skipped.");
+  assert.equal(lines[1], "Skipped src/odd.js: the diff could not be read.");
+  assert.equal(lines.filter((line) => line.startsWith("Skipped ")).length, 50);
+  assert.equal(lines.at(-2), "11 more skipped files are not listed.");
+});
+
+test("fails the step when the parser breaks for another reason", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const parsePatch = () => {
+    throw new TypeError("the parser itself is broken");
+  };
+
+  await runWith(core, { parsePatch });
+
+  // Only a patch with a wrong format is skipped. Hiding a defect of the
+  // parser behind "skipped" would silently review nothing.
+  assert.deepEqual(core.messages("setFailed"), ["the parser itself is broken"]);
+  assert.deepEqual(core.messages("warning"), []);
+  assert.doesNotMatch(core.messages("info").join("\n"), /Skipped|Parsed/);
+});
+
+test("writes the name of an unreadable file as one harmless line", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/a.js\n::error::injected", { patch: "not a diff" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  const lines = [...core.messages("info"), ...core.messages("debug")];
+  assert.ok(
+    lines.includes(
+      "src/a.js\\u000a::error::injected: Row 1 of the diff is not a hunk header.",
+    ),
+  );
+  for (const line of lines) {
+    assert.equal(line.includes("\n"), false);
+  }
 });
 
 test("writes a file name with a line break as one harmless line", async () => {
@@ -116,10 +230,12 @@ test("writes a file name with a line break as one harmless line", async () => {
 
   await runWith(core, { octokit });
 
-  const line = core.messages("info").at(-1);
-  assert.equal(
-    line,
-    `Skipped docs/a.md\\u000a::error::injected: ${SKIP_REASONS.removed}.`,
+  assert.ok(
+    core
+      .messages("info")
+      .includes(
+        `Skipped docs/a.md\\u000a::error::injected: ${SKIP_REASONS.removed}.`,
+      ),
   );
   for (const message of core.messages("info")) {
     assert.equal(message.includes("\n"), false);
@@ -139,7 +255,7 @@ test("lists at most 50 skipped files and counts the rest", async () => {
   const lines = core.messages("info").slice(2);
   assert.equal(lines[0], "Found 60 changed files: 0 to review, 60 skipped.");
   assert.equal(lines.filter((line) => line.startsWith("Skipped ")).length, 50);
-  assert.equal(lines.at(-1), "10 more skipped files are not listed.");
+  assert.equal(lines.at(-2), "10 more skipped files are not listed.");
 });
 
 test("lists exactly 50 skipped files without a remainder line", async () => {
@@ -149,17 +265,20 @@ test("lists exactly 50 skipped files without a remainder line", async () => {
 
   const lines = core.messages("info").slice(2);
   assert.equal(lines.filter((line) => line.startsWith("Skipped ")).length, 50);
-  assert.equal(lines.length, 51);
+  assert.doesNotMatch(lines.join("\n"), /more skipped files/);
 });
 
 test("never logs the content of a patch", async () => {
   const core = createFakeCore(VALID_INPUTS);
   const octokit = createFakeOctokit([
-    apiFile("src/a.js", { patch: "@@ -1 +1 @@\n+PATCH-CONTENT-FROM-AUTHOR" }),
+    apiFile("src/a.js", {
+      patch: "@@ -1 +1 @@\n-old\n+PATCH-CONTENT-FROM-AUTHOR",
+    }),
   ]);
 
   await runWith(core, { octokit });
 
+  assert.deepEqual(core.messages("warning"), []);
   assert.doesNotMatch(JSON.stringify(core.calls), /PATCH-CONTENT-FROM-AUTHOR/);
 });
 

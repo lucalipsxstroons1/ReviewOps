@@ -48,6 +48,10 @@ test("names the pull request and lists its files", async (t) => {
     result.stdout,
     /^Skipped docs\/old\.md: the file was deleted\.$/m,
   );
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 2 files: 2 added lines can receive comments\.$/m,
+  );
   assert.equal(result.stderr, "");
   assert.deepEqual(
     api.requests.map((request) => request.path),
@@ -66,6 +70,41 @@ test("loads a pull request with more than 100 files completely", async (t) => {
     /^Found 120 changed files: 120 to review, 0 skipped\.$/m,
   );
   assert.equal(api.requests.length, 2);
+});
+
+test("skips a file whose diff cannot be read without failing the step", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [
+      ...apiFiles(2),
+      apiFile("src/odd.js", { patch: "@@ -1,5 +1,5 @@\n CONTENT-FROM-AUTHOR" }),
+    ],
+  });
+
+  const result = await runAction(pullRequestRun(api, { RUNNER_DEBUG: "1" }));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 3 changed files: 2 to review, 1 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped src\/odd\.js: the diff could not be read\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^::warning::Diffs that could not be read: 1\. These files are not reviewed\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^::debug::src\/odd\.js: Hunk 1 of the diff ends before all its lines were read\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 2 files: 2 added lines can receive comments\.$/m,
+  );
+  assert.doesNotMatch(result.output, /CONTENT-FROM-AUTHOR|::error::/);
+  assert.equal(result.stderr, "");
 });
 
 test("writes a file name with a line break as one harmless line", async (t) => {
