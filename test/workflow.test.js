@@ -91,6 +91,7 @@ test("reviewops.yml: passes the API key from the secret store and no token", () 
 
   assert.deepEqual(action.with, {
     "openai-api-key": "${{ secrets.OPENAI_API_KEY }}",
+    exclude: "# documentation\ndocs/**\n",
   });
 });
 
