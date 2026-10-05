@@ -3,3 +3,4 @@
 
 # The bundle is generated: collapse it in diffs and keep it out of language statistics.
 dist/** linguist-generated=true
+probe-8/crlf.txt -text
