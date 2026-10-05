@@ -38,7 +38,7 @@ test("masks the credentials before it logs anything", async () => {
   );
 });
 
-for (const otherEvent of ["push", "pull_request_target", undefined]) {
+for (const otherEvent of ["push", "pull_request_target"]) {
   test(`skips the run on event "${otherEvent}" without failing`, async () => {
     const core = createFakeCore();
 
@@ -50,6 +50,40 @@ for (const otherEvent of ["push", "pull_request_target", undefined]) {
     assert.deepEqual(core.messages("info"), []);
   });
 }
+
+/**
+ * Sets GITHUB_EVENT_NAME for one test and restores it afterwards. The runner
+ * sets this variable too, so a test must never rely on it being absent.
+ */
+function withEventNameInEnvironment(t, value) {
+  const previous = process.env.GITHUB_EVENT_NAME;
+  t.after(() => {
+    if (previous === undefined) delete process.env.GITHUB_EVENT_NAME;
+    else process.env.GITHUB_EVENT_NAME = previous;
+  });
+  if (value === undefined) delete process.env.GITHUB_EVENT_NAME;
+  else process.env.GITHUB_EVENT_NAME = value;
+}
+
+test("takes the event name from the environment when none is passed", async (t) => {
+  withEventNameInEnvironment(t, "pull_request");
+  const core = createFakeCore(VALID_INPUTS);
+
+  await run({ core });
+
+  assert.deepEqual(core.messages("info"), ["ReviewOps started."]);
+});
+
+test("skips the run when the environment names no event", async (t) => {
+  withEventNameInEnvironment(t, undefined);
+  const core = createFakeCore();
+
+  await run({ core });
+
+  assert.equal(core.messages("notice").length, 1);
+  assert.match(core.messages("notice")[0], /triggered by "unknown"/);
+  assert.deepEqual(core.messages("setFailed"), []);
+});
 
 test("fails with a helpful message when the API key is missing", async () => {
   const core = createFakeCore({ "github-token": "token-value" });
