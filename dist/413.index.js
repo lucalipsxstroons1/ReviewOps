@@ -851,10 +851,9 @@ class DecodedURL extends URL {
 
 // EXPORTS
 __webpack_require__.d(__webpack_exports__, {
-  _: () => (/* binding */ github_context)
+  _: () => (/* binding */ github_context),
+  Q: () => (/* binding */ getOctokit)
 });
-
-// UNUSED EXPORTS: getOctokit
 
 // EXTERNAL MODULE: external "fs"
 var external_fs_ = __webpack_require__(9896);
@@ -5822,7 +5821,7 @@ const defaults = {
         fetch: getProxyFetch(baseUrl)
     }
 };
-const utils_GitHub = Octokit.plugin(restEndpointMethods, paginateRest).defaults(defaults);
+const GitHub = Octokit.plugin(restEndpointMethods, paginateRest).defaults(defaults);
 
 /**
  * Convience function to correctly format Octokit Options to pass into the constructor.
@@ -5830,15 +5829,15 @@ const utils_GitHub = Octokit.plugin(restEndpointMethods, paginateRest).defaults(
  * @param     token    the repo PAT or GITHUB_TOKEN
  * @param     options  other options to set
  */
-function utils_getOctokitOptions(token, options) {
+function getOctokitOptions(token, options) {
     const opts = Object.assign({}, options || {}); // Shallow clone - don't mutate the object provided by the caller
     // Auth
-    const auth = Utils.getAuthString(token, opts);
+    const auth = getAuthString(token, opts);
     if (auth) {
         opts.auth = auth;
     }
     // Orchestration ID
-    const userAgent = Utils.getUserAgentWithOrchestrationId(opts.userAgent);
+    const userAgent = getUserAgentWithOrchestrationId(opts.userAgent);
     if (userAgent) {
         opts.userAgent = userAgent;
     }

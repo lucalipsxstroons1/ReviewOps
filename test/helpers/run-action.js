@@ -1,9 +1,14 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { PROXY_VARIABLE } from "./no-proxy.js";
 
 // Recognisable stand-ins. They must not look like real credentials.
 export const TOKEN = "TESTTOKEN-not-a-real-token-123456";
 export const API_KEY = "TESTKEY-not-a-real-key-654321";
+
+// Nothing listens on the discard port. A test that forgets to start the local
+// API server fails here instead of reaching GitHub.
+const UNREACHABLE_API = "http://127.0.0.1:9";
 
 /** Absolute path of a file given relative to the repository root. */
 export const fromRoot = (path) =>
@@ -13,23 +18,35 @@ export const fromRoot = (path) =>
  * Starts the action the way the runner does: as its own process, configured
  * only through environment variables.
  *
- * Variables the runner itself sets are removed first, so the result does not
- * depend on whether the tests run locally or inside a workflow.
+ * Variables the runner itself sets and proxy settings of the machine are
+ * removed first, so the result does not depend on where the tests run. The
+ * process is started without blocking, so a test can serve its API requests.
  *
  * @param {string} entryPoint Absolute path of the file to start.
  * @param {Record<string, string>} env Variables for this run.
+ * @returns {Promise<{ status: number | null, stdout: string, stderr: string, output: string }>}
  */
 export function startAction(entryPoint, env) {
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([name]) => !/^(GITHUB_|INPUT_|RUNNER_)/.test(name),
+      ([name]) =>
+        !/^(GITHUB_|INPUT_|RUNNER_)/.test(name) && !PROXY_VARIABLE.test(name),
     ),
   );
-  const result = spawnSync(process.execPath, [entryPoint], {
-    env: { ...inherited, ...env },
-    encoding: "utf8",
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [entryPoint], {
+      env: { ...inherited, GITHUB_API_URL: UNREACHABLE_API, ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (status) =>
+      resolve({ status, stdout, stderr, output: stdout + stderr }),
+    );
   });
-  return { ...result, output: result.stdout + result.stderr };
 }
 
 /** What the runner sets for a pull_request event, with the example payload. */
