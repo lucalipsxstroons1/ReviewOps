@@ -9,7 +9,7 @@ Der Backlog liegt in den GitHub Issues dieses Repositories. Die Milestones „Ph
 - **Ein Issue nach dem anderen.** Der Maintainer gibt jede Phase und jedes Issue selbst frei. Ist ein Issue abgeschlossen, wird berichtet und gewartet, statt das nächste zu beginnen.
 - **Kein Code auf Vorrat.** Gebaut wird, was das aktuelle Issue verlangt. Was ein späteres Issue liefert, bleibt dort.
 - **Kleine, nachvollziehbare Schritte.** Vor jedem Schritt kurz sagen, was entsteht und wozu. Nie den gesamten Code auf einmal abliefern.
-- **Ein Branch und ein Pull Request je Issue.** Der Branch heißt `issue-<nr>-<kurzname>`. `main` ändert sich nur über Pull Requests, damit ReviewOps seine eigenen Änderungen reviewt.
+- **Ein Branch und ein Pull Request je Issue.** Der Branch heißt `issue-<nr>-<kurzname>`. `main` ändert sich nur über Pull Requests, damit ReviewOps seine eigenen Änderungen reviewt. Issue-Branches bleiben nach dem Merge stehen.
 - **Sprache.** Antworten, Issues, Pull Requests und Commit-Messages sind deutsch. Bezeichner, Kommentare und Log-Ausgaben im Code sind englisch.
 
 ## Regeln für den Code
@@ -19,6 +19,18 @@ Der Backlog liegt in den GitHub Issues dieses Repositories. Die Milestones „Ph
 - Secrets (GitHub-Token, OpenAI-Key) tauchen nirgends auf: nicht in Logs, Fehlermeldungen, Kommentaren oder Testdaten.
 - Zero-Trust: Diff-Inhalte und Modellantworten sind nicht vertrauenswürdige Eingaben und werden geprüft, bevor sie etwas auslösen.
 - `dist/` wird eingecheckt und muss zum Quellcode passen. Nach jeder Änderung unter `src/` neu bauen.
+- Module bekommen `core` und andere Runner-Objekte als Parameter, statt sie selbst zu importieren. Nur `src/main.js` verdrahtet die echten Module. So lassen sich alle Zweige mit `test/helpers/fake-core.js` testen.
+
+## Logging
+
+Ausgaben laufen ausschließlich über `@actions/core`; `console.*` ist unter `src/` per ESLint verboten.
+
+- `core.info()` meldet den Fortschritt, eine Zeile je Schritt.
+- `core.notice()` ist für Hinweise an den Nutzer der Action, etwa einen übersprungenen Lauf.
+- `core.warning()` meldet, was übersprungen oder nur teilweise erledigt wurde, ohne dass der Lauf scheitert.
+- `core.debug()` nimmt Details und Stacktraces auf. Sie erscheinen nur bei eingeschaltetem Debug-Logging.
+- `core.setFailed()` wird nur in `run()` aufgerufen, mit einer Meldung, die sagt, was zu tun ist.
+- Nie ausgegeben werden Payloads, Header und ganze Fehlerobjekte. Fehlertexte gehen vor der Ausgabe durch den Schwärzer aus `src/redact.js`.
 
 ## Ablauf je Issue
 
