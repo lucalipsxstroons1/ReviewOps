@@ -1,0 +1,20 @@
+name: ReviewOps
+description: Reviews pull requests with an AI model and posts the findings as inline review comments.
+author: lucalipsxstroons1
+
+branding:
+  icon: git-pull-request
+  color: purple
+
+inputs:
+  github-token:
+    description: Token used to read the pull request and post the review. Defaults to the GITHUB_TOKEN of the workflow run.
+    required: false
+    default: ${{ github.token }}
+  openai-api-key:
+    description: OpenAI API key used to request the review. Pass it from a repository secret, never as plain text.
+    required: true
+
+runs:
+  using: node24
+  main: dist/index.js
