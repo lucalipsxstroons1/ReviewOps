@@ -29,5 +29,3 @@ export function createRedactor(secrets) {
       String(text),
     );
 }
-
-// Probe for the CI: this line changes the sources but not the checked-in bundle.
