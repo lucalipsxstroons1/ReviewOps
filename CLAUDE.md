@@ -54,6 +54,8 @@ Fehlt beim Aufruf die Issue-Nummer, ergibt sie sich aus dem Branch-Namen. Auf `m
 - `npm run format` formatiert den Code mit Prettier (Standardstil, Markdown ausgenommen).
 - `npm run build` bündelt `src/index.js` mit `@vercel/ncc` nach `dist/` (`index.js`, `package.json`, `licenses.txt`). Alle drei Dateien werden eingecheckt. `test/dist.test.js` startet das eingecheckte Bundle, also erst bauen, dann testen.
 
+Die CI (`.github/workflows/ci.yml`) führt bei jedem Pull Request und bei jedem Push auf `main` `npm ci`, Lint, Tests und Build aus. Sie wird rot, wenn der Build `dist/` verändert, das eingecheckte Bundle also nicht zum Quellcode passt. `test/workflow.test.js` prüft die Regeln für alle Workflow-Dateien.
+
 ## Werkzeuge
 
 - Der GitHub-Zugriff läuft über die GitHub CLI (`gh`). Ist sie nicht angemeldet (`gh auth status`), um `gh auth login` bitten, statt einen anderen Weg zu suchen.
