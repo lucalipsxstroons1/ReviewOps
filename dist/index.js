@@ -12,7 +12,6 @@ module.exports = __nccwpck_require__(218);
 /***/ 218:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
-var __webpack_unused_export__;
 
 
 var net = __nccwpck_require__(9278);
@@ -276,7 +275,7 @@ if (process.env.NODE_DEBUG && /\btunnel\b/.test(process.env.NODE_DEBUG)) {
 } else {
   debug = function() {};
 }
-__webpack_unused_export__ = debug; // for test
+exports.debug = debug; // for test
 
 
 /***/ }),
@@ -284,7 +283,6 @@ __webpack_unused_export__ = debug; // for test
 /***/ 6752:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var __webpack_unused_export__;
 
 
 const Client = __nccwpck_require__(3701)
@@ -312,29 +310,29 @@ const createRedirectInterceptor = __nccwpck_require__(5092)
 
 Object.assign(Dispatcher.prototype, api)
 
-__webpack_unused_export__ = Dispatcher
-__webpack_unused_export__ = Client
-__webpack_unused_export__ = Pool
-__webpack_unused_export__ = BalancedPool
-__webpack_unused_export__ = Agent
-module.exports.kT = ProxyAgent
-__webpack_unused_export__ = EnvHttpProxyAgent
-__webpack_unused_export__ = RetryAgent
-__webpack_unused_export__ = RetryHandler
+module.exports.Dispatcher = Dispatcher
+module.exports.Client = Client
+module.exports.Pool = Pool
+module.exports.BalancedPool = BalancedPool
+module.exports.Agent = Agent
+module.exports.ProxyAgent = ProxyAgent
+module.exports.EnvHttpProxyAgent = EnvHttpProxyAgent
+module.exports.RetryAgent = RetryAgent
+module.exports.RetryHandler = RetryHandler
 
-__webpack_unused_export__ = DecoratorHandler
-__webpack_unused_export__ = RedirectHandler
-__webpack_unused_export__ = createRedirectInterceptor
-__webpack_unused_export__ = {
+module.exports.DecoratorHandler = DecoratorHandler
+module.exports.RedirectHandler = RedirectHandler
+module.exports.createRedirectInterceptor = createRedirectInterceptor
+module.exports.interceptors = {
   redirect: __nccwpck_require__(1514),
   retry: __nccwpck_require__(2026),
   dump: __nccwpck_require__(8060),
   dns: __nccwpck_require__(379)
 }
 
-__webpack_unused_export__ = buildConnector
-__webpack_unused_export__ = errors
-__webpack_unused_export__ = {
+module.exports.buildConnector = buildConnector
+module.exports.errors = errors
+module.exports.util = {
   parseHeaders: util.parseHeaders,
   headerNameToString: util.headerNameToString
 }
@@ -388,11 +386,11 @@ function makeDispatcher (fn) {
   }
 }
 
-__webpack_unused_export__ = setGlobalDispatcher
-__webpack_unused_export__ = getGlobalDispatcher
+module.exports.setGlobalDispatcher = setGlobalDispatcher
+module.exports.getGlobalDispatcher = getGlobalDispatcher
 
 const fetchImpl = (__nccwpck_require__(4398).fetch)
-__webpack_unused_export__ = async function fetch (init, options = undefined) {
+module.exports.fetch = async function fetch (init, options = undefined) {
   try {
     return await fetchImpl(init, options)
   } catch (err) {
@@ -403,57 +401,57 @@ __webpack_unused_export__ = async function fetch (init, options = undefined) {
     throw err
   }
 }
-/* unused reexport */ __nccwpck_require__(660).Headers
-/* unused reexport */ __nccwpck_require__(9051).Response
-/* unused reexport */ __nccwpck_require__(9967).Request
-/* unused reexport */ __nccwpck_require__(5910).FormData
-__webpack_unused_export__ = globalThis.File ?? (__nccwpck_require__(4573).File)
-/* unused reexport */ __nccwpck_require__(8355).FileReader
+module.exports.Headers = __nccwpck_require__(660).Headers
+module.exports.Response = __nccwpck_require__(9051).Response
+module.exports.Request = __nccwpck_require__(9967).Request
+module.exports.FormData = __nccwpck_require__(5910).FormData
+module.exports.File = globalThis.File ?? (__nccwpck_require__(4573).File)
+module.exports.FileReader = __nccwpck_require__(8355).FileReader
 
 const { setGlobalOrigin, getGlobalOrigin } = __nccwpck_require__(1059)
 
-__webpack_unused_export__ = setGlobalOrigin
-__webpack_unused_export__ = getGlobalOrigin
+module.exports.setGlobalOrigin = setGlobalOrigin
+module.exports.getGlobalOrigin = getGlobalOrigin
 
 const { CacheStorage } = __nccwpck_require__(3245)
 const { kConstruct } = __nccwpck_require__(109)
 
 // Cache & CacheStorage are tightly coupled with fetch. Even if it may run
 // in an older version of Node, it doesn't have any use without fetch.
-__webpack_unused_export__ = new CacheStorage(kConstruct)
+module.exports.caches = new CacheStorage(kConstruct)
 
 const { deleteCookie, getCookies, getSetCookies, setCookie } = __nccwpck_require__(9061)
 
-__webpack_unused_export__ = deleteCookie
-__webpack_unused_export__ = getCookies
-__webpack_unused_export__ = getSetCookies
-__webpack_unused_export__ = setCookie
+module.exports.deleteCookie = deleteCookie
+module.exports.getCookies = getCookies
+module.exports.getSetCookies = getSetCookies
+module.exports.setCookie = setCookie
 
 const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(1900)
 
-__webpack_unused_export__ = parseMIMEType
-__webpack_unused_export__ = serializeAMimeType
+module.exports.parseMIMEType = parseMIMEType
+module.exports.serializeAMimeType = serializeAMimeType
 
 const { CloseEvent, ErrorEvent, MessageEvent } = __nccwpck_require__(5188)
-/* unused reexport */ __nccwpck_require__(3726).WebSocket
-__webpack_unused_export__ = CloseEvent
-__webpack_unused_export__ = ErrorEvent
-__webpack_unused_export__ = MessageEvent
+module.exports.WebSocket = __nccwpck_require__(3726).WebSocket
+module.exports.CloseEvent = CloseEvent
+module.exports.ErrorEvent = ErrorEvent
+module.exports.MessageEvent = MessageEvent
 
-__webpack_unused_export__ = makeDispatcher(api.request)
-__webpack_unused_export__ = makeDispatcher(api.stream)
-__webpack_unused_export__ = makeDispatcher(api.pipeline)
-__webpack_unused_export__ = makeDispatcher(api.connect)
-__webpack_unused_export__ = makeDispatcher(api.upgrade)
+module.exports.request = makeDispatcher(api.request)
+module.exports.stream = makeDispatcher(api.stream)
+module.exports.pipeline = makeDispatcher(api.pipeline)
+module.exports.connect = makeDispatcher(api.connect)
+module.exports.upgrade = makeDispatcher(api.upgrade)
 
-__webpack_unused_export__ = MockClient
-__webpack_unused_export__ = MockPool
-__webpack_unused_export__ = MockAgent
-__webpack_unused_export__ = mockErrors
+module.exports.MockClient = MockClient
+module.exports.MockPool = MockPool
+module.exports.MockAgent = MockAgent
+module.exports.mockErrors = mockErrors
 
 const { EventSource } = __nccwpck_require__(1238)
 
-__webpack_unused_export__ = EventSource
+module.exports.EventSource = EventSource
 
 
 /***/ }),
@@ -28280,6 +28278,13 @@ module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("events");
 
 /***/ }),
 
+/***/ 9896:
+/***/ ((module) => {
+
+module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("fs");
+
+/***/ }),
+
 /***/ 8611:
 /***/ ((module) => {
 
@@ -28441,6 +28446,13 @@ module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:zlib");
 
 /***/ }),
 
+/***/ 857:
+/***/ ((module) => {
+
+module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("os");
+
+/***/ }),
+
 /***/ 3193:
 /***/ ((module) => {
 
@@ -28462,27 +28474,42 @@ module.exports = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("util");
 
 /***/ }),
 
-/***/ 9722:
-/***/ ((__webpack_module__, __unused_webpack___webpack_exports__, __nccwpck_require__) => {
-
-__nccwpck_require__.a(__webpack_module__, async (__webpack_handle_async_dependencies__, __webpack_async_result__) => { try {
-/* harmony import */ var _main_js__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(4136);
-
-
-await (0,_main_js__WEBPACK_IMPORTED_MODULE_0__/* .run */ .e)();
-
-__webpack_async_result__();
-} catch(e) { __webpack_async_result__(e); } }, 1);
-
-/***/ }),
-
-/***/ 4136:
+/***/ 6257:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __nccwpck_require__) => {
 
+// ESM COMPAT FLAG
+__nccwpck_require__.r(__webpack_exports__);
 
 // EXPORTS
 __nccwpck_require__.d(__webpack_exports__, {
-  e: () => (/* binding */ run)
+  ExitCode: () => (/* binding */ ExitCode),
+  addPath: () => (/* binding */ addPath),
+  debug: () => (/* binding */ debug),
+  endGroup: () => (/* binding */ endGroup),
+  error: () => (/* binding */ error),
+  exportVariable: () => (/* binding */ exportVariable),
+  getBooleanInput: () => (/* binding */ getBooleanInput),
+  getIDToken: () => (/* binding */ getIDToken),
+  getInput: () => (/* binding */ getInput),
+  getMultilineInput: () => (/* binding */ getMultilineInput),
+  getState: () => (/* binding */ getState),
+  group: () => (/* binding */ group),
+  info: () => (/* binding */ info),
+  isDebug: () => (/* binding */ isDebug),
+  markdownSummary: () => (/* reexport */ markdownSummary),
+  notice: () => (/* binding */ notice),
+  platform: () => (/* reexport */ platform_namespaceObject),
+  saveState: () => (/* binding */ saveState),
+  setCommandEcho: () => (/* binding */ setCommandEcho),
+  setFailed: () => (/* binding */ setFailed),
+  setOutput: () => (/* binding */ setOutput),
+  setSecret: () => (/* binding */ setSecret),
+  startGroup: () => (/* binding */ startGroup),
+  summary: () => (/* reexport */ summary),
+  toPlatformPath: () => (/* reexport */ toPlatformPath),
+  toPosixPath: () => (/* reexport */ toPosixPath),
+  toWin32Path: () => (/* reexport */ toWin32Path),
+  warning: () => (/* binding */ warning)
 });
 
 // NAMESPACE OBJECT: ./node_modules/@actions/core/lib/platform.js
@@ -28497,42 +28524,8 @@ __nccwpck_require__.d(platform_namespaceObject, {
   platform: () => (platform)
 });
 
-// NAMESPACE OBJECT: ./node_modules/@actions/core/lib/core.js
-var core_namespaceObject = {};
-__nccwpck_require__.r(core_namespaceObject);
-__nccwpck_require__.d(core_namespaceObject, {
-  ExitCode: () => (ExitCode),
-  addPath: () => (addPath),
-  debug: () => (debug),
-  endGroup: () => (endGroup),
-  error: () => (error),
-  exportVariable: () => (exportVariable),
-  getBooleanInput: () => (getBooleanInput),
-  getIDToken: () => (getIDToken),
-  getInput: () => (getInput),
-  getMultilineInput: () => (getMultilineInput),
-  getState: () => (getState),
-  group: () => (group),
-  info: () => (info),
-  isDebug: () => (isDebug),
-  markdownSummary: () => (markdownSummary),
-  notice: () => (notice),
-  platform: () => (platform_namespaceObject),
-  saveState: () => (saveState),
-  setCommandEcho: () => (setCommandEcho),
-  setFailed: () => (setFailed),
-  setOutput: () => (setOutput),
-  setSecret: () => (setSecret),
-  startGroup: () => (startGroup),
-  summary: () => (summary),
-  toPlatformPath: () => (toPlatformPath),
-  toPosixPath: () => (toPosixPath),
-  toWin32Path: () => (toWin32Path),
-  warning: () => (warning)
-});
-
-;// CONCATENATED MODULE: external "os"
-const external_os_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("os");
+// EXTERNAL MODULE: external "os"
+var external_os_ = __nccwpck_require__(857);
 ;// CONCATENATED MODULE: ./node_modules/@actions/core/lib/utils.js
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -28607,7 +28600,7 @@ function toCommandProperties(annotationProperties) {
  */
 function issueCommand(command, properties, message) {
     const cmd = new Command(command, properties, message);
-    process.stdout.write(cmd.toString() + external_os_namespaceObject.EOL);
+    process.stdout.write(cmd.toString() + external_os_.EOL);
 }
 function issue(name, message = '') {
     issueCommand(name, {}, message);
@@ -28663,8 +28656,8 @@ function escapeProperty(s) {
 //# sourceMappingURL=command.js.map
 ;// CONCATENATED MODULE: external "crypto"
 const external_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("crypto");
-;// CONCATENATED MODULE: external "fs"
-const external_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("fs");
+// EXTERNAL MODULE: external "fs"
+var external_fs_ = __nccwpck_require__(9896);
 ;// CONCATENATED MODULE: ./node_modules/@actions/core/lib/file-command.js
 // For internal use, subject to change.
 // We use any as a valid input type
@@ -28678,10 +28671,10 @@ function issueFileCommand(command, message) {
     if (!filePath) {
         throw new Error(`Unable to find environment variable for file command ${command}`);
     }
-    if (!external_fs_namespaceObject.existsSync(filePath)) {
+    if (!external_fs_.existsSync(filePath)) {
         throw new Error(`Missing file at path: ${filePath}`);
     }
-    external_fs_namespaceObject.appendFileSync(filePath, `${toCommandValue(message)}${external_os_namespaceObject.EOL}`, {
+    external_fs_.appendFileSync(filePath, `${toCommandValue(message)}${external_os_.EOL}`, {
         encoding: 'utf8'
     });
 }
@@ -28697,7 +28690,7 @@ function prepareKeyValueMessage(key, value) {
     if (convertedValue.includes(delimiter)) {
         throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
     }
-    return `${key}<<${delimiter}${external_os_namespaceObject.EOL}${convertedValue}${external_os_namespaceObject.EOL}${delimiter}`;
+    return `${key}<<${delimiter}${external_os_.EOL}${convertedValue}${external_os_.EOL}${delimiter}`;
 }
 //# sourceMappingURL=file-command.js.map
 ;// CONCATENATED MODULE: external "path"
@@ -29400,7 +29393,7 @@ class HttpClient {
             return proxyAgent;
         }
         const usingSsl = parsedUrl.protocol === 'https:';
-        proxyAgent = new undici/* ProxyAgent */.kT(Object.assign({ uri: proxyUrl.href, pipelining: !this._keepAlive ? 0 : 1 }, ((proxyUrl.username || proxyUrl.password) && {
+        proxyAgent = new undici.ProxyAgent(Object.assign({ uri: proxyUrl.href, pipelining: !this._keepAlive ? 0 : 1 }, ((proxyUrl.username || proxyUrl.password) && {
             token: `Basic ${Buffer.from(`${proxyUrl.username}:${proxyUrl.password}`).toString('base64')}`
         })));
         this._proxyAgentDispatcher = proxyAgent;
@@ -29662,7 +29655,7 @@ var summary_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _
 };
 
 
-const { access, appendFile, writeFile } = external_fs_namespaceObject.promises;
+const { access, appendFile, writeFile } = external_fs_.promises;
 const SUMMARY_ENV_VAR = 'GITHUB_STEP_SUMMARY';
 const SUMMARY_DOCS_URL = 'https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary';
 class Summary {
@@ -29685,7 +29678,7 @@ class Summary {
                 throw new Error(`Unable to find environment variable for $${SUMMARY_ENV_VAR}. Check if your runtime environment supports job summaries.`);
             }
             try {
-                yield access(pathFromEnv, external_fs_namespaceObject.constants.R_OK | external_fs_namespaceObject.constants.W_OK);
+                yield access(pathFromEnv, external_fs_.constants.R_OK | external_fs_.constants.W_OK);
             }
             catch (_a) {
                 throw new Error(`Unable to access summary file: '${pathFromEnv}'. Check if the file has correct read/write permissions.`);
@@ -29781,7 +29774,7 @@ class Summary {
      * @returns {Summary} summary instance
      */
     addEOL() {
-        return this.addRaw(external_os_namespaceObject.EOL);
+        return this.addRaw(external_os_.EOL);
     }
     /**
      * Adds an HTML codeblock to the summary buffer
@@ -29985,7 +29978,7 @@ var io_util_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _
 };
 
 
-const { chmod, copyFile, lstat, mkdir, open: io_util_open, readdir, rename, rm, rmdir, stat, symlink, unlink } = external_fs_namespaceObject.promises;
+const { chmod, copyFile, lstat, mkdir, open: io_util_open, readdir, rename, rm, rmdir, stat, symlink, unlink } = external_fs_.promises;
 // export const {open} = 'fs'
 const IS_WINDOWS = process.platform === 'win32';
 /**
@@ -30012,7 +30005,7 @@ function readlink(fsPath) {
 }
 // See https://github.com/nodejs/node/blob/d0153aee367422d0858105abec186da4dff0a0c5/deps/uv/include/uv/win.h#L691
 const UV_FS_O_EXLOCK = 0x10000000;
-const READONLY = external_fs_namespaceObject.constants.O_RDONLY;
+const READONLY = external_fs_.constants.O_RDONLY;
 function exists(fsPath) {
     return io_util_awaiter(this, void 0, void 0, function* () {
         try {
@@ -30505,13 +30498,13 @@ class ToolRunner extends external_events_.EventEmitter {
     _processLineBuffer(data, strBuffer, onLine) {
         try {
             let s = strBuffer + data.toString();
-            let n = s.indexOf(external_os_namespaceObject.EOL);
+            let n = s.indexOf(external_os_.EOL);
             while (n > -1) {
                 const line = s.substring(0, n);
                 onLine(line);
                 // the rest of the string ...
-                s = s.substring(n + external_os_namespaceObject.EOL.length);
-                n = s.indexOf(external_os_namespaceObject.EOL);
+                s = s.substring(n + external_os_.EOL.length);
+                n = s.indexOf(external_os_.EOL);
             }
             return s;
         }
@@ -30802,7 +30795,7 @@ class ToolRunner extends external_events_.EventEmitter {
                 }
                 const optionsNonNull = this._cloneExecOptions(this.options);
                 if (!optionsNonNull.silent && optionsNonNull.outStream) {
-                    optionsNonNull.outStream.write(this._getCommandString(optionsNonNull) + external_os_namespaceObject.EOL);
+                    optionsNonNull.outStream.write(this._getCommandString(optionsNonNull) + external_os_.EOL);
                 }
                 const state = new ExecState(optionsNonNull, this.toolPath);
                 state.on('debug', (message) => {
@@ -31141,8 +31134,8 @@ const getLinuxInfo = () => platform_awaiter(void 0, void 0, void 0, function* ()
         version
     };
 });
-const platform = external_os_namespaceObject.platform();
-const arch = external_os_namespaceObject.arch();
+const platform = external_os_.platform();
+const arch = external_os_.arch();
 const isWindows = platform === 'win32';
 const isMacOS = platform === 'darwin';
 const isLinux = platform === 'linux';
@@ -31323,7 +31316,7 @@ function setOutput(name, value) {
     if (filePath) {
         return issueFileCommand('OUTPUT', prepareKeyValueMessage(name, value));
     }
-    process.stdout.write(external_os_namespaceObject.EOL);
+    process.stdout.write(external_os_.EOL);
     issueCommand('set-output', { name }, toCommandValue(value));
 }
 /**
@@ -31391,7 +31384,7 @@ function notice(message, properties = {}) {
  * @param message info message
  */
 function info(message) {
-    process.stdout.write(message + external_os_namespaceObject.EOL);
+    process.stdout.write(message + external_os_.EOL);
 }
 /**
  * Begin an output group.
@@ -31478,140 +31471,34 @@ function getIDToken(aud) {
  */
 
 //# sourceMappingURL=core.js.map
-;// CONCATENATED MODULE: ./src/inputs.js
-/**
- * Reads the action inputs and masks the credentials right away.
- *
- * Nothing is validated here on purpose: the values must be masked before
- * any check can fail and produce a message.
- *
- * @param {typeof import("@actions/core")} core
- * @returns {{ githubToken: string, openaiApiKey: string }}
- */
-function readInputs(core) {
-  const inputs = {
-    githubToken: core.getInput("github-token"),
-    openaiApiKey: core.getInput("openai-api-key"),
-  };
 
-  for (const secret of Object.values(inputs)) {
-    if (secret) core.setSecret(secret);
-  }
+/***/ }),
 
-  return inputs;
+/***/ 9722:
+/***/ ((__webpack_module__, __unused_webpack___webpack_exports__, __nccwpck_require__) => {
+
+__nccwpck_require__.a(__webpack_module__, async (__webpack_handle_async_dependencies__, __webpack_async_result__) => { try {
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(6257);
+
+
+// main.js is loaded at run time, not with a static import. Loading it pulls
+// in every dependency, and some of them work while they load: for example,
+// `@actions/github` parses the event file. A static import would let such a
+// failure crash the process with a raw stack trace before any code of this
+// action runs. Here it becomes a failed step with a readable message.
+try {
+  const { run } = await Promise.all(/* import() */[__nccwpck_require__.e(413), __nccwpck_require__.e(827)]).then(__nccwpck_require__.bind(__nccwpck_require__, 8827));
+  await run();
+} catch (error) {
+  const reason =
+    error instanceof Error ? error.message || error.name : "unknown reason";
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(`ReviewOps could not start: ${reason}`);
+
+  if (error instanceof Error && error.stack) _actions_core__WEBPACK_IMPORTED_MODULE_0__.debug(error.stack);
 }
 
-/**
- * Rejects missing inputs with a message that says what to do.
- *
- * @param {{ githubToken: string, openaiApiKey: string }} inputs
- */
-function assertInputs(inputs) {
-  if (!inputs.openaiApiKey) {
-    throw new Error(
-      "Input `openai-api-key` is missing. Store the key as a repository secret and pass it to the action, for example `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`.",
-    );
-  }
-  if (!inputs.githubToken) {
-    throw new Error(
-      "Input `github-token` is empty. Remove it from the workflow to use the token of the workflow run, or pass a valid token.",
-    );
-  }
-}
-
-;// CONCATENATED MODULE: ./src/redact.js
-const PLACEHOLDER = "***";
-
-// Real tokens and API keys are far longer. A shorter value cannot be a
-// credential, and replacing it would tear ordinary words apart.
-const MIN_SECRET_LENGTH = 8;
-
-/**
- * Builds a function that replaces every known secret in a text.
- *
- * The runner masks secrets in the log, but only there. Redacting the text
- * itself also protects places the mask never sees, such as review comments.
- *
- * @param {unknown[]} secrets Values to hide. Non-string values and values
- *   shorter than eight characters are ignored.
- * @returns {(text: unknown) => string}
- */
-function createRedactor(secrets) {
-  const known = secrets
-    .filter(
-      (secret) =>
-        typeof secret === "string" && secret.length >= MIN_SECRET_LENGTH,
-    )
-    // Longest first, so a secret that contains another one is replaced as a whole.
-    .sort((a, b) => b.length - a.length);
-
-  return (text) =>
-    known.reduce(
-      (result, secret) => result.replaceAll(secret, PLACEHOLDER),
-      String(text),
-    );
-}
-
-;// CONCATENATED MODULE: ./src/main.js
-
-
-
-
-// `pull_request_target` is left out on purpose: it hands secrets and a write
-// token to pull requests from forks.
-const SUPPORTED_EVENT = "pull_request";
-
-/**
- * Entry point of the action. Every failure ends in `core.setFailed()`.
- *
- * The event name comes straight from the environment. Importing
- * `@actions/github` here would parse the event file while the module loads,
- * and a failure at that point happens before this function can catch it.
- *
- * @param {object} [deps] Replacements for the runner, used by tests.
- * @param {typeof import("@actions/core")} [deps.core]
- * @param {string} [deps.eventName] Name of the event that triggered the run.
- */
-async function run({
-  core = core_namespaceObject,
-  eventName = process.env.GITHUB_EVENT_NAME,
-} = {}) {
-  let redact = String;
-
-  try {
-    if (eventName !== SUPPORTED_EVENT) {
-      core.notice(
-        `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${eventName ?? "unknown"}" and was skipped.`,
-      );
-      return;
-    }
-
-    const inputs = readInputs(core);
-    redact = createRedactor(Object.values(inputs));
-    assertInputs(inputs);
-
-    core.info("ReviewOps started.");
-  } catch (error) {
-    // Mark the step as failed first: nothing below may prevent that.
-    core.setFailed(redact(describe(error)));
-
-    try {
-      if (error instanceof Error && error.stack) {
-        core.debug(redact(error.stack));
-      }
-    } catch {
-      // A broken debug log must not hide the failure reported above.
-    }
-  }
-}
-
-/** Turns anything that was thrown into a message a person can act on. */
-function describe(error) {
-  if (error instanceof Error) return error.message || error.name;
-  if (typeof error === "string" && error.trim()) return error;
-  return "ReviewOps failed without an error message.";
-}
-
+__webpack_async_result__();
+} catch(e) { __webpack_async_result__(e); } }, 1);
 
 /***/ })
 
@@ -31637,7 +31524,7 @@ function describe(error) {
 /******/ 	// Execute the module function
 /******/ 	var threw = true;
 /******/ 	try {
-/******/ 		__webpack_modules__[moduleId](module, module.exports, __nccwpck_require__);
+/******/ 		__webpack_modules__[moduleId].call(module.exports, module, module.exports, __nccwpck_require__);
 /******/ 		threw = false;
 /******/ 	} finally {
 /******/ 		if(threw) delete __webpack_module_cache__[moduleId];
@@ -31646,6 +31533,9 @@ function describe(error) {
 /******/ 	// Return the exports of the module
 /******/ 	return module.exports;
 /******/ }
+/******/ 
+/******/ // expose the modules object (__webpack_modules__)
+/******/ __nccwpck_require__.m = __webpack_modules__;
 /******/ 
 /************************************************************************/
 /******/ /* webpack/runtime/asset-relocator-loader */
@@ -31762,6 +31652,28 @@ function describe(error) {
 /******/ 	};
 /******/ })();
 /******/ 
+/******/ /* webpack/runtime/ensure chunk */
+/******/ (() => {
+/******/ 	__nccwpck_require__.f = {};
+/******/ 	// This file contains only the entry chunk.
+/******/ 	// The chunk loading function for additional chunks
+/******/ 	__nccwpck_require__.e = (chunkId) => {
+/******/ 		return Promise.all(Object.keys(__nccwpck_require__.f).reduce((promises, key) => {
+/******/ 			__nccwpck_require__.f[key](chunkId, promises);
+/******/ 			return promises;
+/******/ 		}, []));
+/******/ 	};
+/******/ })();
+/******/ 
+/******/ /* webpack/runtime/get javascript chunk filename */
+/******/ (() => {
+/******/ 	// This function allow to reference async chunks
+/******/ 	__nccwpck_require__.u = (chunkId) => {
+/******/ 		// return url for filenames based on template
+/******/ 		return "" + chunkId + ".index.js";
+/******/ 	};
+/******/ })();
+/******/ 
 /******/ /* webpack/runtime/hasOwnProperty shorthand */
 /******/ (() => {
 /******/ 	__nccwpck_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
@@ -31776,6 +31688,69 @@ function describe(error) {
 /******/ 		}
 /******/ 		Object.defineProperty(exports, '__esModule', { value: true });
 /******/ 	};
+/******/ })();
+/******/ 
+/******/ /* webpack/runtime/import chunk loading */
+/******/ (() => {
+/******/ 	// no baseURI
+/******/ 	
+/******/ 	// object to store loaded and loading chunks
+/******/ 	// undefined = chunk not loaded, null = chunk preloaded/prefetched
+/******/ 	// [resolve, Promise] = chunk loading, 0 = chunk loaded
+/******/ 	var installedChunks = {
+/******/ 		792: 0
+/******/ 	};
+/******/ 	
+/******/ 	var installChunk = (data) => {
+/******/ 		var {ids, modules, runtime} = data;
+/******/ 		// add "modules" to the modules object,
+/******/ 		// then flag all "ids" as loaded and fire callback
+/******/ 		var moduleId, chunkId, i = 0;
+/******/ 		for(moduleId in modules) {
+/******/ 			if(__nccwpck_require__.o(modules, moduleId)) {
+/******/ 				__nccwpck_require__.m[moduleId] = modules[moduleId];
+/******/ 			}
+/******/ 		}
+/******/ 		if(runtime) runtime(__nccwpck_require__);
+/******/ 		for(;i < ids.length; i++) {
+/******/ 			chunkId = ids[i];
+/******/ 			if(__nccwpck_require__.o(installedChunks, chunkId) && installedChunks[chunkId]) {
+/******/ 				installedChunks[chunkId][0]();
+/******/ 			}
+/******/ 			installedChunks[ids[i]] = 0;
+/******/ 		}
+/******/ 	
+/******/ 	}
+/******/ 	
+/******/ 	__nccwpck_require__.f.j = (chunkId, promises) => {
+/******/ 			// import() chunk loading for javascript
+/******/ 			var installedChunkData = __nccwpck_require__.o(installedChunks, chunkId) ? installedChunks[chunkId] : undefined;
+/******/ 			if(installedChunkData !== 0) { // 0 means "already installed".
+/******/ 	
+/******/ 				// a Promise means "currently loading".
+/******/ 				if(installedChunkData) {
+/******/ 					promises.push(installedChunkData[1]);
+/******/ 				} else {
+/******/ 					if(true) { // all chunks have JS
+/******/ 						// setup Promise in chunk cache
+/******/ 						var promise = import("./" + __nccwpck_require__.u(chunkId)).then(installChunk, (e) => {
+/******/ 							if(installedChunks[chunkId] !== 0) installedChunks[chunkId] = undefined;
+/******/ 							throw e;
+/******/ 						});
+/******/ 						var promise = Promise.race([promise, new Promise((resolve) => (installedChunkData = installedChunks[chunkId] = [resolve]))])
+/******/ 						promises.push(installedChunkData[1] = promise);
+/******/ 					}
+/******/ 				}
+/******/ 			}
+/******/ 	};
+/******/ 	
+/******/ 	// no prefetching
+/******/ 	
+/******/ 	// no preloaded
+/******/ 	
+/******/ 	// no external install chunk
+/******/ 	
+/******/ 	// no on chunks loaded
 /******/ })();
 /******/ 
 /************************************************************************/

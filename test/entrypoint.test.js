@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   API_KEY,
+  PULL_REQUEST_EVENT,
+  REVIEWING_LINE,
   TOKEN,
   fromRoot,
   startAction,
@@ -14,17 +16,27 @@ import {
 
 const runAction = (env) => startAction(fromRoot("src/index.js"), env);
 
-test("starts and exits with code 0 on a pull_request event", () => {
-  const result = runAction(withInputs({ GITHUB_EVENT_NAME: "pull_request" }));
+/** Writes an event file with the given content and removes it after the test. */
+function eventFile(t, content) {
+  const directory = mkdtempSync(join(tmpdir(), "reviewops-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, "event.json");
+  writeFileSync(path, content);
+  return path;
+}
+
+test("starts on a pull_request event and names the pull request", () => {
+  const result = runAction(withInputs(PULL_REQUEST_EVENT));
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /ReviewOps started\./);
+  assert.match(result.stdout, /^ReviewOps started\.$/m);
+  assert.ok(result.stdout.includes(REVIEWING_LINE));
   assert.equal(result.stderr, "");
 });
 
 test("fails the step with a helpful message when the API key is missing", () => {
   const result = runAction({
-    GITHUB_EVENT_NAME: "pull_request",
+    ...PULL_REQUEST_EVENT,
     "INPUT_GITHUB-TOKEN": TOKEN,
   });
 
@@ -48,7 +60,7 @@ for (const debug of [false, true]) {
   test(`keeps both credentials out of the log (debug: ${debug})`, () => {
     const result = runAction(
       withInputs({
-        GITHUB_EVENT_NAME: "pull_request",
+        ...PULL_REQUEST_EVENT,
         ...(debug ? { RUNNER_DEBUG: "1" } : {}),
       }),
     );
@@ -69,7 +81,7 @@ for (const debug of [false, true]) {
 
 test("prints a stack trace only as a debug command", () => {
   const result = runAction({
-    GITHUB_EVENT_NAME: "pull_request",
+    ...PULL_REQUEST_EVENT,
     "INPUT_GITHUB-TOKEN": TOKEN,
   });
 
@@ -85,29 +97,39 @@ test("prints a stack trace only as a debug command", () => {
   assert.equal(withoutMaskCommands(result.output).includes(TOKEN), false);
 });
 
-test("does not crash while loading when the event file is corrupt", (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "reviewops-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const eventPath = join(directory, "event.json");
-  writeFileSync(eventPath, "{ this is not json");
-
+test("fails the step when the event has no pull request", (t) => {
   const result = runAction(
     withInputs({
-      GITHUB_EVENT_NAME: "pull_request",
-      GITHUB_EVENT_PATH: eventPath,
+      ...PULL_REQUEST_EVENT,
+      GITHUB_EVENT_PATH: eventFile(t, "{}"),
     }),
   );
 
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /ReviewOps started\./);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::The event carries no pull request/m);
+  assert.equal(result.stderr, "");
+});
+
+test("turns a failure while loading into a failed step", (t) => {
+  // @actions/github parses the event file while it is imported.
+  const result = runAction(
+    withInputs({
+      ...PULL_REQUEST_EVENT,
+      GITHUB_EVENT_PATH: eventFile(t, "{ this is not json"),
+    }),
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::ReviewOps could not start: /m);
+  assert.doesNotMatch(result.stdout, /ReviewOps started\./);
   assert.equal(result.stderr, "");
 });
 
 test("never reports an unhandled rejection", () => {
   for (const env of [
-    { GITHUB_EVENT_NAME: "pull_request" },
+    PULL_REQUEST_EVENT,
     { GITHUB_EVENT_NAME: "push" },
-    withInputs({ GITHUB_EVENT_NAME: "pull_request" }),
+    withInputs(PULL_REQUEST_EVENT),
     {},
   ]) {
     const result = runAction(env);

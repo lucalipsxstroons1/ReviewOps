@@ -20,7 +20,9 @@ Der Backlog liegt in den GitHub Issues dieses Repositories. Die Milestones „Ph
 - Zero-Trust: Diff-Inhalte und Modellantworten sind nicht vertrauenswürdige Eingaben und werden geprüft, bevor sie etwas auslösen.
 - `dist/` wird eingecheckt und muss zum Quellcode passen. Nach jeder Änderung unter `src/` neu bauen.
 - Workflows binden fremde Actions über einen vollen Commit-SHA ein, die Version steht als Kommentar dahinter. Sie bekommen nur die Rechte, die sie brauchen.
-- Module bekommen `core` und andere Runner-Objekte als Parameter, statt sie selbst zu importieren. Nur `src/main.js` verdrahtet die echten Module. So lassen sich alle Zweige mit `test/helpers/fake-core.js` testen.
+- Module bekommen `core`, `context` und andere Runner-Objekte als Parameter, statt sie selbst zu importieren. Nur `src/main.js` verdrahtet die echten Module. So lassen sich alle Zweige mit `test/helpers/fake-core.js` und `test/helpers/fake-context.js` testen.
+- `src/index.js` lädt `main.js` erst zur Laufzeit (`await import`) und meldet Fehler beim Laden über `core.setFailed()`. Manche Pakete arbeiten schon beim Laden, `@actions/github` liest zum Beispiel die Event-Datei ein. Deshalb gehört in `index.js` kein weiterer statischer Import außer `@actions/core`.
+- Werte aus dem Event (Titel, Branch-Namen, Texte) stammen vom PR-Autor. Ins Log und in Fehlermeldungen kommen nur geprüfte Werte wie Nummer, SHA und Repository-Name.
 
 ## Logging
 
@@ -52,7 +54,7 @@ Fehlt beim Aufruf die Issue-Nummer, ergibt sie sich aus dem Branch-Namen. Auf `m
 - `npm test` führt die Tests mit dem eingebauten Test-Runner aus (`node --test`). Testdateien liegen unter `test/` und heißen `*.test.js`.
 - `npm run lint` prüft den Code mit ESLint und die Formatierung mit Prettier.
 - `npm run format` formatiert den Code mit Prettier (Standardstil, Markdown ausgenommen).
-- `npm run build` bündelt `src/index.js` mit `@vercel/ncc` nach `dist/` (`index.js`, `package.json`, `licenses.txt`). Alle drei Dateien werden eingecheckt. `test/dist.test.js` startet das eingecheckte Bundle, also erst bauen, dann testen.
+- `npm run build` leert `dist/` und bündelt `src/index.js` mit `@vercel/ncc` neu dorthin: `index.js`, weitere nummerierte `.js`-Dateien für spät geladene Teile, `package.json` und `licenses.txt`. Alle Dateien in `dist/` werden eingecheckt. `test/dist.test.js` startet das eingecheckte Bundle, also erst bauen, dann testen.
 
 Die CI (`.github/workflows/ci.yml`) führt bei jedem Pull Request und bei jedem Push auf `main` `npm ci`, Lint, Tests und Build aus. Sie wird rot, wenn der Build `dist/` verändert, das eingecheckte Bundle also nicht zum Quellcode passt. `test/workflow.test.js` prüft die Regeln für alle Workflow-Dateien.
 

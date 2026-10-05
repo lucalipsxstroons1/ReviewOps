@@ -11,7 +11,7 @@
     "test": "node --test \"test/**/*.test.js\"",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "build": "ncc build src/index.js -o dist --license licenses.txt"
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && ncc build src/index.js -o dist --license licenses.txt"
   },
   "dependencies": {
     "@actions/core": "^3.0.1",

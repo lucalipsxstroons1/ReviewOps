@@ -32,6 +32,17 @@ export function startAction(entryPoint, env) {
   return { ...result, output: result.stdout + result.stderr };
 }
 
+/** What the runner sets for a pull_request event, with the example payload. */
+export const PULL_REQUEST_EVENT = {
+  GITHUB_EVENT_NAME: "pull_request",
+  GITHUB_EVENT_PATH: fromRoot("test/fixtures/pull-request-event.json"),
+  GITHUB_REPOSITORY: "octo-org/demo",
+};
+
+/** The log line the example payload must produce. */
+export const REVIEWING_LINE =
+  "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111.";
+
 /** Adds both inputs the way a workflow passes them. */
 export const withInputs = (env) => ({
   "INPUT_GITHUB-TOKEN": TOKEN,

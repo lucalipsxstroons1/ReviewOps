@@ -1,0 +1,25 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "title": "Add a greeting helper",
+    "draft": false,
+    "user": { "login": "octocat" },
+    "head": {
+      "ref": "feature/greeting",
+      "sha": "1111111111111111111111111111111111111111",
+      "repo": { "full_name": "octo-org/demo" }
+    },
+    "base": {
+      "ref": "main",
+      "sha": "2222222222222222222222222222222222222222",
+      "repo": { "full_name": "octo-org/demo" }
+    }
+  },
+  "repository": {
+    "name": "demo",
+    "full_name": "octo-org/demo",
+    "owner": { "login": "octo-org" }
+  }
+}
