@@ -1,0 +1,5 @@
+node_modules/
+coverage/
+
+# Local environment files can hold secrets.
+.env*
