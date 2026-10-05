@@ -19,6 +19,7 @@ Der Backlog liegt in den GitHub Issues dieses Repositories. Die Milestones „Ph
 - Secrets (GitHub-Token, OpenAI-Key) tauchen nirgends auf: nicht in Logs, Fehlermeldungen, Kommentaren oder Testdaten.
 - Zero-Trust: Diff-Inhalte und Modellantworten sind nicht vertrauenswürdige Eingaben und werden geprüft, bevor sie etwas auslösen.
 - `dist/` wird eingecheckt und muss zum Quellcode passen. Nach jeder Änderung unter `src/` neu bauen.
+- Workflows binden fremde Actions über einen vollen Commit-SHA ein, die Version steht als Kommentar dahinter. Sie bekommen nur die Rechte, die sie brauchen.
 - Module bekommen `core` und andere Runner-Objekte als Parameter, statt sie selbst zu importieren. Nur `src/main.js` verdrahtet die echten Module. So lassen sich alle Zweige mit `test/helpers/fake-core.js` testen.
 
 ## Logging
@@ -51,6 +52,7 @@ Fehlt beim Aufruf die Issue-Nummer, ergibt sie sich aus dem Branch-Namen. Auf `m
 - `npm test` führt die Tests mit dem eingebauten Test-Runner aus (`node --test`). Testdateien liegen unter `test/` und heißen `*.test.js`.
 - `npm run lint` prüft den Code mit ESLint und die Formatierung mit Prettier.
 - `npm run format` formatiert den Code mit Prettier (Standardstil, Markdown ausgenommen).
+- `npm run build` bündelt `src/index.js` mit `@vercel/ncc` nach `dist/` (`index.js`, `package.json`, `licenses.txt`). Alle drei Dateien werden eingecheckt. `test/dist.test.js` startet das eingecheckte Bundle, also erst bauen, dann testen.
 
 ## Werkzeuge
 
