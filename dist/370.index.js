@@ -1,8 +1,8 @@
-export const id = 843;
-export const ids = [843];
+export const id = 370;
+export const ids = [370];
 export const modules = {
 
-/***/ 5843:
+/***/ 1370:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -143,6 +143,236 @@ function parse_parsePatch(patch) {
   }
 
   return { hunks, commentableLines };
+}
+
+// EXTERNAL MODULE: ./node_modules/picomatch/index.js
+var picomatch = __webpack_require__(4006);
+;// CONCATENATED MODULE: ./src/printable.js
+const MAX_LENGTH = 200;
+
+// \p{Cc}: control characters, including line breaks.
+// \p{Cf}: invisible format characters, which can reorder what a reader sees.
+// \p{Zl}, \p{Zp}: the Unicode line and paragraph separators.
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * Makes text from outside safe to write into the log on one line.
+ *
+ * File names and similar values come from the author of the pull request.
+ * A line break in such a value could start a new log line with a workflow
+ * command such as `::error::`. Unsafe characters are therefore shown by
+ * their code point, a line feed for example as backslash-u-000a, instead of
+ * being written out.
+ *
+ * @param {unknown} text
+ * @returns {string}
+ */
+function printable(text) {
+  const visible = String(text).replace(
+    UNSAFE,
+    (character) =>
+      `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return visible.length > MAX_LENGTH
+    ? `${visible.slice(0, MAX_LENGTH)}…`
+    : visible;
+}
+
+;// CONCATENATED MODULE: ./src/exclude.js
+
+
+
+// Fixed, so a pattern means the same on every machine: without
+// `windows: false`, picomatch reads a backslash as a separator on Windows.
+// Braces and extended globs would allow very slow patterns. Own patterns
+// that use them are rejected below; switching them off here is the second
+// line of defence.
+const MATCH_OPTIONS = Object.freeze({
+  dot: true,
+  nocase: true,
+  windows: false,
+  nobrace: true,
+  noextglob: true,
+});
+
+// File names come from the author of the pull request. A name built for it
+// makes a pattern with many wildcards run for seconds or longer. The stars
+// are counted over the whole pattern: two in each of several directories
+// multiply. Within these limits, names of 4000 characters were matched in a
+// few milliseconds.
+const MAX_STARS = 2;
+const MAX_GLOBSTARS = 2;
+
+// The wildcards of picomatch stop at a line break, which is a legal
+// character of a file name. It is replaced before a path is matched.
+const LINE_BREAKS = /[\n\r\p{Zl}\p{Zp}]/gu;
+const MAX_PATTERNS = 50;
+const MAX_PATTERN_LENGTH = 200;
+
+const BINARY_EXTENSIONS = [
+  // Images
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "ico",
+  "webp",
+  "avif",
+  "svg",
+  // Fonts
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "eot",
+  // Documents and archives
+  "pdf",
+  "zip",
+  "tar",
+  "gz",
+  "tgz",
+  "7z",
+  "rar",
+];
+
+/**
+ * Files that are never worth a review. `bin/` is left out on purpose: Node.js
+ * projects keep hand-written scripts there.
+ */
+const DEFAULT_EXCLUDES = Object.freeze([
+  // Lockfiles
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "packages.lock.json",
+  // Build output, in any directory
+  "**/dist/**",
+  "**/build/**",
+  "**/obj/**",
+  "*.min.js",
+  "*.map",
+  // Generated code
+  "*.g.cs",
+  "*.Designer.cs",
+  "*ModelSnapshot.cs",
+  "*.snap",
+  // Images, fonts, documents and archives
+  ...BINARY_EXTENSIONS.map((extension) => `*.${extension}`),
+]);
+
+/**
+ * Builds the filter for files that are left out of the review.
+ *
+ * A pattern without a slash applies in every directory (`*.min.js`). A
+ * pattern with a slash applies from the root of the repository (`docs/**`);
+ * `docs/` means the same. A leading slash ties a file name to the root
+ * (`/README.md`). Upper and lower case make no difference.
+ *
+ * @param {string} [excludeInput] The `exclude` input: one pattern per line.
+ *   Empty lines and lines that start with `#` are ignored.
+ * @returns {(path: string) => string | null} For a path, the reason why the
+ *   file is left out, or `null` when it stays.
+ * @throws {Error} When a pattern of the input cannot be used.
+ */
+function createExcludeFilter(excludeInput = "") {
+  const rules = [
+    ...DEFAULT_EXCLUDES.map((pattern) => ({
+      matches: compile(pattern),
+      reason: `matches the default exclude pattern "${pattern}"`,
+    })),
+    ...readPatterns(excludeInput).map(({ pattern, line }) => ({
+      matches: compileOwn(pattern, line),
+      // The workflow file of a pull request can come from its author.
+      reason: `matches the exclude pattern "${printable(pattern)}"`,
+    })),
+  ];
+
+  return (path) => {
+    const name = path.replace(LINE_BREAKS, "_");
+    return rules.find((rule) => rule.matches(name))?.reason ?? null;
+  };
+}
+
+/** The patterns of the input with the number of the line they stand on. */
+function readPatterns(excludeInput) {
+  const patterns = String(excludeInput)
+    .split("\n")
+    .map((text, index) => ({ pattern: text.trim(), line: index + 1 }))
+    .filter(({ pattern }) => pattern !== "" && !pattern.startsWith("#"));
+
+  if (patterns.length > MAX_PATTERNS) {
+    throw new Error(
+      `Input \`exclude\` has ${patterns.length} patterns. At most ${MAX_PATTERNS} are allowed.`,
+    );
+  }
+  return patterns;
+}
+
+function compileOwn(pattern, line) {
+  const reject = (problem) =>
+    new Error(
+      `Input \`exclude\`, line ${line}: the pattern "${printable(pattern)}" cannot be used. ${problem}`,
+    );
+
+  const problem = problemWith(pattern);
+  if (problem) throw reject(problem);
+  try {
+    return compile(pattern);
+  } catch {
+    throw reject("It is not a valid glob pattern.");
+  }
+}
+
+/** Says what is wrong with a pattern, or returns `null`. */
+function problemWith(pattern) {
+  if (pattern.length > MAX_PATTERN_LENGTH) {
+    return `It is longer than ${MAX_PATTERN_LENGTH} characters.`;
+  }
+  if (pattern.startsWith("!")) {
+    return 'Negation with "!" is not supported. List only the files to leave out.';
+  }
+  // Read literally, such a pattern would silently match nothing.
+  if (/[{}()]/.test(pattern)) {
+    return "Braces and parentheses are not supported. Write one pattern per line.";
+  }
+  if (pattern.includes("\\")) {
+    return 'A backslash is not supported. Separate directories with "/".';
+  }
+
+  if (/^[./]*$/.test(pattern)) {
+    return "It names no file.";
+  }
+
+  const segments = exclude_anchor(pattern).split("/");
+  if (segments.filter((segment) => segment === "**").length > MAX_GLOBSTARS) {
+    return `It contains "**" more than ${MAX_GLOBSTARS} times.`;
+  }
+  const stars = segments
+    .filter((segment) => segment !== "**")
+    .reduce((sum, segment) => sum + (segment.match(/\*+/g)?.length ?? 0), 0);
+  if (stars > MAX_STARS) {
+    return `It contains more than ${MAX_STARS} "*" wildcards. "**" for any directories is counted separately.`;
+  }
+  return null;
+}
+
+/** Turns a pattern as written into the glob that is matched against a path. */
+function compile(pattern) {
+  // "dist/**" alone would also match a file that is named "dist". Asking
+  // for a name below the directory leaves such a file in the review.
+  const glob = exclude_anchor(pattern).replace(/\/\*\*$/, "/**/*");
+  return picomatch(glob, MATCH_OPTIONS);
+}
+
+/** Decides where a pattern applies: from the root or in every directory. */
+function exclude_anchor(pattern) {
+  let glob = pattern;
+  while (glob.startsWith("./")) glob = glob.slice(2);
+  const fromRoot = glob.startsWith("/");
+  if (fromRoot) glob = glob.slice(1);
+  if (glob.endsWith("/")) glob = `${glob}**`;
+  return fromRoot || glob.includes("/") ? glob : `**/${glob}`;
 }
 
 ;// CONCATENATED MODULE: ./src/github/context.js
@@ -360,19 +590,31 @@ function isRateLimited(error) {
  * any check can fail and produce a message.
  *
  * @param {typeof import("@actions/core")} core
- * @returns {{ githubToken: string, openaiApiKey: string }}
+ * @returns {{ githubToken: string, openaiApiKey: string, exclude: string }}
  */
 function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
+    exclude: core.getInput("exclude"),
   };
 
-  for (const secret of Object.values(inputs)) {
+  for (const secret of secretsOf(inputs)) {
     if (secret) core.setSecret(secret);
   }
 
   return inputs;
+}
+
+/**
+ * The inputs that are credentials. Settings such as `exclude` are not: they
+ * appear in the log, and masking them would hide ordinary text.
+ *
+ * @param {{ githubToken: string, openaiApiKey: string }} inputs
+ * @returns {string[]}
+ */
+function secretsOf(inputs) {
+  return [inputs.githubToken, inputs.openaiApiKey];
 }
 
 /**
@@ -391,37 +633,6 @@ function assertInputs(inputs) {
       "Input `github-token` is empty. Remove it from the workflow to use the token of the workflow run, or pass a valid token.",
     );
   }
-}
-
-;// CONCATENATED MODULE: ./src/printable.js
-const MAX_LENGTH = 200;
-
-// \p{Cc}: control characters, including line breaks.
-// \p{Cf}: invisible format characters, which can reorder what a reader sees.
-// \p{Zl}, \p{Zp}: the Unicode line and paragraph separators.
-const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-
-/**
- * Makes text from outside safe to write into the log on one line.
- *
- * File names and similar values come from the author of the pull request.
- * A line break in such a value could start a new log line with a workflow
- * command such as `::error::`. Unsafe characters are therefore shown by
- * their code point, a line feed for example as backslash-u-000a, instead of
- * being written out.
- *
- * @param {unknown} text
- * @returns {string}
- */
-function printable(text) {
-  const visible = String(text).replace(
-    UNSAFE,
-    (character) =>
-      `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
-  );
-  return visible.length > MAX_LENGTH
-    ? `${visible.slice(0, MAX_LENGTH)}…`
-    : visible;
 }
 
 ;// CONCATENATED MODULE: ./src/redact.js
@@ -458,6 +669,7 @@ function createRedactor(secrets) {
 }
 
 ;// CONCATENATED MODULE: ./src/main.js
+
 
 
 
@@ -506,8 +718,10 @@ async function run({
     }
 
     const inputs = readInputs(core);
-    redact = createRedactor(Object.values(inputs));
+    redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
+    // A pattern that cannot be used fails the run here, before any request.
+    const excludeReason = createExcludeFilter(inputs.exclude);
 
     core.info("ReviewOps started.");
 
@@ -521,12 +735,23 @@ async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
+    // Generated and irrelevant files are left out before anything is parsed.
+    const relevant = [];
+    const excluded = [];
+    for (const file of listing.files) {
+      const reason = excludeReason(file.path);
+      if (reason) excluded.push({ path: file.path, reason });
+      else relevant.push(file);
+    }
+
     // Line numbers are calculated here and never taken from the model.
-    const { diffs, unreadable } = parseDiffs(listing.files, parsePatch);
-    // Unreadable diffs come first: the list below is cut off, and these are
-    // the files someone has to look at.
+    const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
+    // The list below is cut off, so the order matters: unreadable diffs are
+    // the files someone has to look at, excluded files are a decision of
+    // this action, the rest could not be reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...excluded,
       ...listing.skipped,
     ];
     core.info(
@@ -553,6 +778,15 @@ async function run({
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
       );
+    }
+
+    // Everything that costs money or posts something comes after this
+    // point: a pull request without reviewable files ends here.
+    if (diffs.length === 0) {
+      core.notice(
+        "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
+      );
+      return;
     }
 
     const addedLines = diffs.reduce(

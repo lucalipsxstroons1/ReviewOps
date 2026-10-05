@@ -1,18 +1,42 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertInputs, readInputs } from "../src/inputs.js";
+import { assertInputs, readInputs, secretsOf } from "../src/inputs.js";
 import { createFakeCore } from "./helpers/fake-core.js";
 
-test("reads both inputs", () => {
+test("reads all inputs", () => {
   const core = createFakeCore({
     "github-token": "token-value",
     "openai-api-key": "key-value",
+    exclude: "docs/**\n*.txt",
   });
 
   assert.deepEqual(readInputs(core), {
     githubToken: "token-value",
     openaiApiKey: "key-value",
+    exclude: "docs/**\n*.txt",
   });
+});
+
+test("reads a missing exclude input as empty text", () => {
+  const core = createFakeCore({
+    "github-token": "token-value",
+    "openai-api-key": "key-value",
+  });
+
+  assert.equal(readInputs(core).exclude, "");
+});
+
+test("masks the credentials, but not the exclude patterns", () => {
+  const core = createFakeCore({
+    "github-token": "token-value",
+    "openai-api-key": "key-value",
+    exclude: "documentation/**",
+  });
+
+  const inputs = readInputs(core);
+
+  assert.deepEqual(core.messages("setSecret"), ["token-value", "key-value"]);
+  assert.deepEqual(secretsOf(inputs), ["token-value", "key-value"]);
 });
 
 test("masks both credentials", () => {

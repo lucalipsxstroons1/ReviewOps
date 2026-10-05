@@ -107,6 +107,81 @@ test("skips a file whose diff cannot be read without failing the step", async (t
   assert.equal(result.stderr, "");
 });
 
+test("ends green with a notice when only a lockfile changed", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [apiFile("package-lock.json")],
+  });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped package-lock\.json: matches the default exclude pattern "package-lock\.json"\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^::notice::ReviewOps found no files to review in this pull request\./m,
+  );
+  assert.doesNotMatch(result.stdout, /Parsed the diffs|::error::|::warning::/);
+  assert.equal(result.stderr, "");
+});
+
+test("leaves out generated files and the patterns of the exclude input", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [
+      apiFile("src/App/Migrations/20240101120000_AddUsers.cs"),
+      apiFile("src/App/Migrations/20240101120000_AddUsers.Designer.cs"),
+      apiFile("src/App/Migrations/AppDbContextModelSnapshot.cs"),
+      apiFile("docs/guide.md"),
+    ],
+  });
+
+  const result = await runAction(
+    pullRequestRun(api, { INPUT_EXCLUDE: "# documentation\ndocs/**" }),
+  );
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 4 changed files: 1 to review, 3 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped src\/App\/Migrations\/20240101120000_AddUsers\.Designer\.cs: matches the default exclude pattern "\*\.Designer\.cs"\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped src\/App\/Migrations\/AppDbContextModelSnapshot\.cs: matches the default exclude pattern "\*ModelSnapshot\.cs"\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped docs\/guide\.md: matches the exclude pattern "docs\/\*\*"\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 1 files: 1 added lines can receive comments\.$/m,
+  );
+  assert.equal(result.stderr, "");
+});
+
+test("fails the step before any request when an exclude pattern cannot be used", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(
+    pullRequestRun(api, { INPUT_EXCLUDE: "docs/**\n*.{png,jpg}" }),
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::Input `exclude`, line 2: the pattern "\*\.\{png,jpg\}" cannot be used\. Braces and parentheses are not supported\./m,
+  );
+  assert.doesNotMatch(result.stdout, /ReviewOps started\./);
+  assert.deepEqual(api.requests, []);
+  assert.equal(result.stderr, "");
+});
+
 test("writes a file name with a line break as one harmless line", async (t) => {
   const api = await startGitHubApi(t, {
     files: [apiFile("docs/a.md\n::error::injected", { status: "removed" })],

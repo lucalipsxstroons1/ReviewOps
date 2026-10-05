@@ -5,19 +5,31 @@
  * any check can fail and produce a message.
  *
  * @param {typeof import("@actions/core")} core
- * @returns {{ githubToken: string, openaiApiKey: string }}
+ * @returns {{ githubToken: string, openaiApiKey: string, exclude: string }}
  */
 export function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
+    exclude: core.getInput("exclude"),
   };
 
-  for (const secret of Object.values(inputs)) {
+  for (const secret of secretsOf(inputs)) {
     if (secret) core.setSecret(secret);
   }
 
   return inputs;
+}
+
+/**
+ * The inputs that are credentials. Settings such as `exclude` are not: they
+ * appear in the log, and masking them would hide ordinary text.
+ *
+ * @param {{ githubToken: string, openaiApiKey: string }} inputs
+ * @returns {string[]}
+ */
+export function secretsOf(inputs) {
+  return [inputs.githubToken, inputs.openaiApiKey];
 }
 
 /**

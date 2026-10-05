@@ -7,9 +7,10 @@ import {
   PatchFormatError,
   parsePatch as diffParsePatch,
 } from "./diff/parse.js";
+import { createExcludeFilter } from "./exclude.js";
 import { readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
-import { assertInputs, readInputs } from "./inputs.js";
+import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
 
@@ -52,8 +53,10 @@ export async function run({
     }
 
     const inputs = readInputs(core);
-    redact = createRedactor(Object.values(inputs));
+    redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
+    // A pattern that cannot be used fails the run here, before any request.
+    const excludeReason = createExcludeFilter(inputs.exclude);
 
     core.info("ReviewOps started.");
 
@@ -67,12 +70,23 @@ export async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
+    // Generated and irrelevant files are left out before anything is parsed.
+    const relevant = [];
+    const excluded = [];
+    for (const file of listing.files) {
+      const reason = excludeReason(file.path);
+      if (reason) excluded.push({ path: file.path, reason });
+      else relevant.push(file);
+    }
+
     // Line numbers are calculated here and never taken from the model.
-    const { diffs, unreadable } = parseDiffs(listing.files, parsePatch);
-    // Unreadable diffs come first: the list below is cut off, and these are
-    // the files someone has to look at.
+    const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
+    // The list below is cut off, so the order matters: unreadable diffs are
+    // the files someone has to look at, excluded files are a decision of
+    // this action, the rest could not be reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...excluded,
       ...listing.skipped,
     ];
     core.info(
@@ -99,6 +113,15 @@ export async function run({
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
       );
+    }
+
+    // Everything that costs money or posts something comes after this
+    // point: a pull request without reviewable files ends here.
+    if (diffs.length === 0) {
+      core.notice(
+        "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
+      );
+      return;
     }
 
     const addedLines = diffs.reduce(

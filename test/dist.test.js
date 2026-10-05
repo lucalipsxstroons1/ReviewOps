@@ -71,6 +71,57 @@ test("the bundle names the pull request and lists its files", async (t) => {
   assert.equal(result.stderr, "");
 });
 
+test("the bundle ends green with a notice when only a lockfile changed", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [apiFile("package-lock.json")],
+  });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped package-lock\.json: matches the default exclude pattern "package-lock\.json"\.$/m,
+  );
+  assert.match(result.stdout, /^::notice::ReviewOps found no files to review/m);
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle applies the patterns of the exclude input", async (t) => {
+  const api = await startGitHubApi(t, {
+    files: [...apiFiles(1), apiFile("docs/guide.md")],
+  });
+
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    INPUT_EXCLUDE: "docs/**",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped docs\/guide\.md: matches the exclude pattern "docs\/\*\*"\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Parsed the diffs of 1 files: 1 added lines can receive comments\.$/m,
+  );
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle fails the step when an exclude pattern cannot be used", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    INPUT_EXCLUDE: "!docs/**",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::Input `exclude`, line 1: /m);
+  assert.deepEqual(api.requests, []);
+});
+
 test("the bundle skips a file whose diff cannot be read", async (t) => {
   const api = await startGitHubApi(t, {
     files: [...apiFiles(1), apiFile("src/odd.js", { patch: "not a diff" })],
