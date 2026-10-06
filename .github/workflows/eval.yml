@@ -43,9 +43,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The key reaches this step only. A pull request from a fork gets no
-      # secrets, and the evaluation then ends with a notice. The model name
-      # goes through the environment, never into the command.
+      # The key reaches this step only. It is the repository secret
+      # OPENAI_API_KEY, the same one that reviewops.yml uses. A pull request
+      # from a fork gets no secrets, and the evaluation then ends with a
+      # notice; a run by hand without the key fails. The model name goes
+      # through the environment, never into the command.
       - name: Evaluate the prompt against the OpenAI API
         run: npm run eval
         env:

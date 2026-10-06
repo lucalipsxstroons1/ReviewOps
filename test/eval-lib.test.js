@@ -5,6 +5,7 @@ import {
   judgeRun,
   loadCases,
   looksGerman,
+  missingKeyOutcome,
   renderTable,
   runEvaluation,
   tally,
@@ -428,4 +429,87 @@ test("passes on an error that is not an error of the client", async () => {
   };
 
   await assert.rejects(runEvaluation({ cases: [cleanCase], ai }), TypeError);
+});
+
+test("writes path and title of a finding so that a line break cannot start a workflow command", async () => {
+  const escape = String.fromCodePoint(0x1b);
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const bad = finding(testCase, {
+        severity: "minor",
+        title: `T\n::warning::INJECTED${escape}[31m`,
+        path: `${testCase.path}\n::error::INJECTED`,
+      });
+      return {
+        content: JSON.stringify({ summary: "s", findings: [bad] }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.ok(failures.length > 0);
+  for (const { lines } of failures) {
+    for (const line of lines) {
+      assert.equal(line.includes("\n"), false);
+      assert.equal(line.includes(escape), false);
+      assert.match(line, /\\u000a::warning::INJECTED/);
+    }
+  }
+});
+
+test("counts invalid findings of the German run as well", async () => {
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const isGerman = request.system.includes("in German");
+      const good = hit(testCase);
+      // Only the German run answers with findings that cannot be comments.
+      const findings = isGerman
+        ? [
+            good,
+            hit(testCase, { path: "elsewhere.js" }),
+            hit(testCase, { line: 999 }),
+            hit(testCase, { suggestion: " " }),
+          ]
+        : [good];
+      const summary = isGerman
+        ? "Das ist nicht gut und wird nicht halten."
+        : "s";
+      return {
+        content: JSON.stringify({ summary, findings }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { rows, german } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.deepEqual([rows[0].passed, rows[0].runs, rows[0].invalid], [3, 3, 3]);
+  assert.equal(german[0].german, true);
+  assert.deepEqual(verdict(rows, german).problems, [
+    `${faultyCase.name}: 3 invalid findings`,
+  ]);
+});
+
+// --- missingKeyOutcome() -----------------------------------------------------
+
+test("skips the evaluation without a key only in a pull request, which a fork gets no secrets for", () => {
+  assert.equal(
+    missingKeyOutcome({ GITHUB_EVENT_NAME: "pull_request" }),
+    "skip",
+  );
+});
+
+test("fails without a key in a run by hand, on a push and on a machine", () => {
+  for (const env of [
+    { GITHUB_EVENT_NAME: "workflow_dispatch" },
+    { GITHUB_EVENT_NAME: "push" },
+    { GITHUB_EVENT_NAME: "" },
+    {},
+  ]) {
+    assert.equal(missingKeyOutcome(env), "fail", JSON.stringify(env));
+  }
 });

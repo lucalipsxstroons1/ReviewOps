@@ -15,6 +15,7 @@ import {
 } from "../src/ai/schema.js";
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
+import { printable } from "../src/printable.js";
 
 /** How often every reference diff is sent to the model. */
 export const RUNS_PER_CASE = 3;
@@ -309,10 +310,13 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
           maxOutputTokens: MAX_OUTPUT_TOKENS,
         });
         job.review = parseReview(answer);
+        const judged = judgeRun(job.testCase, job.review);
+        // The German run only has to be German. Its findings still have to
+        // be able to become comments.
         job.result =
           job.language === "de"
-            ? { ok: looksGerman(job.review), invalid: 0 }
-            : judgeRun(job.testCase, job.review);
+            ? { ok: looksGerman(job.review), invalid: judged.invalid }
+            : judged;
       } catch (error) {
         // Anything but an error of the client is a defect of this program.
         if (!(error instanceof AiError)) throw error;
@@ -325,15 +329,15 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
     Array.from({ length: Math.min(concurrency, jobs.length) }, worker),
   );
 
-  const rows = cases.map((testCase) => ({
-    name: testCase.name,
-    clean: testCase.clean,
-    ...tally(
-      jobs
-        .filter((job) => job.testCase === testCase && job.language === "en")
-        .map((job) => job.result),
-    ),
-  }));
+  const rows = cases.map((testCase) => {
+    const own = jobs.filter((job) => job.testCase === testCase);
+    const row = tally(
+      own.filter((job) => job.language === "en").map((job) => job.result),
+    );
+    // Invalid findings count in every run, also in the German one.
+    row.invalid = own.reduce((sum, job) => sum + (job.result.invalid ?? 0), 0);
+    return { name: testCase.name, clean: testCase.clean, ...row };
+  });
   const german = jobs
     .filter((job) => job.language === "de")
     .map((job) => ({
@@ -348,11 +352,27 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
     .map((job) => ({
       name: job.testCase.name,
       lines: job.review.findings.length
-        ? job.review.findings.map(
-            (f) => `${f.path}:${f.line} ${f.severity} ${f.category} ${f.title}`,
+        ? // Path and title come from the model, which read the diff. A line
+          // break in one of them could start a workflow command in the log.
+          job.review.findings.map((f) =>
+            printable(
+              `${f.path}:${f.line} ${f.severity} ${f.category} ${f.title}`,
+            ),
           )
         : ["no findings"],
     }));
 
   return { rows, german, failures };
+}
+
+/**
+ * What to do when `OPENAI_API_KEY` is missing. A pull request from a fork
+ * gets no secrets, which is no failure. Anything else (a run by hand, a run
+ * on a machine) is a mistake that must not look like a pass.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {"skip" | "fail"}
+ */
+export function missingKeyOutcome(env) {
+  return env.GITHUB_EVENT_NAME === "pull_request" ? "skip" : "fail";
 }

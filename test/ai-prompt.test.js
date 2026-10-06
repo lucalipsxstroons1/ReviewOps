@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import {
   DEFAULT_LANGUAGE,
@@ -252,4 +253,28 @@ test("contains no characters that are invisible or outside of ASCII", () => {
     const prompt = buildSystemPrompt({ language });
     assert.equal(/[^\n\x20-\x7e]/.test(prompt), false, language);
   }
+});
+
+// The version is only worth something if a change of the wording cannot slip
+// through without it. Each version has the hash of all twelve prompts. A
+// change fails here, until the version is raised and the new hash is added.
+const PROMPT_HASHES = {
+  1: "f1cff1a3acace3e5aacb3733e06b0b6ebc9ca93273b88835decb5700c6cf3f5a",
+};
+
+test("changes the version whenever the wording of the prompt changes", () => {
+  const text = Object.keys(LANGUAGES)
+    .map((language) => buildSystemPrompt({ language }))
+    .join("\n---\n");
+  const hash = createHash("sha256").update(text).digest("hex");
+
+  assert.ok(
+    PROMPT_VERSION in PROMPT_HASHES,
+    `Add the hash ${hash} for PROMPT_VERSION ${PROMPT_VERSION}.`,
+  );
+  assert.equal(
+    hash,
+    PROMPT_HASHES[PROMPT_VERSION],
+    `The prompt changed. Raise PROMPT_VERSION and add this hash: ${hash}`,
+  );
 });

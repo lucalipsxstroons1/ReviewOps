@@ -12,17 +12,39 @@ import { fileURLToPath } from "node:url";
 import { createAiClient } from "../src/ai/client.js";
 import { parseModel } from "../src/ai/model.js";
 import { PROMPT_VERSION } from "../src/ai/prompt.js";
-import { loadCases, renderTable, runEvaluation, verdict } from "./lib.mjs";
+import {
+  loadCases,
+  missingKeyOutcome,
+  renderTable,
+  runEvaluation,
+  verdict,
+} from "./lib.mjs";
 
 const apiKey = process.env.OPENAI_API_KEY ?? "";
 if (apiKey === "") {
-  // A pull request from a fork gets no secrets. That is no failure.
-  core.notice(
-    "The evaluation was skipped: OPENAI_API_KEY is not set. Pull requests from forks get no secrets.",
-  );
+  if (missingKeyOutcome(process.env) === "skip") {
+    // A pull request from a fork gets no secrets. That is no failure.
+    core.notice(
+      "The evaluation was skipped: OPENAI_API_KEY is not set. Pull requests from forks get no secrets.",
+    );
+  } else {
+    core.setFailed(
+      "OPENAI_API_KEY is not set. In a workflow, store the key as the repository secret OPENAI_API_KEY. On your machine, set the variable before you run `npm run eval`.",
+    );
+  }
 } else {
   core.setSecret(apiKey);
-  const model = parseModel(process.env.EVAL_MODEL);
+  await evaluate(apiKey);
+}
+
+async function evaluate(apiKey) {
+  let model;
+  try {
+    model = parseModel(process.env.EVAL_MODEL);
+  } catch (error) {
+    core.setFailed(error.message);
+    return;
+  }
   const cases = loadCases(fileURLToPath(new URL("./cases", import.meta.url)));
 
   const ai = createAiClient({ apiKey, model, core });
