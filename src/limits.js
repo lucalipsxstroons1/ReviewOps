@@ -4,6 +4,7 @@ import { printable } from "./printable.js";
 // The same values are written into action.yml. A test keeps them equal.
 export const DEFAULT_MAX_FILES = 50;
 export const DEFAULT_MAX_DIFF_CHARS = 200000;
+export const DEFAULT_MAX_COMMENTS = 10;
 
 // Nine digits are far above any useful limit and stay exact as a number.
 const MAX_DIGITS = 9;
@@ -18,15 +19,19 @@ export const OVER_LIMIT_REASONS = Object.freeze({
 });
 
 /**
- * Reads the two limits of the action. An empty value means the default: it
- * is usually a variable of the workflow that was not set.
+ * Reads the limits of the action. An empty value means the default: it is
+ * usually a variable of the workflow that was not set.
  *
- * @param {{ maxFiles?: string, maxDiffChars?: string }} inputs Values as the
- *   workflow passed them.
- * @returns {{ maxFiles: number, maxDiffChars: number }}
+ * @param {{ maxFiles?: string, maxDiffChars?: string, maxComments?: string }} inputs
+ *   Values as the workflow passed them.
+ * @returns {{ maxFiles: number, maxDiffChars: number, maxComments: number }}
  * @throws {Error} When a value is not a whole number from 1 to 999999999.
  */
-export function parseLimits({ maxFiles = "", maxDiffChars = "" } = {}) {
+export function parseLimits({
+  maxFiles = "",
+  maxDiffChars = "",
+  maxComments = "",
+} = {}) {
   return {
     maxFiles: parseLimit("max-files", maxFiles, DEFAULT_MAX_FILES),
     maxDiffChars: parseLimit(
@@ -34,6 +39,7 @@ export function parseLimits({ maxFiles = "", maxDiffChars = "" } = {}) {
       maxDiffChars,
       DEFAULT_MAX_DIFF_CHARS,
     ),
+    maxComments: parseLimit("max-comments", maxComments, DEFAULT_MAX_COMMENTS),
   };
 }
 

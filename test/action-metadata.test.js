@@ -4,7 +4,11 @@ import { test } from "node:test";
 import { parse } from "yaml";
 import { DEFAULT_MODEL } from "../src/ai/model.js";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../src/ai/prompt.js";
-import { DEFAULT_MAX_DIFF_CHARS, DEFAULT_MAX_FILES } from "../src/limits.js";
+import {
+  DEFAULT_MAX_COMMENTS,
+  DEFAULT_MAX_DIFF_CHARS,
+  DEFAULT_MAX_FILES,
+} from "../src/limits.js";
 
 const source = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
 const action = parse(source);
@@ -49,11 +53,14 @@ test("the limits are optional and default to the values in the code", () => {
   // src/limits.js for the code. They must not drift apart.
   const files = action.inputs["max-files"];
   const chars = action.inputs["max-diff-chars"];
+  const comments = action.inputs["max-comments"];
 
   assert.equal(files.required, false);
   assert.equal(chars.required, false);
+  assert.equal(comments.required, false);
   assert.equal(files.default, String(DEFAULT_MAX_FILES));
   assert.equal(chars.default, String(DEFAULT_MAX_DIFF_CHARS));
+  assert.equal(comments.default, String(DEFAULT_MAX_COMMENTS));
 });
 
 test("the model is optional and defaults to the model in the code", () => {
@@ -86,6 +93,7 @@ test("the descriptions of the limits name their default", () => {
     action.inputs["max-diff-chars"].description,
     /default is 200000,/,
   );
+  assert.match(action.inputs["max-comments"].description, /default is 10\./);
 });
 
 test("the action declares exactly the inputs the code reads", () => {

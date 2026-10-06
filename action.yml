@@ -34,6 +34,10 @@ inputs:
     description: Maximum size of the diffs that are reviewed, counted in characters of the annotated diff, a whole number of at least 1. A file that no longer fits is skipped and named in the log, later smaller files can still follow. The default is 200000, which is about 50000 to 65000 tokens.
     required: false
     default: "200000"
+  max-comments:
+    description: Maximum number of findings the review shows, a whole number of at least 1. The most serious findings come first; findings at a line of the diff become inline comments, the others are listed in the text of the review. Findings beyond the limit are left out and counted in the log. The default is 10.
+    required: false
+    default: "10"
 
 runs:
   using: node24

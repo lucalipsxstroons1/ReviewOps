@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
 import {
+  DEFAULT_MAX_COMMENTS,
   DEFAULT_MAX_DIFF_CHARS,
   DEFAULT_MAX_FILES,
   OVER_LIMIT_REASONS,
@@ -29,45 +30,56 @@ const LIMITS = { maxFiles: 50, maxDiffChars: 200000 };
 // --- Reading the limits ------------------------------------------------------
 
 test("uses the defaults when the inputs are empty or missing", () => {
-  const expected = { maxFiles: 50, maxDiffChars: 200000 };
+  const expected = { maxFiles: 50, maxDiffChars: 200000, maxComments: 10 };
 
   assert.deepEqual(parseLimits(), expected);
   assert.deepEqual(parseLimits({}), expected);
-  assert.deepEqual(parseLimits({ maxFiles: "", maxDiffChars: "" }), expected);
   assert.deepEqual(
-    parseLimits({ maxFiles: "  ", maxDiffChars: "\n" }),
+    parseLimits({ maxFiles: "", maxDiffChars: "", maxComments: "" }),
+    expected,
+  );
+  assert.deepEqual(
+    parseLimits({ maxFiles: "  ", maxDiffChars: "\n", maxComments: "\t" }),
     expected,
   );
   assert.equal(DEFAULT_MAX_FILES, 50);
   assert.equal(DEFAULT_MAX_DIFF_CHARS, 200000);
+  assert.equal(DEFAULT_MAX_COMMENTS, 10);
 });
 
 test("reads whole numbers", () => {
-  assert.deepEqual(parseLimits({ maxFiles: "10", maxDiffChars: "5000" }), {
-    maxFiles: 10,
-    maxDiffChars: 5000,
-  });
-  assert.deepEqual(parseLimits({ maxFiles: " 7 ", maxDiffChars: "007" }), {
-    maxFiles: 7,
-    maxDiffChars: 7,
-  });
+  assert.deepEqual(
+    parseLimits({ maxFiles: "10", maxDiffChars: "5000", maxComments: "25" }),
+    { maxFiles: 10, maxDiffChars: 5000, maxComments: 25 },
+  );
+  assert.deepEqual(
+    parseLimits({ maxFiles: " 7 ", maxDiffChars: "007", maxComments: " 03" }),
+    { maxFiles: 7, maxDiffChars: 7, maxComments: 3 },
+  );
 });
 
 test("accepts the smallest and the largest value", () => {
-  assert.deepEqual(parseLimits({ maxFiles: "1", maxDiffChars: "999999999" }), {
-    maxFiles: 1,
-    maxDiffChars: 999999999,
-  });
+  assert.deepEqual(
+    parseLimits({ maxFiles: "1", maxDiffChars: "999999999", maxComments: "1" }),
+    { maxFiles: 1, maxDiffChars: 999999999, maxComments: 1 },
+  );
 });
 
-test("sets one limit and leaves the other at its default", () => {
+test("sets one limit and leaves the others at their default", () => {
   assert.deepEqual(parseLimits({ maxFiles: "5" }), {
     maxFiles: 5,
     maxDiffChars: 200000,
+    maxComments: 10,
   });
   assert.deepEqual(parseLimits({ maxDiffChars: "5" }), {
     maxFiles: 50,
     maxDiffChars: 5,
+    maxComments: 10,
+  });
+  assert.deepEqual(parseLimits({ maxComments: "5" }), {
+    maxFiles: 50,
+    maxDiffChars: 200000,
+    maxComments: 5,
   });
 });
 
@@ -93,6 +105,7 @@ for (const [name, value] of INVALID) {
   for (const [input, key] of [
     ["max-files", "maxFiles"],
     ["max-diff-chars", "maxDiffChars"],
+    ["max-comments", "maxComments"],
   ]) {
     test(`rejects ${name} for ${input} and says what is allowed`, () => {
       assert.throws(

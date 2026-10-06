@@ -12,6 +12,7 @@ test("reads all inputs", () => {
     exclude: "docs/**\n*.txt",
     "max-files": "10",
     "max-diff-chars": "5000",
+    "max-comments": "20",
   });
 
   assert.deepEqual(readInputs(core), {
@@ -22,6 +23,7 @@ test("reads all inputs", () => {
     exclude: "docs/**\n*.txt",
     maxFiles: "10",
     maxDiffChars: "5000",
+    maxComments: "20",
   });
 });
 
@@ -36,6 +38,7 @@ test("reads the limits as text and leaves checking them to parseLimits", () => {
 
   assert.equal(inputs.maxFiles, "not a number");
   assert.equal(inputs.maxDiffChars, "");
+  assert.equal(inputs.maxComments, "");
 });
 
 test("reads a missing exclude input as empty text", () => {
@@ -56,6 +59,7 @@ test("masks the credentials, but not the model, the patterns or the limits", () 
     exclude: "documentation/**",
     "max-files": "1000000",
     "max-diff-chars": "1000000",
+    "max-comments": "1000000",
   });
 
   const inputs = readInputs(core);

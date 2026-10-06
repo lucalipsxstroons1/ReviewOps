@@ -732,6 +732,9 @@ const INVALID_LIMITS = [
   ["max-diff-chars", "-1"],
   ["max-diff-chars", "lots"],
   ["max-diff-chars", "1e6"],
+  ["max-comments", "0"],
+  ["max-comments", "-1"],
+  ["max-comments", "all"],
 ];
 
 for (const [input, value] of INVALID_LIMITS) {
@@ -825,9 +828,9 @@ test("accepts a valid model name and the default without a message", async () =>
 // --- The request to the model ------------------------------------------------
 
 /** A finding as the model returns it. */
-const modelFinding = (path, severity = "major", text = "x") => ({
+const modelFinding = (path, severity = "major", text = "x", line = 1) => ({
   path,
-  line: 1,
+  line,
   severity,
   category: "code-quality",
   title: text,
@@ -887,16 +890,17 @@ test("logs the requests and the findings per severity, nothing else", async () =
   const core = createFakeCore(VALID_INPUTS);
   const ai = createFakeAi(() =>
     modelAnswer([
-      modelFinding("src/file-0.js", "critical"),
-      modelFinding("src/file-0.js", "minor"),
+      modelFinding("src/file-0.js", "critical", "first"),
+      modelFinding("src/file-0.js", "minor", "second"),
       modelFinding("src/file-1.js", "minor"),
     ]),
   );
 
   await runWith(core, { ai });
 
-  assert.deepEqual(core.messages("info").slice(-2), [
+  assert.deepEqual(core.messages("info").slice(-3), [
     "Sending 2 files to gpt-4o-mini in 1 requests.",
+    "Checked 3 findings: 3 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 3 findings (1 critical, 0 major, 2 minor, 0 info) from 1 of 1 requests.",
   ]);
   assert.deepEqual(core.messages("warning"), []);
@@ -928,8 +932,9 @@ test("spreads a pull request over the budget of one request and merges the findi
     assert.ok(request.user.length <= MAX_REQUEST_CHARS);
     assert.match(request.user, /^<file path="/);
   }
-  assert.deepEqual(core.messages("info").slice(-2), [
+  assert.deepEqual(core.messages("info").slice(-3), [
     "Sending 4 files to gpt-4o-mini in 3 requests.",
+    "Checked 4 findings: 4 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 4 findings (0 critical, 4 major, 0 minor, 0 info) from 3 of 3 requests.",
   ]);
 });
@@ -1008,11 +1013,61 @@ test("keeps the other findings and ends green with a warning when one request fa
   assert.deepEqual(core.messages("warning"), [
     `Requests to the model that failed: 1 of 3. 1 files were not reviewed. ${failure.message}`,
   ]);
-  assert.deepEqual(core.messages("info").slice(-3), [
+  assert.deepEqual(core.messages("info").slice(-4), [
     "Sending 3 files to gpt-4o-mini in 3 requests.",
     "Not reviewed src/b.js: the request to the model failed.",
+    "Checked 2 findings: 2 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 2 findings (0 critical, 2 major, 0 minor, 0 info) from 2 of 3 requests.",
   ]);
+});
+
+test("keeps the other findings and ends green when one answer is not valid JSON", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    bigFile("src/a.js", 3000),
+    bigFile("src/b.js", 3000),
+  ]);
+  const ai = createFakeAi((request) =>
+    pathsIn(request)[0] === "src/a.js"
+      ? { ...modelAnswer(), content: '{"summary": "cut' }
+      : modelAnswer([modelFinding("src/b.js", "critical")]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("warning"), [
+    "Requests to the model that failed: 1 of 2. 1 files were not reviewed. The answer of the model is not valid JSON. Run the workflow again.",
+  ]);
+  assert.deepEqual(core.messages("info").slice(-2), [
+    "Checked 1 findings: 1 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
+    "Review finished: 1 findings (1 critical, 0 major, 0 minor, 0 info) from 1 of 2 requests.",
+  ]);
+});
+
+test("checks every finding against the diff and counts what it leaves out", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-comments": "3" });
+  // DEFAULT_PATCH adds line 1 only.
+  const ai = createFakeAi(() =>
+    modelAnswer([
+      modelFinding("src/file-0.js", "minor", "at an added line"),
+      modelFinding("src/file-0.js", "critical", "at a context line", 2),
+      modelFinding("src/invented.js", "critical", "in an unknown file"),
+      modelFinding("src/file-1.js", "major", " "),
+      modelFinding("src/file-1.js", "major", "twice"),
+      modelFinding("src/file-1.js", "major", "Twice"),
+      modelFinding("src/file-1.js", "info", "below the limit"),
+    ]),
+  );
+
+  await runWith(core, { ai });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("info").slice(-2), [
+    "Checked 7 findings: 2 at an added line, 1 at another line, left out 1 with an empty text, 1 for a file that was not sent, 1 duplicates and 1 over the limit of 3 (max-comments).",
+    "Review finished: 3 findings (1 critical, 1 major, 1 minor, 0 info) from 1 of 1 requests.",
+  ]);
+  assert.doesNotMatch(JSON.stringify(core.calls), /invented|context line/);
 });
 
 test("names each reason of a failed request once", async () => {

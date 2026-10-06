@@ -14,6 +14,7 @@ import {
   parsePatch as diffParsePatch,
 } from "./diff/parse.js";
 import { createExcludeFilter } from "./exclude.js";
+import { selectFindings } from "./findings.js";
 import { readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
@@ -226,14 +227,29 @@ export async function run({
       }
     }
 
+    // Every finding is checked against the files of its own request: only an
+    // added line of such a file can carry an inline comment.
+    const { inline, unplaced, dropped } = selectFindings({
+      reviews: review.reviews,
+      maxComments: limits.maxComments,
+    });
+    const shown = [...inline, ...unplaced];
+    const received = review.reviews.reduce(
+      (sum, { findings }) => sum + findings.length,
+      0,
+    );
+
     // Numbers only: the findings and the summary hold code from the pull
-    // request. Checking and posting them follows in later steps.
+    // request. Posting them follows in a later step.
+    core.info(
+      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
+    );
     const counts = SEVERITIES.map(
       (severity) =>
-        `${review.findings.filter((item) => item.severity === severity).length} ${severity}`,
+        `${shown.filter((item) => item.severity === severity).length} ${severity}`,
     ).join(", ");
     core.info(
-      `Review finished: ${review.findings.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
+      `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
