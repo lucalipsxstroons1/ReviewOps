@@ -246,10 +246,17 @@ function byStatus(error, model) {
       status,
     );
   }
-  if (status === 429 && error.code === "insufficient_quota") {
+  // A used-up quota is also an HTTP 429, but waiting does not help. OpenAI
+  // names it in the type of the error. The code differs: an account without
+  // credit answers with `credit_balance_exhausted`, a spending limit with
+  // `insufficient_quota`. Either one counts.
+  if (
+    status === 429 &&
+    (error.type === "insufficient_quota" || error.code === "insufficient_quota")
+  ) {
     return new AiError(
       "quota",
-      `The OpenAI account has no quota left (${http}). Check the billing and the spending limit of the project of the key.`,
+      `The OpenAI account has no credit or quota left (${http}). Add credit, or check the billing and the spending limit of the project of the key. Running the workflow again does not help until then.`,
       status,
     );
   }

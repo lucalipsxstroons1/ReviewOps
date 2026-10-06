@@ -322,7 +322,11 @@ test("keeps the key out of the error and the log for every kind of failure", asy
     apiError(401, { code: "invalid_api_key", message: MASKED }),
     apiError(403, { message: MASKED }),
     apiError(404, { code: "model_not_found", message: MASKED }),
-    apiError(429, { code: "insufficient_quota", message: MASKED }),
+    apiError(429, {
+      code: "credit_balance_exhausted",
+      type: "insufficient_quota",
+      message: MASKED,
+    }),
     apiError(429, { message: MASKED, headers: { "retry-after-ms": "5" } }),
     apiError(500, { message: MASKED, headers: { "retry-after-ms": "5" } }),
     apiError(400, { code: MASKED, type: MASKED, message: MASKED }),
@@ -368,17 +372,51 @@ test("names the model that was not found on HTTP 404", async (t) => {
   );
 });
 
-test("reports a used-up quota as such", async (t) => {
+// The shapes of the real API. An account without credit was observed on
+// 2026-10-06: code `credit_balance_exhausted`, type `insufficient_quota`.
+const QUOTA_ANSWERS = [
+  [
+    "an account without credit",
+    { code: "credit_balance_exhausted", type: "insufficient_quota" },
+  ],
+  [
+    "a spending limit that is reached",
+    { code: "insufficient_quota", type: "insufficient_quota" },
+  ],
+  ["only the code", { code: "insufficient_quota", type: "other" }],
+  ["only the type", { code: null, type: "insufficient_quota" }],
+];
+
+for (const [name, fields] of QUOTA_ANSWERS) {
+  test(`reports ${name} as a used-up quota, not as a rate limit`, async (t) => {
+    const api = await startOpenAiApi(t, apiError(429, fields));
+    const { client } = clientFor(api, { overrides: { maxRetries: 0 } });
+
+    const error = await failure(client.complete(PROMPT));
+
+    assert.equal(error.kind, "quota");
+    assert.match(
+      error.message,
+      /no credit or quota left.*Add credit.*spending limit/,
+    );
+    assert.match(error.message, /does not help until then/);
+  });
+}
+
+test("does not take a rate limit for a used-up quota", async (t) => {
   const api = await startOpenAiApi(
     t,
-    apiError(429, { code: "insufficient_quota", type: "insufficient_quota" }),
+    apiError(429, {
+      code: "rate_limit_exceeded",
+      type: "requests",
+      headers: { "retry-after-ms": "5" },
+    }),
   );
-  const { client } = clientFor(api, { overrides: { maxRetries: 0 } });
+  const { client } = clientFor(api);
 
   const error = await failure(client.complete(PROMPT));
 
-  assert.equal(error.kind, "quota");
-  assert.match(error.message, /no quota left.*spending limit/);
+  assert.equal(error.kind, "rate_limit");
 });
 
 test("does not repeat a request when OpenAI says it is not worth it", async (t) => {
