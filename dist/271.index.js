@@ -3997,15 +3997,12 @@ async function run({
         known: history.fingerprints,
       });
     const shown = [...inline, ...unplaced];
-    // Whatever was not reviewed or not shown must be looked at again: a later
-    // run does not start at a review that left something out.
-    const incomplete =
-      notReviewed.length > 0 ||
-      unreadable.length > 0 ||
-      tooLarge.length > 0 ||
-      overLimit.length > 0 ||
-      listing.truncated ||
-      dropped.overLimit > 0;
+    // A later run does not start at a review whose gaps a new run can fill: a
+    // request that failed, and findings over max-comments (the ones posted
+    // now are left out next time, so the next ones come up). Files over a
+    // limit or with an unreadable diff are not counted: a run over the whole
+    // pull request leaves out the same files again.
+    const incomplete = notReviewed.length > 0 || dropped.overLimit > 0;
     const received = review.reviews.reduce(
       (sum, { findings }) => sum + findings.length,
       0,

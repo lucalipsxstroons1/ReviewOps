@@ -1848,10 +1848,12 @@ test("does not post a comment at a line that an earlier comment is at", async ()
 
 // --- Incomplete reviews ------------------------------------------------------
 
-test("marks a review as incomplete when a file was left out by a limit", async () => {
-  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "1" });
+test("marks a review as incomplete when findings are left out by max-comments", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-comments": "1" });
   const octokit = createFakeOctokit(apiFiles(2));
-  const ai = createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/file-0.js"), modelFinding("src/file-1.js")]),
+  );
 
   await runWith(core, { octokit, ai });
 
@@ -1887,5 +1889,16 @@ test("does not mark a complete review", async () => {
 
   await runWith(core, { octokit, ai });
 
+  assert.ok(!octokit.reviews[0].body.includes("reviewops-incomplete"));
+});
+
+test("does not mark a review as incomplete when files are left out by a limit", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "1" });
+  const octokit = createFakeOctokit(apiFiles(2));
+  const ai = createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(octokit.reviews.length, 1);
   assert.ok(!octokit.reviews[0].body.includes("reviewops-incomplete"));
 });

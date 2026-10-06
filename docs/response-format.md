@@ -111,8 +111,8 @@ changed.
 the text of the review carries its fingerprint in the head of the review
   text, right below the marker; only the lines directly below the marker are
   read.
-- A review that left something out (failed request, file over a limit, findings
-  over `max-comments`) has the line `<!-- reviewops-incomplete -->` below the
+- A review that left something out that a new run can fill (failed request,
+  findings over `max-comments`) has the line `<!-- reviewops-incomplete -->` below the
   marker. A later run does not start at it, but at the last complete review.
 
 The log shows only the numbers of each step, never a path or a text of a
