@@ -4,7 +4,6 @@ import {
   RUNS_PER_CASE,
   judgeRun,
   loadCases,
-  looksGerman,
   missingKeyOutcome,
   renderTable,
   runEvaluation,
@@ -138,58 +137,6 @@ test("also counts invalid findings on a clean diff", () => {
   assert.deepEqual(result, { ok: true, invalid: 1 });
 });
 
-// --- looksGerman() -----------------------------------------------------------
-
-const german = {
-  summary:
-    "Der Effekt wird nicht neu ausgeführt, wenn sich die Nutzer-ID ändert.",
-  findings: [
-    {
-      title: "Abhängigkeit fehlt",
-      comment: "Die ID wird im Effekt gelesen, steht aber nicht im Array.",
-      suggestion: "Füge userId zum Array hinzu.",
-    },
-  ],
-};
-
-test("recognises German text", () => {
-  assert.equal(looksGerman(german), true);
-});
-
-test("does not take English text, code or an empty review for German", () => {
-  assert.equal(
-    looksGerman({
-      summary: "The effect is not run again when the user changes.",
-      findings: [
-        {
-          title: "Missing dependency",
-          comment: "The id is read inside the effect but is not in the array.",
-          suggestion: "Add userId to the array so that it runs again.",
-        },
-      ],
-    }),
-    false,
-  );
-  assert.equal(
-    looksGerman({
-      summary: "",
-      findings: [
-        { title: "x", comment: "useEffect(() => {}, [])", suggestion: "" },
-      ],
-    }),
-    false,
-  );
-  assert.equal(looksGerman({ summary: "", findings: [] }), false);
-});
-
-test("needs three different German words, not one word three times", () => {
-  assert.equal(
-    looksGerman({ summary: "und und und und", findings: [] }),
-    false,
-  );
-  assert.equal(looksGerman({ summary: "und nicht wird", findings: [] }), true);
-});
-
 // --- tally() and verdict() ---------------------------------------------------
 
 test("counts passed runs, invalid findings and errors, and never takes an error as a pass", () => {
@@ -214,48 +161,39 @@ const row = (overrides = {}) => ({
 });
 
 test("meets the thresholds when every case passes 3 of 3 and nothing is invalid", () => {
-  const result = verdict(
-    [row(), row({ clean: true })],
-    [{ name: "case", german: true }],
-  );
+  const result = verdict([row(), row({ clean: true })]);
 
   assert.deepEqual(result, { ok: true, problems: [] });
 });
 
 test("names every missed threshold", () => {
-  const result = verdict(
-    [
-      row({ name: "a", passed: 2 }),
-      row({
-        name: "b",
-        clean: true,
-        passed: 0,
-        errors: ["server", "server", "server"],
-      }),
-      row({ name: "c", invalid: 1 }),
-    ],
-    [{ name: "a", german: false }],
-  );
+  const result = verdict([
+    row({ name: "a", passed: 2 }),
+    row({
+      name: "b",
+      clean: true,
+      passed: 0,
+      errors: ["server", "server", "server"],
+    }),
+    row({ name: "c", invalid: 1 }),
+  ]);
 
   assert.equal(result.ok, false);
   assert.deepEqual(result.problems, [
     "a: found in 2 of 3 runs",
     "b: clean in 0 of 3 runs",
     "c: 1 invalid findings",
-    "a: feedback is not German",
   ]);
 });
 
 test("renders the result as a table with the version and the model", () => {
   const rows = [row({ name: "a" }), row({ name: "b", clean: true, passed: 2 })];
-  const germanRows = [{ name: "a", german: true }];
-  const result = verdict(rows, germanRows);
+  const result = verdict(rows);
 
   const table = renderTable({
     model: "gpt-4o-mini",
     promptVersion: 7,
     rows,
-    german: germanRows,
     result,
   });
 
@@ -271,7 +209,7 @@ test("renders the result as a table with the version and the model", () => {
     table,
     /\| b \| no finding of major or higher \| 2\/3 \| 0 \| 0 \|/,
   );
-  assert.match(table, /\| a \| yes \|/);
+  assert.doesNotMatch(table, /German/);
   assert.match(table, /Result: thresholds missed\./);
   assert.match(table, /- b: clean in 2 of 3 runs/);
 });
@@ -287,9 +225,7 @@ function goodModel(calls) {
     async complete(request) {
       calls.push(request);
       const testCase = byPath(request.user);
-      const text = request.system.includes("in German")
-        ? "Das ist nicht gut, und es wird nicht lange halten."
-        : "This is not good.";
+      const text = "This is not good.";
       const findings = testCase.clean
         ? []
         : [hit(testCase, { comment: text, title: text, suggestion: text })];
@@ -301,15 +237,15 @@ function goodModel(calls) {
   };
 }
 
-test("runs every case three times and the cases with a defect once more in German", async () => {
+test("runs every case three times", async () => {
   const calls = [];
 
-  const { rows, german, failures } = await runEvaluation({
+  const { rows, failures } = await runEvaluation({
     cases,
     ai: goodModel(calls),
   });
 
-  assert.equal(calls.length, cases.length * RUNS_PER_CASE + 4);
+  assert.equal(calls.length, cases.length * RUNS_PER_CASE);
   assert.equal(rows.length, 6);
   for (const entry of rows) {
     assert.deepEqual(
@@ -318,13 +254,11 @@ test("runs every case three times and the cases with a defect once more in Germa
       entry.name,
     );
   }
-  assert.equal(german.length, 4);
-  assert.ok(german.every((entry) => entry.german));
   assert.deepEqual(failures, []);
-  assert.equal(verdict(rows, german).ok, true);
+  assert.equal(verdict(rows).ok, true);
 });
 
-test("sends the schema, the output limit and the prompt in the language of the run", async () => {
+test("sends the schema, the output limit and the English prompt", async () => {
   const calls = [];
 
   await runEvaluation({ cases, ai: goodModel(calls) });
@@ -333,9 +267,9 @@ test("sends the schema, the output limit and the prompt in the language of the r
     assert.equal(call.responseFormat, REVIEW_FORMAT);
     assert.equal(call.maxOutputTokens, MAX_OUTPUT_TOKENS);
   }
-  const german = calls.filter((call) => call.system.includes("in German"));
-  assert.equal(german.length, 4);
-  assert.ok(german.every((call) => !byPath(call.user).clean));
+  for (const call of calls) {
+    assert.match(call.system, /in English\. Do not write any of them/);
+  }
 });
 
 test("never takes an error as a pass, also not on a clean diff", async () => {
@@ -354,7 +288,7 @@ test("never takes an error as a pass, also not on a clean diff", async () => {
     [entry.passed, entry.errors],
     [0, ["server", "server", "server"]],
   );
-  assert.equal(verdict(rows, []).ok, false);
+  assert.equal(verdict(rows).ok, false);
 });
 
 test("takes a cut-off answer as an error of the run, not as no findings", async () => {
@@ -392,7 +326,7 @@ test("stops after an error that repeats for every request", async () => {
     rows.flatMap((entry) => entry.errors).includes("not started"),
     true,
   );
-  assert.equal(verdict(rows, []).ok, false);
+  assert.equal(verdict(rows).ok, false);
 });
 
 test("reports a run that missed its expectation with the findings, not the whole answer", async () => {
@@ -411,17 +345,14 @@ test("reports a run that missed its expectation with the findings, not the whole
   };
 
   const { rows, failures } = await runEvaluation({ cases: [faultyCase], ai });
-  const english = failures.filter(
-    (entry) => !entry.name.endsWith("(German run)"),
-  );
 
   assert.equal(rows[0].passed, 0);
-  assert.equal(english.length, 3);
+  assert.equal(failures.length, 3);
   assert.match(
-    english[0].lines[0],
+    failures[0].lines[0],
     /^src\/components\/Profile\.jsx:\d+ minor code-quality SOME-TITLE$/,
   );
-  assert.equal(JSON.stringify(english).includes("SUMMARY-TEXT"), false);
+  assert.equal(JSON.stringify(failures).includes("SUMMARY-TEXT"), false);
 });
 
 test("passes on an error that is not an error of the client", async () => {
@@ -452,52 +383,14 @@ test("writes path and title of a finding so that a line break cannot start a wor
   };
 
   const { failures } = await runEvaluation({ cases: [faultyCase], ai });
-  const english = failures.filter(
-    (entry) => !entry.name.endsWith("(German run)"),
-  );
-
-  assert.ok(english.length > 0);
-  for (const { lines } of english) {
+  assert.ok(failures.length > 0);
+  for (const { lines } of failures) {
     for (const line of lines) {
       assert.equal(line.includes("\n"), false);
       assert.equal(line.includes(escape), false);
       assert.match(line, /\\u000a::warning::INJECTED/);
     }
   }
-});
-
-test("counts invalid findings of the German run as well", async () => {
-  const ai = {
-    async complete(request) {
-      const testCase = byPath(request.user);
-      const isGerman = request.system.includes("in German");
-      const good = hit(testCase);
-      // Only the German run answers with findings that cannot be comments.
-      const findings = isGerman
-        ? [
-            good,
-            hit(testCase, { path: "elsewhere.js" }),
-            hit(testCase, { line: 999 }),
-            hit(testCase, { suggestion: " " }),
-          ]
-        : [good];
-      const summary = isGerman
-        ? "Das ist nicht gut und wird nicht halten."
-        : "s";
-      return {
-        content: JSON.stringify({ summary, findings }),
-        finishReason: "stop",
-      };
-    },
-  };
-
-  const { rows, german } = await runEvaluation({ cases: [faultyCase], ai });
-
-  assert.deepEqual([rows[0].passed, rows[0].runs, rows[0].invalid], [3, 3, 3]);
-  assert.equal(german[0].german, true);
-  assert.deepEqual(verdict(rows, german).problems, [
-    `${faultyCase.name}: 3 invalid findings`,
-  ]);
 });
 
 // --- missingKeyOutcome() -----------------------------------------------------
@@ -520,76 +413,27 @@ test("fails without a key in a run by hand, on a push and on a machine", () => {
   }
 });
 
-test("shows the summary and the findings of a German run that is not German, to see why", async () => {
+test("counts invalid findings of every run and names them in the verdict", async () => {
   const ai = {
     async complete(request) {
       const testCase = byPath(request.user);
-      const isGerman = request.system.includes("in German");
+      const findings = [
+        hit(testCase),
+        hit(testCase, { path: "elsewhere.js" }),
+        hit(testCase, { line: 999 }),
+        hit(testCase, { suggestion: " " }),
+      ];
       return {
-        content: JSON.stringify({
-          summary: isGerman ? "ENGLISH-SUMMARY-OF-THE-GERMAN-RUN" : "s",
-          findings: [hit(testCase, { title: isGerman ? "A-TITLE" : "t" })],
-        }),
+        content: JSON.stringify({ summary: "s", findings }),
         finishReason: "stop",
       };
     },
   };
 
-  const { german, failures } = await runEvaluation({ cases: [faultyCase], ai });
+  const { rows } = await runEvaluation({ cases: [faultyCase], ai });
 
-  assert.equal(german[0].german, false);
-  assert.deepEqual(
-    failures.map((entry) => entry.name),
-    [`${faultyCase.name} (German run)`],
-  );
-  assert.equal(
-    failures[0].lines[0],
-    "summary: ENGLISH-SUMMARY-OF-THE-GERMAN-RUN",
-  );
-  assert.match(
-    failures[0].lines[1],
-    /^src\/components\/Profile\.jsx:\d+ major react A-TITLE$/,
-  );
-});
-
-test("does not show the text of a German run that is German", async () => {
-  const ai = {
-    async complete(request) {
-      const testCase = byPath(request.user);
-      const isGerman = request.system.includes("in German");
-      return {
-        content: JSON.stringify({
-          summary: isGerman ? "Das ist nicht gut und wird nicht halten." : "s",
-          findings: [hit(testCase)],
-        }),
-        finishReason: "stop",
-      };
-    },
-  };
-
-  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
-
-  assert.deepEqual(failures, []);
-});
-
-test("writes the summary of a German run so that a line break cannot start a workflow command", async () => {
-  const ai = {
-    async complete(request) {
-      const testCase = byPath(request.user);
-      const isGerman = request.system.includes("in German");
-      return {
-        content: JSON.stringify({
-          summary: isGerman ? "x\n::error::INJECTED" : "s",
-          findings: [hit(testCase)],
-        }),
-        finishReason: "stop",
-      };
-    },
-  };
-
-  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
-
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].lines[0].includes("\n"), false);
-  assert.match(failures[0].lines[0], /\\u000a::error::INJECTED/);
+  assert.deepEqual([rows[0].passed, rows[0].invalid], [3, 9]);
+  assert.deepEqual(verdict(rows).problems, [
+    `${faultyCase.name}: 9 invalid findings`,
+  ]);
 });

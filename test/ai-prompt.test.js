@@ -195,20 +195,10 @@ test("tells the model the rules for the lines and for doubt", () => {
   assert.match(prompt, /Give no praise/);
 });
 
-test("tells the model to report at the line of the cause, not at the head of the method", () => {
-  const prompt = buildSystemPrompt();
-
-  assert.match(prompt, /at the line of the code that causes it/);
-  assert.match(
-    prompt,
-    /Do not report it at the signature of the method or the class/,
-  );
-});
-
-test("tells the model to go through the checkpoints one by one before it answers", () => {
+test("tells the model to report a problem once, at the line where it starts", () => {
   assert.match(
     buildSystemPrompt(),
-    /go through the checkpoints of the areas above for every file, one by one/,
+    /report it once, at the line where it starts/,
   );
 });
 
@@ -292,6 +282,7 @@ test("contains no characters that are invisible or outside of ASCII", () => {
 const PROMPT_HASHES = {
   1: "f1cff1a3acace3e5aacb3733e06b0b6ebc9ca93273b88835decb5700c6cf3f5a",
   2: "d718d5077aaaf15a35f4adff4f8784631dd28836e1816c5dc2538a1fa4989ab3",
+  3: "b46b750252cad3d97e9e7d5ae48dd7c919d54c6f9702d9e1239e2810563aef85",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {

@@ -3,7 +3,7 @@ import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 // The same value is written into action.yml. A test keeps them equal.
 export const DEFAULT_LANGUAGE = "en";
@@ -166,9 +166,8 @@ export function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "- Comment only on added lines. Take the line number from the diff exactly as it is shown. Never calculate a number and never use the line of a removed or unchanged line.",
     "- Use the path exactly as it is written after `File:`.",
     "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does.",
-    "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line of the code that causes it, for example the call inside a loop. Do not report it at the signature of the method or the class that contains it.",
+    "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line where it starts.",
     "- Do not ask for tests, documentation or comments, and do not remark on what the change does.",
-    "- Before you answer, go through the checkpoints of the areas above for every file, one by one. A short diff can hold one of them.",
     "- An empty list of findings is a good answer when nothing is wrong. Say so in the summary.",
     '- Every finding needs a concrete suggestion: what to change, with a short code example if that helps. Never write only "consider" or "check".',
     "",

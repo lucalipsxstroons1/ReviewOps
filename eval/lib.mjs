@@ -25,35 +25,6 @@ export const SEVERITY_RANK = Object.fromEntries(
   SEVERITIES.map((severity, index) => [severity, SEVERITIES.length - index]),
 );
 
-// Words that are German and no other language of the list (and no English
-// word), so that an English answer does not pass by accident.
-const GERMAN_WORDS = [
-  "und",
-  "nicht",
-  "wird",
-  "werden",
-  "ist",
-  "eine",
-  "einen",
-  "dass",
-  "kann",
-  "wenn",
-  "oder",
-  "aber",
-  "dem",
-  "den",
-  "mit",
-  "auf",
-  "bei",
-  "durch",
-  "wurde",
-  "sollte",
-  "muss",
-  "zum",
-  "zur",
-];
-export const MIN_GERMAN_WORDS = 3;
-
 const KEYS = ["description", "path", "patch"];
 
 /**
@@ -169,27 +140,6 @@ export function judgeRun(testCase, review) {
 }
 
 /**
- * Tells whether the text of a review is written in German: it holds at least
- * `MIN_GERMAN_WORDS` different words from a list of typical function words.
- * Only the text that the model writes counts, not code or paths.
- *
- * @param {{ summary: string, findings: { title: string, comment: string, suggestion: string }[] }} review
- * @returns {boolean}
- */
-export function looksGerman(review) {
-  const text = [
-    review.summary,
-    ...review.findings.flatMap((f) => [f.title, f.comment, f.suggestion]),
-  ]
-    .join(" ")
-    .toLowerCase();
-  const words = new Set(text.match(/\p{L}+/gu) ?? []);
-  return (
-    GERMAN_WORDS.filter((word) => words.has(word)).length >= MIN_GERMAN_WORDS
-  );
-}
-
-/**
  * Sums up the runs of one case.
  *
  * @param {{ ok: boolean, invalid: number } | { error: string }} runs One entry per run;
@@ -207,13 +157,12 @@ export function tally(runs) {
 
 /**
  * Applies the thresholds of the issue: every case passes in all runs, no
- * finding is invalid, and the German pass is German in every case.
+ * finding is invalid.
  *
  * @param {{ name: string, clean: boolean, passed: number, runs: number, invalid: number, errors: string[] }[]} rows
- * @param {{ name: string, german: boolean }[]} german
  * @returns {{ ok: boolean, problems: string[] }}
  */
-export function verdict(rows, german) {
+export function verdict(rows) {
   const problems = [];
   for (const row of rows) {
     if (row.passed !== row.runs) {
@@ -225,14 +174,11 @@ export function verdict(rows, german) {
       problems.push(`${row.name}: ${row.invalid} invalid findings`);
     }
   }
-  for (const row of german) {
-    if (!row.german) problems.push(`${row.name}: feedback is not German`);
-  }
   return { ok: problems.length === 0, problems };
 }
 
 /** The result as a Markdown table, for the log and for the job summary. */
-export function renderTable({ model, promptVersion, rows, german, result }) {
+export function renderTable({ model, promptVersion, rows, result }) {
   const lines = [
     `## Prompt evaluation (prompt version ${promptVersion}, model ${model})`,
     "",
@@ -242,10 +188,6 @@ export function renderTable({ model, promptVersion, rows, german, result }) {
       (row) =>
         `| ${row.name} | ${row.clean ? "no finding of major or higher" : "finding of the expected kind"} | ${row.passed}/${row.runs} | ${row.invalid} | ${row.errors.length} |`,
     ),
-    "",
-    "| Case in German | Feedback is German |",
-    "|---|---|",
-    ...german.map((row) => `| ${row.name} | ${row.german ? "yes" : "no"} |`),
     "",
     result.ok
       ? "Result: all thresholds are met."
@@ -259,7 +201,7 @@ const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
 
 /**
  * Sends every case to the model and judges the answers: `RUNS_PER_CASE` runs
- * in English, and one more run in German for each case with a defect.
+ * in English.
  *
  * A run that fails is recorded as an error and never counts as a pass, so an
  * outage cannot look like "no findings". After an error that repeats for
@@ -272,24 +214,17 @@ const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
  * @param {number} [options.concurrency] Requests at the same time.
  * @returns {Promise<{
  *   rows: ({ name: string, clean: boolean } & ReturnType<typeof tally>)[],
- *   german: { name: string, german: boolean }[],
  *   failures: { name: string, lines: string[] }[],
  * }>}
  */
 export async function runEvaluation({ cases, ai, concurrency = 4 }) {
-  const systems = {
-    en: buildSystemPrompt({ language: "en" }),
-    de: buildSystemPrompt({ language: "de" }),
-  };
+  const system = buildSystemPrompt({ language: "en" });
 
   const jobs = [];
   for (const testCase of cases) {
     for (let run = 0; run < RUNS_PER_CASE; run += 1) {
-      jobs.push({ testCase, language: "en", result: null });
+      jobs.push({ testCase, result: null });
     }
-  }
-  for (const testCase of cases.filter((c) => !c.clean)) {
-    jobs.push({ testCase, language: "de", result: null });
   }
 
   let stopped = false;
@@ -304,19 +239,13 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
       }
       try {
         const answer = await ai.complete({
-          system: systems[job.language],
+          system,
           user: job.testCase.user,
           responseFormat: REVIEW_FORMAT,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
         });
         job.review = parseReview(answer);
-        const judged = judgeRun(job.testCase, job.review);
-        // The German run only has to be German. Its findings still have to
-        // be able to become comments.
-        job.result =
-          job.language === "de"
-            ? { ok: looksGerman(job.review), invalid: judged.invalid }
-            : judged;
+        job.result = judgeRun(job.testCase, job.review);
       } catch (error) {
         // Anything but an error of the client is a defect of this program.
         if (!(error instanceof AiError)) throw error;
@@ -329,45 +258,32 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
     Array.from({ length: Math.min(concurrency, jobs.length) }, worker),
   );
 
-  const rows = cases.map((testCase) => {
-    const own = jobs.filter((job) => job.testCase === testCase);
-    const row = tally(
-      own.filter((job) => job.language === "en").map((job) => job.result),
-    );
-    // Invalid findings count in every run, also in the German one.
-    row.invalid = own.reduce((sum, job) => sum + (job.result.invalid ?? 0), 0);
-    return { name: testCase.name, clean: testCase.clean, ...row };
-  });
-  const german = jobs
-    .filter((job) => job.language === "de")
-    .map((job) => ({
-      name: job.testCase.name,
-      german: job.result.ok === true,
-    }));
+  const rows = cases.map((testCase) => ({
+    name: testCase.name,
+    clean: testCase.clean,
+    ...tally(
+      jobs.filter((job) => job.testCase === testCase).map((job) => job.result),
+    ),
+  }));
 
   // The runs that missed their expectation, to see why. This is the only
-  // place that shows text of the model, and it is our own test data. Path,
-  // title and summary come from the model, which read the diff. A line break
-  // in one of them could start a workflow command in the log, so they go
-  // through `printable()`.
+  // place that shows text of the model, and it is our own test data. Path and
+  // title come from the model, which read the diff. A line break in one of
+  // them could start a workflow command in the log, so they go through
+  // `printable()`.
   const failures = jobs
     .filter((job) => job.result.ok === false)
     .map((job) => {
       const lines = job.review.findings.map((f) =>
         printable(`${f.path}:${f.line} ${f.severity} ${f.category} ${f.title}`),
       );
-      if (job.language === "de") {
-        // A run is not German because of its words. Show them.
-        lines.unshift(printable(`summary: ${job.review.summary}`));
-        return { name: `${job.testCase.name} (German run)`, lines };
-      }
       return {
         name: job.testCase.name,
         lines: lines.length ? lines : ["no findings"],
       };
     });
 
-  return { rows, german, failures };
+  return { rows, failures };
 }
 
 /**

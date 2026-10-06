@@ -48,8 +48,8 @@ async function evaluate(apiKey) {
   const cases = loadCases(fileURLToPath(new URL("./cases", import.meta.url)));
 
   const ai = createAiClient({ apiKey, model, core });
-  const { rows, german, failures } = await runEvaluation({ cases, ai });
-  const result = verdict(rows, german);
+  const { rows, failures } = await runEvaluation({ cases, ai });
+  const result = verdict(rows);
 
   for (const { name, errors } of rows) {
     if (errors.length > 0) {
@@ -67,7 +67,6 @@ async function evaluate(apiKey) {
     model,
     promptVersion: PROMPT_VERSION,
     rows,
-    german,
     result,
   });
   console.log(table);
