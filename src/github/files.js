@@ -24,7 +24,7 @@ const STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
  * @returns {Promise<{
- *   files: { path: string, status: string, additions: number, deletions: number, patch: string }[],
+ *   files: { path: string, previousPath: string | null, status: string, additions: number, deletions: number, patch: string }[],
  *   skipped: { path: string, reason: string }[],
  *   truncated: boolean,
  * }>} `truncated` is true when GitHub's limit was reached and files are missing.
@@ -55,6 +55,13 @@ export async function listChangedFiles(octokit, { owner, repo, pullNumber }) {
     } else {
       files.push({
         path: entry.filename,
+        // The name before a rename: a file that held secrets under its old
+        // name still holds them.
+        previousPath:
+          typeof entry.previous_filename === "string" &&
+          entry.previous_filename !== ""
+            ? entry.previous_filename
+            : null,
         status: entry.status,
         additions: Number(entry.additions) || 0,
         deletions: Number(entry.deletions) || 0,

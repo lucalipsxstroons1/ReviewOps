@@ -81,6 +81,50 @@ export const DEFAULT_EXCLUDES = Object.freeze([
 ]);
 
 /**
+ * Files that may hold secrets. They never reach the model: the list is fixed,
+ * checked before every other filter, and no input can change it. The same
+ * matching rules apply as for `DEFAULT_EXCLUDES`.
+ */
+export const SENSITIVE_FILES = Object.freeze([
+  // Environment files, also examples: they often hold real values.
+  ".env*",
+  // Private keys and certificate stores
+  "*.pem",
+  "*.key",
+  "*.pfx",
+  "*.p12",
+  "*.jks",
+  "*.keystore",
+  "id_rsa*",
+  "id_dsa*",
+  "id_ecdsa*",
+  "id_ed25519*",
+  // Credentials of tools
+  ".npmrc",
+  ".pypirc",
+  ".netrc",
+  ".git-credentials",
+  "credentials.json",
+  "secrets.*",
+]);
+
+export const SENSITIVE_REASON =
+  "may hold secrets and is never sent to the model";
+
+const sensitiveMatchers = SENSITIVE_FILES.map((pattern) => compile(pattern));
+
+/**
+ * Whether a file may hold secrets and must never be sent to the model.
+ *
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function isSensitiveFile(path) {
+  const name = String(path).replace(LINE_BREAKS, "_");
+  return sensitiveMatchers.some((matches) => matches(name));
+}
+
+/**
  * Builds the filter for files that are left out of the review.
  *
  * A pattern without a slash applies in every directory (`*.min.js`). A

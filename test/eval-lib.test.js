@@ -292,7 +292,7 @@ test("runs every case three times", async () => {
   });
 
   assert.equal(calls.length, cases.length * RUNS_PER_CASE);
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, cases.length);
   for (const entry of rows) {
     assert.deepEqual(
       [entry.passed, entry.runs, entry.invalid],

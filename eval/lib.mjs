@@ -17,6 +17,7 @@ import {
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
 import { printable } from "../src/printable.js";
+import { maskSecrets } from "../src/secrets.js";
 
 /** How often every reference diff is sent to the model. */
 export const RUNS_PER_CASE = 3;
@@ -106,7 +107,10 @@ function toCase(name, data) {
     if (!allowed.has(key)) fail(`"${key}" is not a known key.`);
   }
 
-  const { hunks, commentableLines } = parsePatch(data.patch);
+  const parsed = parsePatch(data.patch);
+  const { commentableLines } = parsed;
+  // Masked as in the action, so the model sees what it would see there.
+  const { hunks } = maskSecrets(parsed.hunks);
 
   let expect = null;
   if (!clean) {

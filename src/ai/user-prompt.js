@@ -10,11 +10,11 @@
 // in the message, the model raised a false alarm on a clean reference diff in
 // every run (#14).
 //
-// Every line of an annotated diff, split at line feeds, starts with the
-// number column, so no such line of code can start with a tag. A carriage
-// return or a Unicode line separator inside a line can still make code look
-// like a new line to the model; #15 defuses those. The path is the only
-// value that stands on its own, and it is checked here.
+// Every line of an annotated diff starts with the number column, so no line
+// of code can start with a tag. `annotateDiff()` shows carriage returns,
+// Unicode line separators and other invisible characters by their code
+// point, so they cannot start a new line either. The path is the only value
+// that stands on its own, and it is checked here.
 
 // A path goes into an attribute in double quotes. Escaping is no way out:
 // the model would have to undo it, and a path it returns changed can no
