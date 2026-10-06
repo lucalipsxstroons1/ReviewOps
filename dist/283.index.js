@@ -1,8 +1,8 @@
-export const id = 511;
-export const ids = [511];
+export const id = 283;
+export const ids = [283];
 export const modules = {
 
-/***/ 8511:
+/***/ 2283:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -1828,6 +1828,42 @@ function readPullRequest(context) {
   };
 }
 
+// The login of the account that GitHub gives to runs started by Dependabot.
+const DEPENDABOT = "dependabot[bot]";
+
+/**
+ * Says why the repository secrets are not available in this run, if the
+ * event itself explains it. GitHub does not pass secrets to workflows of pull
+ * requests from forks, and it gives runs started by Dependabot only the
+ * Dependabot secrets. In both cases an empty API key is not a mistake of the
+ * workflow, and ReviewOps ends with a notice instead of an error.
+ *
+ * A pull request that is not a fork and not started by Dependabot never
+ * gets an explanation: there, an empty key stays an error.
+ *
+ * Nothing in the text comes from the event.
+ *
+ * @param {{ actor?: string, repo: object, payload: object }} context
+ * @returns {string | null} A notice, or `null` if there is no explanation.
+ */
+function explainMissingSecret(context) {
+  let isFork = false;
+  try {
+    isFork = readPullRequest(context).isFork;
+  } catch {
+    // A payload that cannot be read is no explanation. The run fails later
+    // with the message that says what is wrong with it.
+  }
+
+  if (isFork) {
+    return "ReviewOps did not review this pull request: it comes from a fork, and GitHub does not pass secrets to workflows of such pull requests, so the OpenAI API key is not available. A green run does not mean that this pull request was reviewed.";
+  }
+  if (context.actor === DEPENDABOT) {
+    return "ReviewOps did not review this pull request: the run was started by Dependabot, and GitHub gives runs of Dependabot only the Dependabot secrets, not the repository secrets. To have these pull requests reviewed, store the key as a Dependabot secret named `OPENAI_API_KEY` as well. A green run does not mean that this pull request was reviewed.";
+  }
+  return null;
+}
+
 function readRepository(context) {
   const { owner, repo } = context.repo ?? {};
   if (!isRepositoryPart(owner) || !isRepositoryPart(repo)) {
@@ -2297,7 +2333,112 @@ function createRedactor(secrets) {
     );
 }
 
+;// CONCATENATED MODULE: ./src/ai/answer-limits.js
+// How long a text of the model answer may be, in characters. The answer as a
+// whole is bounded by MAX_OUTPUT_TOKENS; these limits keep a single text from
+// taking all of that, for example when an instruction in a diff makes the
+// model write pages. Ten findings at these limits stay far below what GitHub
+// accepts for a review.
+const TEXT_LIMITS = Object.freeze({
+  title: 150,
+  comment: 1500,
+  suggestion: 1500,
+  summary: 1000,
+});
+
+// What a shortened text ends with. It counts towards the limit.
+const CUT_MARK = "…";
+
+// Every way to end a line becomes a line feed.
+const LINE_ENDS = /\r\n?|[\p{Zl}\p{Zp}]/gu;
+
+// Characters that show nothing, built from their code points: this file must
+// not hold them itself. They are no control or format characters, so the
+// categories below miss them: the Braille blank, the Hangul fillers, the
+// combining grapheme joiner and the variation selectors of the supplement
+// (the ones up to U+FE0F stay: emoji need them).
+const BLANKS = [0x2800, 0x3164, 0x115f, 0x1160, 0xffa0, 0x034f]
+  .map((codePoint) => String.fromCodePoint(codePoint))
+  .join("");
+const VARIATION_SELECTORS = `${String.fromCodePoint(0xe0100)}-${String.fromCodePoint(0xe01ef)}`;
+
+// Control characters other than line feed and tab, invisible format
+// characters (direction overrides, zero-width characters and the tag
+// characters that can hide a whole text from a reader) and the blanks above.
+// None of them is needed in a review, and all of them can make a comment
+// show something else than it says.
+const answer_limits_INVISIBLE = new RegExp(
+  `(?![\\n\\t])\\p{Cc}|\\p{Cf}|[${BLANKS}${VARIATION_SELECTORS}]`,
+  "gu",
+);
+
+const WHITE_SPACE = /\s+/gu;
+
+/**
+ * Bounds and cleans the texts of a review, before anything else uses them.
+ *
+ * The texts come from the model and are not trusted: invisible characters are
+ * removed, the title becomes one line, and a text that is longer than its
+ * limit is cut and ends with "…". Length is counted in characters (code
+ * points), so no character is split. A cut can end inside a Markdown code
+ * block; closing it is the job of whatever renders the text.
+ *
+ * `path`, `line`, `severity` and `category` are passed on as they are: the
+ * schema fixes the last two, and a finding is only used if its path is
+ * exactly one of the files that were sent.
+ *
+ * This is a pure function: it uses nothing but its argument and does not
+ * change it.
+ *
+ * @param {{ summary: string, findings: import("./schema.js").Finding[] }} review
+ *   A review as `parseReview()` returns it.
+ * @returns {{
+ *   review: { summary: string, findings: import("./schema.js").Finding[] },
+ *   shortened: number,
+ * }} `shortened` counts the texts that were cut.
+ */
+function boundReview(review) {
+  let shortened = 0;
+  const bound = (text, limit, { oneLine = false } = {}) => {
+    const cleaned = clean(text, oneLine);
+    const cut = cutTo(cleaned, limit);
+    if (cut !== cleaned) shortened += 1;
+    return cut;
+  };
+
+  const summary = bound(review.summary, TEXT_LIMITS.summary);
+  const findings = review.findings.map((finding) => ({
+    ...finding,
+    title: bound(finding.title, TEXT_LIMITS.title, { oneLine: true }),
+    comment: bound(finding.comment, TEXT_LIMITS.comment),
+    suggestion: bound(finding.suggestion, TEXT_LIMITS.suggestion),
+  }));
+
+  return { review: { summary, findings }, shortened };
+}
+
+function clean(text, oneLine) {
+  const visible = text.replace(LINE_ENDS, "\n").replace(answer_limits_INVISIBLE, "");
+  return (oneLine ? visible.replace(WHITE_SPACE, " ") : visible).trim();
+}
+
+function cutTo(text, limit) {
+  // Most texts are short: a string has at least as many UTF-16 units as
+  // characters, so this needs no closer look.
+  if (text.length <= limit) return text;
+
+  const characters = Array.from(text);
+  if (characters.length <= limit) return text;
+  return (
+    characters
+      .slice(0, limit - CUT_MARK.length)
+      .join("")
+      .trimEnd() + CUT_MARK
+  );
+}
+
 ;// CONCATENATED MODULE: ./src/review.js
+
 
 
 
@@ -2335,7 +2476,10 @@ const MAX_PARALLEL_REQUESTS = 4;
  *   }[],
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
+ *   shortened: number,
  * }>} The reviews of the requests that worked, in the order of the batches.
+ *   Their texts are bounded and cleaned (`boundReview()`); `shortened`
+ *   counts the texts that were cut, over all requests.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -2365,7 +2509,10 @@ async function reviewInBatches({
           responseFormat: REVIEW_FORMAT,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
         });
-        results[index] = { review: parseReview(answer) };
+        // The texts are bounded and cleaned right here: nothing after this
+        // point sees a text of the model that is not.
+        const { review, shortened } = boundReview(parseReview(answer));
+        results[index] = { review, shortened };
       } catch (error) {
         if (!(error instanceof AiError)) {
           defect ??= { error };
@@ -2385,11 +2532,12 @@ async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { reviews: [], succeeded: 0, failed: [] };
+  const merged = { reviews: [], succeeded: 0, failed: [], shortened: 0 };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
+      merged.shortened += result.shortened;
       merged.reviews.push({
         files: batch.files,
         summary: result.review.summary,
@@ -2468,6 +2616,17 @@ async function run({
 
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
+    // Without the key, a pull request from a fork or a run of Dependabot ends
+    // here with a notice, before any request: GitHub gives them no secrets,
+    // so there is nothing the workflow could fix. Anywhere else, a missing
+    // key stays an error.
+    if (!inputs.openaiApiKey) {
+      const notice = explainMissingSecret(context);
+      if (notice) {
+        core.notice(notice);
+        return;
+      }
+    }
     assertInputs(inputs);
     // A pattern, a limit, a model name or a language that cannot be used
     // fails the run here, before any request.
@@ -2657,6 +2816,13 @@ async function run({
           `${notReviewed.length - MAX_SKIPPED_LINES} more files that were not reviewed are not listed.`,
         );
       }
+    }
+
+    // A number only: the texts themselves hold code from the pull request.
+    if (review.shortened > 0) {
+      core.info(
+        `Texts of the model that were longer than allowed and were cut: ${review.shortened}.`,
+      );
     }
 
     // Every finding is checked against the files of its own request: only an

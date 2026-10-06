@@ -327,6 +327,90 @@ test("sends nothing for no batches", async () => {
     reviews: [],
     succeeded: 0,
     failed: [],
+    shortened: 0,
   });
   assert.equal(client.requests.length, 0);
+});
+
+// --- The texts of the answer are bounded ------------------------------------
+
+const INVISIBLE = String.fromCodePoint(0x200b, 0x202e);
+
+test("returns only bounded and cleaned texts", async () => {
+  const long = "x".repeat(5000);
+  const client = createFakeClient(() =>
+    answer(`${long}`, [
+      {
+        ...finding("a.js", 4),
+        title: `Title${INVISIBLE} with\nbreak`,
+        comment: long,
+        suggestion: `Fix${INVISIBLE} it`,
+      },
+    ]),
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a"),
+  });
+
+  const [{ summary, findings }] = result.reviews;
+  assert.equal(Array.from(summary).length, 1000);
+  assert.equal(findings[0].title, "Title with break");
+  assert.equal(Array.from(findings[0].comment).length, 1500);
+  assert.equal(findings[0].suggestion, "Fix it");
+  // Path, line and severity are passed on as they are.
+  assert.deepEqual(
+    [findings[0].path, findings[0].line, findings[0].severity],
+    ["a.js", 4, "major"],
+  );
+});
+
+test("counts the texts that were cut over all requests", async () => {
+  const long = "x".repeat(2000);
+  const client = createFakeClient((request) =>
+    request.user === "user a"
+      ? answer(long, [{ ...finding("a.js", 1), comment: long }])
+      : answer("short", [{ ...finding("b.js", 1), suggestion: long }]),
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b"),
+  });
+
+  // Request a: summary and comment. Request b: suggestion.
+  assert.equal(result.shortened, 3);
+});
+
+test("does not count the texts of a request that failed", async () => {
+  const long = "x".repeat(2000);
+  const client = createFakeClient((request) =>
+    request.user === "user a"
+      ? new AiError("server", "failed", 500)
+      : answer(long),
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b"),
+  });
+
+  assert.equal(result.shortened, 1);
+  assert.equal(result.failed.length, 1);
+});
+
+test("reports no cut text when everything fits", async () => {
+  const client = createFakeClient(findingPerBatch);
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b"),
+  });
+
+  assert.equal(result.shortened, 0);
 });

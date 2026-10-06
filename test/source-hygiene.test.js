@@ -10,6 +10,7 @@ const ROOT_FILES = [
   "eslint.config.js",
   "package.json",
   "CLAUDE.md",
+  "SECURITY.md",
 ];
 const TEXT_FILE = /\.(js|mjs|json|ya?ml|md)$/;
 
