@@ -113,6 +113,129 @@ test("masks a private key that stands on one line", () => {
   assert.equal(result.masked, 1);
 });
 
+/** A full line of a key body: 64 characters of Base64. */
+const body = (index) => `MIIE${String(index).padStart(60, "Q")}`;
+
+test("masks the body lines of a key whose middle changed, without BEGIN and END", () => {
+  // A key in a YAML file: the hunk shows only lines of its body.
+  const { hunks } = parsePatch(
+    [
+      "@@ -10,7 +10,7 @@ private_key: |",
+      `   ${body(1)}`,
+      `   ${body(2)}`,
+      `   ${body(3)}`,
+      `-  ${body(4)}`,
+      `+  ${body(40)}`,
+      `   ${body(5)}`,
+      `   ${body(6)}`,
+      `   ${body(7)}`,
+    ].join("\n"),
+  );
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), Array(8).fill(SECRET_PLACEHOLDER));
+  assert.equal(result.masked, 1);
+});
+
+test("continues a key into the next hunk up to its END line", () => {
+  const { hunks } = parsePatch(
+    [
+      "@@ -1,2 +1,4 @@",
+      " a",
+      `+${KEY_BEGIN}`,
+      `+${body(1)}`,
+      ` ${body(2)}`,
+      "@@ -20,4 +22,5 @@",
+      ` ${body(30)}`,
+      "+dGVzdA==",
+      ` ${KEY_END}`,
+      " const after = 1;",
+      " c",
+    ].join("\n"),
+  );
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), [
+    "a",
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    "const after = 1;",
+    "c",
+  ]);
+});
+
+test("ends a key that runs out of a hunk at the first line of ordinary code", () => {
+  // The END line is outside the diff. The next hunk is far away and holds
+  // code, which must still be reviewed.
+  const { hunks } = parsePatch(
+    [
+      "@@ -1,1 +1,3 @@",
+      ` ${KEY_BEGIN}`,
+      `+${body(1)}`,
+      `+${body(2)}`,
+      "@@ -90,2 +92,3 @@",
+      " function run() {",
+      "+  return else1;",
+      " }",
+    ].join("\n"),
+  );
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), [
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    "function run() {",
+    "  return else1;",
+    "}",
+  ]);
+});
+
+test("masks key body lines in quotes and with escaped line breaks", () => {
+  const { hunks } = added(
+    "const key = [",
+    `  "${body(1)}\\n",`,
+    `  '${body(2)}' +`,
+    `  \`${body(3)}\`;`,
+    "];",
+  );
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), [
+    "const key = [",
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    SECRET_PLACEHOLDER,
+    "];",
+  ]);
+});
+
+test("leaves a single Base64 line and ordinary words alone", () => {
+  const code = [
+    `const hash = "${body(1)}";`,
+    "const x = 1;",
+    "Lorem",
+    "ipsum",
+    "integrity sha512-abc+def/ghi==",
+    `const short = "${"QUJD".repeat(10)}";`,
+    `const other = "${"QUJD".repeat(10)}";`,
+  ];
+  const { hunks } = added(...code);
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), code);
+  assert.equal(result.masked, 0);
+});
+
 test("masks removed and unchanged lines as well", () => {
   const { hunks } = parsePatch(
     [
@@ -178,6 +301,8 @@ test("stays fast on very long lines", () => {
     `sk-${"a".repeat(200000)}-`,
     `${"gh"}p_${"a".repeat(200000)}`,
     "-".repeat(200000),
+    `${"A".repeat(64)}${" ".repeat(200000)}x`,
+    `"${"A".repeat(64)}"${" ".repeat(200000)},${" ".repeat(200000)}x`,
   );
 
   const started = performance.now();

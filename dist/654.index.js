@@ -611,14 +611,49 @@ const TOKEN_PATTERNS = [
 const KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
 const KEY_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
 
+// A line of a key body: Base64 only, perhaps indented, in quotes, with an
+// escaped line break or a comma at the end, as in YAML, JSON or source code.
+const BASE64_LINE =
+  /^\s*["'`]?([A-Za-z0-9+/]+={0,2})(?:\\n)?["'`]?\s*(?:[,;+]\s*)?$/;
+
+/** The Base64 text of a line, or `null` if the line is something else. */
+function base64Of(content) {
+  return BASE64_LINE.exec(content)?.[1] ?? null;
+}
+
+// The full lines of a PEM body are 64 characters long, some formats use 76.
+// Two or more of them in a row are masked even without BEGIN and END: a
+// pull request that changes a line in the middle of a key shows only body
+// lines. Other Base64 blocks, such as a public certificate, are masked as
+// well; the model does not need them.
+const isBodyLine = (content) => {
+  const text = base64Of(content);
+  return text !== null && text.length >= 60 && text.length <= 76;
+};
+
+// After a hunk that ended inside a key, the next hunk may still be inside
+// it. A line counts as part of the key if it is Base64 and does not look
+// like a word, so that ordinary code ends the key right away.
+const isKeyRest = (content) => {
+  const text = base64Of(content);
+  return (
+    text !== null &&
+    text.length <= 76 &&
+    (text.length >= 20 || /[0-9+/=]/.test(text))
+  );
+};
+
 /**
  * Replaces strings that look like secrets in the hunks of one file.
  *
  * The number of lines and their numbers stay the same, so the lines the
  * model may comment on do not move. A private key block is replaced line by
  * line, from its BEGIN line to its END line, and up to the end of the hunk
- * if the END line is missing. Every kind of line is masked, also removed and
- * unchanged ones: they are sent to the model as well.
+ * if the END line is missing. The next hunk continues the key as long as its
+ * lines look like the rest of a key. Runs of two or more lines that look
+ * like a key body are replaced as well, with or without BEGIN and END. Every
+ * kind of line is masked, also removed and unchanged ones: they are sent to
+ * the model as well.
  *
  * This is a pure function: it does not change the hunks it is given.
  *
@@ -640,13 +675,26 @@ function maskSecrets(hunks) {
     return result;
   };
 
+  // Set when a hunk ends inside a key, checked at the start of the next one.
+  let openKey = false;
+
   const result = hunks.map((hunk) => {
     let inKey = false;
-    const lines = hunk.lines.map((line) => {
+    let continuing = openKey;
+    const contents = hunk.lines.map((line) => {
       let content = line.content;
+      if (continuing) {
+        const end = KEY_END.exec(content);
+        if (end) {
+          continuing = false;
+          return SECRET_PLACEHOLDER + content.slice(end.index + end[0].length);
+        }
+        if (isKeyRest(content)) return SECRET_PLACEHOLDER;
+        continuing = false;
+      }
       if (inKey) {
         const end = KEY_END.exec(content);
-        if (!end) return { ...line, content: SECRET_PLACEHOLDER };
+        if (!end) return SECRET_PLACEHOLDER;
         inKey = false;
         content = SECRET_PLACEHOLDER + content.slice(end.index + end[0].length);
       } else {
@@ -667,8 +715,25 @@ function maskSecrets(hunks) {
           }
         }
       }
-      return { ...line, content: maskTokens(content) };
+      return content;
     });
+    openKey = inKey || continuing;
+
+    // Runs of key body lines that no BEGIN line announced.
+    for (let start = 0; start < contents.length;) {
+      let end = start;
+      while (end < contents.length && isBodyLine(contents[end])) end += 1;
+      if (end - start >= 2) {
+        masked += 1;
+        contents.fill(SECRET_PLACEHOLDER, start, end);
+      }
+      start = Math.max(end, start + 1);
+    }
+
+    const lines = hunk.lines.map((line, index) => ({
+      ...line,
+      content: maskTokens(contents[index]),
+    }));
     return { ...hunk, section: maskTokens(hunk.section), lines };
   });
 
