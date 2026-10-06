@@ -1,5 +1,8 @@
 import OpenAI from "openai";
+import { AiError } from "./error.js";
 import { parseModel } from "./model.js";
+
+export { AiError };
 
 // Fixed on purpose. The SDK would take the address, the organisation and the
 // project from variables of the environment if they were left out, and it
@@ -18,28 +21,6 @@ const safe = (value) =>
   typeof value === "string" && IDENTIFIER.test(value) ? value : "unknown";
 
 /**
- * An error of the AI client. The message says what to do. It never contains
- * text from the answer of the API: OpenAI repeats the first and the last
- * characters of an invalid key in its own message.
- */
-export class AiError extends Error {
-  name = "AiError";
-
-  /**
-   * @param {"auth" | "permission" | "model" | "quota" | "rate_limit" | "server" | "timeout" | "network" | "request" | "response"} kind
-   *   Tells a caller whether other requests are still worth a try: after
-   *   `auth`, `permission`, `model` and `quota`, they are not.
-   * @param {string} message
-   * @param {number | null} [status] HTTP status, if there was an answer.
-   */
-  constructor(kind, message, status = null) {
-    super(message);
-    this.kind = kind;
-    this.status = status;
-  }
-}
-
-/**
  * Creates the client for the review model.
  *
  * Nothing in here writes the prompt or the answer anywhere: both contain code
@@ -51,7 +32,12 @@ export class AiError extends Error {
  * @param {Pick<typeof import("@actions/core"), "info" | "debug">} options.core
  * @param {typeof OpenAI} [options.OpenAIClass] Replacement for the SDK, used by tests.
  * @returns {{
- *   complete: (prompt: { system: string, user: string }) => Promise<{
+ *   complete: (prompt: {
+ *     system: string,
+ *     user: string,
+ *     responseFormat?: object,
+ *     maxOutputTokens?: number,
+ *   }) => Promise<{
  *     content: string,
  *     finishReason: string | null,
  *     usage: { inputTokens: number, outputTokens: number, totalTokens: number } | null,
@@ -80,7 +66,7 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
   // following requests leave it out right away.
   let sendTemperature = true;
 
-  async function send(messages) {
+  async function send(messages, extra) {
     // Several requests can be on their way at once, and each of them is
     // refused on its own. So the refusal is matched to what this request
     // carried, not to what the flag says by now.
@@ -89,6 +75,7 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
       return await sdk.chat.completions.create({
         model: modelName,
         messages,
+        ...extra,
         ...(withTemperature ? { temperature: TEMPERATURE } : {}),
       });
     } catch (error) {
@@ -99,22 +86,45 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
           "The model does not accept `temperature`. The request is repeated without it.",
         );
       }
-      return sdk.chat.completions.create({ model: modelName, messages });
+      return sdk.chat.completions.create({
+        model: modelName,
+        messages,
+        ...extra,
+      });
     }
   }
 
   return {
-    async complete({ system, user }) {
+    async complete({ system, user, responseFormat, maxOutputTokens }) {
       if (typeof system !== "string" || typeof user !== "string") {
         throw new TypeError("The prompt needs a system text and a user text.");
       }
+      if (
+        maxOutputTokens !== undefined &&
+        !(Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0)
+      ) {
+        throw new TypeError(
+          "The output limit must be a positive whole number.",
+        );
+      }
+      const extra = {
+        ...(responseFormat === undefined
+          ? {}
+          : { response_format: responseFormat }),
+        ...(maxOutputTokens === undefined
+          ? {}
+          : { max_completion_tokens: maxOutputTokens }),
+      };
 
       let response;
       try {
-        response = await send([
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ]);
+        response = await send(
+          [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          extra,
+        );
       } catch (error) {
         const translated = translate(error, modelName, core);
         // Anything else is a defect of this action, not a problem of the API.
@@ -136,7 +146,23 @@ function rejectsTemperature(error) {
 function read(response, requestedModel, core) {
   const choice = response?.choices?.[0];
   const content = choice?.message?.content;
-  if (typeof content !== "string" || content === "") {
+  // The text of a refusal is output of the model and may repeat code from the
+  // pull request, so it is neither logged nor put into the error.
+  if (typeof choice?.message?.refusal === "string" && choice.message.refusal) {
+    throw new AiError(
+      "refusal",
+      `The model "${requestedModel}" refused to review the changes, so the review is incomplete. Run the workflow again, or choose another model with the input \`openai-model\`.`,
+    );
+  }
+  const finishReason =
+    typeof choice?.finish_reason === "string" ? choice.finish_reason : null;
+  // A cut-off or filtered answer can be empty. It is handed on with its
+  // finish reason, so that the caller reports what happened and not just
+  // "no text".
+  const stoppedEarly =
+    finishReason === "length" || finishReason === "content_filter";
+  const text = typeof content === "string" ? content : "";
+  if (text === "" && !stoppedEarly) {
     throw new AiError(
       "response",
       "OpenAI answered without any text. The model may have refused the request or the answer was cut off. Run the workflow again.",
@@ -173,9 +199,8 @@ function read(response, requestedModel, core) {
   );
 
   return {
-    content,
-    finishReason:
-      typeof choice.finish_reason === "string" ? choice.finish_reason : null,
+    content: text,
+    finishReason,
     usage,
     model,
     requestId,
@@ -271,6 +296,22 @@ function byStatus(error, model) {
     return new AiError(
       "server",
       `OpenAI could not answer (${http}), also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+      status,
+    );
+  }
+  // The model cannot produce Structured Outputs. There is no fallback to a
+  // weaker format on purpose: the review needs the schema. OpenAI names the
+  // same parameter when it dislikes the schema itself (`invalid_json_schema`).
+  // That is a defect of this action, not a setting, so it stays a plain
+  // refused request.
+  if (
+    status === 400 &&
+    error.param === "response_format" &&
+    error.code !== "invalid_json_schema"
+  ) {
+    return new AiError(
+      "model",
+      `The model "${model}" does not support Structured Outputs (${http}), which the review format needs. Set the input \`openai-model\` to a model that does, such as "gpt-4o-mini" or "gpt-4.1".`,
       status,
     );
   }

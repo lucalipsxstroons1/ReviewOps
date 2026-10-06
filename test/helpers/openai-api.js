@@ -7,6 +7,7 @@ export function completion({
   finishReason = "stop",
   usage = { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 },
   requestId = "req_test_123",
+  refusal = null,
   extra = {},
 } = {}) {
   return {
@@ -20,7 +21,7 @@ export function completion({
         {
           index: 0,
           finish_reason: finishReason,
-          message: { role: "assistant", content, refusal: null },
+          message: { role: "assistant", content, refusal },
         },
       ],
       usage,
