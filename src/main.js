@@ -11,6 +11,7 @@ import { createExcludeFilter } from "./exclude.js";
 import { readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
+import { applyLimits, parseLimits } from "./limits.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
 
@@ -55,8 +56,10 @@ export async function run({
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
-    // A pattern that cannot be used fails the run here, before any request.
+    // A pattern or a limit that cannot be used fails the run here, before
+    // any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
+    const limits = parseLimits(inputs);
 
     core.info("ReviewOps started.");
 
@@ -81,16 +84,22 @@ export async function run({
 
     // Line numbers are calculated here and never taken from the model.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
-    // The list below is cut off, so the order matters: unreadable diffs are
-    // the files someone has to look at, excluded files are a decision of
-    // this action, the rest could not be reviewed anyway.
+
+    // Large pull requests are cut to the limits, in the order of GitHub.
+    const { selected, overLimit, usedChars } = applyLimits(diffs, limits);
+
+    // The list below is cut off, so the order matters: unreadable diffs and
+    // files that the limits left out are the ones someone has to look at,
+    // excluded files are a decision of this action, the rest could not be
+    // reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...overLimit,
       ...excluded,
       ...listing.skipped,
     ];
     core.info(
-      `Found ${diffs.length + skipped.length} changed files: ${diffs.length} to review, ${skipped.length} skipped.`,
+      `Found ${selected.length + skipped.length} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
@@ -109,6 +118,11 @@ export async function run({
         core.debug(`${printable(path)}: ${detail}`);
       }
     }
+    if (overLimit.length > 0) {
+      core.warning(
+        `Files left out because of the limits: ${overLimit.length}. They are not reviewed. The limits are max-files: ${limits.maxFiles} and max-diff-chars: ${limits.maxDiffChars}.`,
+      );
+    }
     if (listing.truncated) {
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
@@ -117,20 +131,21 @@ export async function run({
 
     // Everything that costs money or posts something comes after this
     // point: a pull request without reviewable files ends here.
-    if (diffs.length === 0) {
+    if (selected.length === 0) {
       core.notice(
         "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
       );
       return;
     }
 
-    const addedLines = diffs.reduce(
+    const addedLines = selected.reduce(
       (sum, diff) => sum + diff.commentableLines.length,
       0,
     );
     core.info(
-      `Parsed the diffs of ${diffs.length} files: ${addedLines} added lines can receive comments.`,
+      `Parsed the diffs of ${selected.length} files: ${addedLines} added lines can receive comments.`,
     );
+    core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));

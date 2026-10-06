@@ -145,13 +145,56 @@ test("the bundle skips a file whose diff cannot be read", async (t) => {
 test("the bundle loads more than 100 files completely", async (t) => {
   const api = await startGitHubApi(t, { files: apiFiles(120) });
 
-  const result = await runBundle(pullRequestRun(api));
+  // The limit is raised: this test is about loading, not about the limit.
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    "INPUT_MAX-FILES": "500",
+  });
 
   assert.equal(result.status, 0);
   assert.match(
     result.stdout,
     /^Found 120 changed files: 120 to review, 0 skipped\.$/m,
   );
+});
+
+test("the bundle leaves out the files over the limit and names them", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(120) });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 120 changed files: 50 to review, 70 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped src\/file-50\.js: over the limit of 50 files \(max-files\)\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^::warning::Files left out because of the limits: 70\./m,
+  );
+  assert.match(result.stdout, /^Diff size: \d+ of 200000 characters\.$/m);
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle fails the step when a limit is not a positive number", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    "INPUT_MAX-FILES": "0",
+  });
+
+  assert.equal(result.status, 1);
+  assert.ok(
+    result.stdout.includes(
+      '::error::Input `max-files` must be a whole number from 1 to 999999999, but is "0".',
+    ),
+  );
+  assert.deepEqual(api.requests, []);
 });
 
 test("the bundle fails the step with status and hint on an API error", async (t) => {
