@@ -52,4 +52,4 @@ jobs:
         run: npm run eval
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_MODEL: gpt-4.1

@@ -189,7 +189,7 @@ test("eval.yml: passes the key only to the step that needs it", () => {
 });
 
 test("eval.yml: hands the model to the program through the environment, not the command", () => {
-  assert.equal(evalStep.env.EVAL_MODEL, "${{ inputs.model }}");
+  assert.equal(evalStep.env.EVAL_MODEL, "gpt-4.1");
   for (const step of evalSteps) {
     assert.doesNotMatch(step.run ?? "", /\$\{\{/);
   }
