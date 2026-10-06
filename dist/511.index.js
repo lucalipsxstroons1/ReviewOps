@@ -1089,7 +1089,7 @@ function parseReview({ content, finishReason }) {
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-const PROMPT_VERSION = 8;
+const PROMPT_VERSION = 9;
 
 // The same value is written into action.yml. A test keeps them equal.
 const DEFAULT_LANGUAGE = "en";
@@ -1259,7 +1259,7 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "- Comment only on added lines. Take the line number from the diff exactly as it is shown. Never calculate a number and never use the line of a removed or unchanged line.",
     "- Use the path exactly as it is written in the `path` attribute of `<file>`.",
-    "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does.",
+    "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does: assume that a function, prop or value from outside the diff behaves correctly unless the diff shows otherwise, for example that a function passed in as a prop is stable or that a function that receives an `AbortSignal` honours it.",
     "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line where it starts.",
     "- Do not ask for tests, documentation or comments, and do not remark on what the change does.",
     "- An empty list of findings is a good answer when nothing is wrong. Say so in the summary.",

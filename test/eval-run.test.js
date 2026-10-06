@@ -68,3 +68,22 @@ test("refuses a model name that cannot be one before any request and keeps the k
     if (line.includes(key)) assert.ok(line.startsWith("::add-mask::"), line);
   }
 });
+
+test("refuses a language that is not one of the codes before any request and keeps the key out of the output", () => {
+  const key = "TESTKEY-not-a-real-key-987654";
+  const result = runEval({
+    OPENAI_API_KEY: key,
+    EVAL_LANGUAGE: "klingon",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::Input `language` must be one of en, de,.*but is "klingon"\./m,
+  );
+  assert.equal(result.stderr, "");
+  for (const line of result.stdout.split("\n")) {
+    if (line.includes(key)) assert.ok(line.startsWith("::add-mask::"), line);
+  }
+});

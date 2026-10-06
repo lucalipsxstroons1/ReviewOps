@@ -204,8 +204,13 @@ test("eval.yml: passes the key only to the step that needs it", () => {
   assert.equal("env" in evaluation.config, false);
 });
 
-test("eval.yml: hands the model to the program through the environment, not the command", () => {
+test("eval.yml: hands the model and the language to the program through the environment, not the command", () => {
   assert.equal(evalStep.env.EVAL_MODEL, "${{ inputs.model }}");
+  assert.equal(evalStep.env.EVAL_LANGUAGE, "${{ inputs.language }}");
+  assert.deepEqual(
+    Object.keys(evaluation.config.on.workflow_dispatch.inputs).sort(),
+    ["language", "model"],
+  );
   for (const step of evalSteps) {
     assert.doesNotMatch(step.run ?? "", /\$\{\{/);
   }

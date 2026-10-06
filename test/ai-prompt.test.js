@@ -192,6 +192,12 @@ test("tells the model the rules for the lines and for doubt", () => {
     /Take the line number from the diff exactly as it is shown/,
   );
   assert.match(prompt, /When in doubt, report nothing/);
+  // Both false alarms on clean-react in #47 guessed about code outside the
+  // diff: whether a prop is stable and whether a signal is honoured.
+  assert.match(
+    prompt,
+    /assume that a function, prop or value from outside the diff behaves correctly unless the diff shows otherwise/,
+  );
   assert.match(prompt, /concrete suggestion/);
   assert.match(prompt, /If more than one fits, use "security"/);
   assert.match(prompt, /linter or a formatter/);
@@ -318,6 +324,7 @@ const PROMPT_HASHES = {
   6: "0ac1ee2bae229652a5ddb004e6dcabb52b966536a8392b32c8edb42e83cb7cb9",
   7: "6f2c536387791ed4a61ec371a5f27bfaa4d3531aeae0316e46bc58a837d132c7",
   8: "117abf81c7b37ef4a96b4d3c1bbaccc7d81b1287d0d8526423ffcf8b32d4bc25",
+  9: "418bbb35719e173293cdb1c82a692e11a12e47007fb669021651a36d85a395cb",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {
