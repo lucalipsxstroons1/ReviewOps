@@ -21,12 +21,22 @@ export const MAX_LISTED_FILES = 20;
 // and the list is meant to be read.
 const MAX_PATH_CHARS = 200;
 
+// The texts of a finding are cut before they are rendered, so the marker and
+// the AI label always stay in a comment. Rendering makes a text at most
+// seven times longer (an invisible character becomes an escaped
+// backslash-u code), so even then a comment stays below MAX_BODY_CHARS.
+export const MAX_TITLE_CHARS = 200;
+export const MAX_TEXT_CHARS = 4000;
+
 const SEVERITY_LABELS = Object.freeze({
   critical: "🔴 Critical",
   major: "🟠 Major",
   minor: "🟡 Minor",
   info: "🔵 Info",
 });
+
+// Between two blocks of a body: an empty line.
+const BLOCK_SEPARATOR = "\n\n";
 
 // What a status means when a review is posted.
 const POST_REVIEW_HINTS = Object.freeze({
@@ -53,10 +63,8 @@ export function aiLabel(model) {
  * @returns {string}
  */
 export function commentBody(finding, model) {
-  return capLength(
-    [REVIEW_MARKER, findingMarkdown(finding), "---", aiLabel(model)].join(
-      "\n\n",
-    ),
+  return [REVIEW_MARKER, findingMarkdown(finding), "---", aiLabel(model)].join(
+    "\n\n",
   );
 }
 
@@ -110,28 +118,14 @@ export function reviewBody({
   if (skipped.length > 0) tail.push(skippedList(skipped));
   tail.push("---", aiLabel(model));
 
-  const compose = (summaryCount, findingCount, notes) => {
-    const blocks = [...head];
-    blocks.push(...summaries.slice(0, summaryCount).map(modelMarkdown));
-    blocks.push(findingsLine.join(" "));
-    if (listed.length > 0) {
-      blocks.push(listHeading);
-      blocks.push(
-        ...listed
-          .slice(0, findingCount)
-          .map((finding) => locatedFinding(finding)),
-      );
-    }
-    blocks.push(...notes);
-    blocks.push(...tail);
-    return blocks.join("\n\n");
-  };
+  // Every block is rendered once. Cutting only counts lengths and joins the
+  // chosen blocks at the end, so it stays linear in the number of blocks.
+  const summaryBlocks = summaries.map(modelMarkdown);
+  const findingBlocks = listed.map(locatedFinding);
+  const summaryLengths = prefixLengths(summaryBlocks);
+  const findingLengths = prefixLengths(findingBlocks);
 
-  // Too long a text is cut where it hurts least: first the summaries, which
-  // grow with the number of requests, then findings from the end.
-  let summaryCount = summaries.length;
-  let findingCount = listed.length;
-  const notes = () => {
+  const notesFor = (summaryCount, findingCount) => {
     const result = [];
     if (summaryCount < summaries.length) {
       result.push(
@@ -145,16 +139,56 @@ export function reviewBody({
     }
     return result;
   };
-  let text = compose(summaryCount, findingCount, notes());
-  while (text.length > MAX_BODY_CHARS && summaryCount > 0) {
+  const fixed = [
+    ...head,
+    findingsLine.join(" "),
+    ...(listed.length > 0 ? [listHeading] : []),
+    ...tail,
+  ];
+  const fixedLength = fixed.reduce((sum, block) => sum + block.length, 0);
+  const lengthOf = (summaryCount, findingCount) => {
+    const notes = notesFor(summaryCount, findingCount);
+    const blocks = fixed.length + summaryCount + findingCount + notes.length;
+    return (
+      fixedLength +
+      summaryLengths[summaryCount] +
+      findingLengths[findingCount] +
+      notes.reduce((sum, note) => sum + note.length, 0) +
+      (blocks - 1) * BLOCK_SEPARATOR.length
+    );
+  };
+
+  // Too long a text is cut where it hurts least: first the summaries, which
+  // grow with the number of requests, then findings from the end.
+  let summaryCount = summaries.length;
+  let findingCount = listed.length;
+  while (
+    lengthOf(summaryCount, findingCount) > MAX_BODY_CHARS &&
+    summaryCount > 0
+  ) {
     summaryCount -= 1;
-    text = compose(summaryCount, findingCount, notes());
   }
-  while (text.length > MAX_BODY_CHARS && findingCount > 0) {
+  while (
+    lengthOf(summaryCount, findingCount) > MAX_BODY_CHARS &&
+    findingCount > 0
+  ) {
     findingCount -= 1;
-    text = compose(summaryCount, findingCount, notes());
   }
-  return capLength(text);
+
+  const blocks = [...head, ...summaryBlocks.slice(0, summaryCount)];
+  blocks.push(findingsLine.join(" "));
+  if (listed.length > 0) {
+    blocks.push(listHeading, ...findingBlocks.slice(0, findingCount));
+  }
+  blocks.push(...notesFor(summaryCount, findingCount), ...tail);
+  return capLength(blocks.join(BLOCK_SEPARATOR));
+}
+
+/** `result[n]` is the summed length of the first `n` blocks. */
+function prefixLengths(blocks) {
+  const result = [0];
+  for (const block of blocks) result.push(result.at(-1) + block.length);
+  return result;
 }
 
 /**
@@ -290,14 +324,26 @@ function reviewIdOf(response) {
 
 /** Severity, category, title, comment and suggestion of a finding. */
 function findingMarkdown(finding, location = "") {
-  const title = plainText(finding.title.replace(/\s+/g, " ").trim());
+  const title = shorten(
+    finding.title.replace(/\s+/g, " ").trim(),
+    MAX_TITLE_CHARS,
+  );
   return [
     `**${SEVERITY_LABELS[finding.severity]}** · ${inlineCode(finding.category)}${location}`,
-    `**${title}**`,
-    modelMarkdown(finding.comment),
+    `**${plainText(title)}**`,
+    modelMarkdown(shorten(finding.comment, MAX_TEXT_CHARS)),
     "**Suggestion**",
-    modelMarkdown(finding.suggestion),
+    modelMarkdown(shorten(finding.suggestion, MAX_TEXT_CHARS)),
   ].join("\n\n");
+}
+
+/** Cuts a text after `max` characters, without splitting a surrogate pair. */
+function shorten(text, max) {
+  if (text.length <= max) return text;
+  // A high surrogate at the end would lose the half that follows it.
+  const last = text.charCodeAt(max - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? max - 1 : max;
+  return `${text.slice(0, end)}…`;
 }
 
 /** A finding in the review text, with the place it points at. */

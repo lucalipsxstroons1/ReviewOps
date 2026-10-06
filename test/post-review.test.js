@@ -4,6 +4,8 @@ import MarkdownIt from "markdown-it";
 import {
   MAX_BODY_CHARS,
   MAX_LISTED_FILES,
+  MAX_TEXT_CHARS,
+  MAX_TITLE_CHARS,
   REVIEW_MARKER,
   aiLabel,
   commentBody,
@@ -122,10 +124,48 @@ test("a comment puts a title with line breaks on one line", () => {
   assert.match(body, /^\*\*First second\*\*$/m);
 });
 
-test("a comment is never longer than GitHub accepts", () => {
-  const body = commentBody(finding({ comment: "x".repeat(70000) }), "gpt-4.1");
+test("a comment keeps the marker and the AI label even with very long texts", () => {
+  const invisible = String.fromCodePoint(0x200b);
+  for (const text of [
+    "x".repeat(70000),
+    invisible.repeat(70000),
+    "`".repeat(70000),
+  ]) {
+    const body = commentBody(
+      finding({ title: text, comment: text, suggestion: text }),
+      "gpt-4.1",
+    );
 
-  assert.ok(body.length <= MAX_BODY_CHARS);
+    assert.ok(body.length <= MAX_BODY_CHARS, String(body.length));
+    assert.ok(body.startsWith(`${REVIEW_MARKER}\n`));
+    assert.ok(body.endsWith(aiLabel("gpt-4.1")));
+    assert.match(body, /…/);
+  }
+});
+
+test("a comment cuts long texts at their limits and keeps short ones whole", () => {
+  const body = commentBody(
+    finding({
+      title: "t".repeat(MAX_TITLE_CHARS + 50),
+      comment: "c".repeat(MAX_TEXT_CHARS + 50),
+      suggestion: "short",
+    }),
+    "gpt-4.1",
+  );
+
+  assert.match(body, new RegExp(`\\*\\*t{${MAX_TITLE_CHARS}}…\\*\\*`));
+  assert.match(body, new RegExp(`^c{${MAX_TEXT_CHARS}}…$`, "m"));
+  assert.match(body, /^short$/m);
+});
+
+test("a comment does not split a character outside the basic plane", () => {
+  const emoji = String.fromCodePoint(0x1f600);
+  const body = commentBody(
+    finding({ comment: "x".repeat(MAX_TEXT_CHARS - 1) + emoji.repeat(10) }),
+    "gpt-4.1",
+  );
+
+  assert.ok(body.isWellFormed());
 });
 
 // --- reviewBody() --------------------------------------------------------------
@@ -231,6 +271,21 @@ test("the review text leaves out summaries first, then findings, to fit", () => 
   assert.ok(body.length <= MAX_BODY_CHARS, String(body.length));
   assert.match(body, /20 summaries are left out/);
   assert.match(body, /more findings are not shown: they do not fit/);
+  assert.ok(body.endsWith(aiLabel("gpt-4.1")));
+});
+
+test("the review text stays fast with many summaries and findings", () => {
+  const start = performance.now();
+  const body = bodyWith({
+    summaries: Array(500).fill("A summary of one request. ".repeat(40)),
+    inline: [],
+    listed: Array.from({ length: 2000 }, (_, index) =>
+      finding({ line: index + 1, comment: "word ".repeat(400) }),
+    ),
+  });
+
+  assert.ok(performance.now() - start < 2000);
+  assert.ok(body.length <= MAX_BODY_CHARS);
   assert.ok(body.endsWith(aiLabel("gpt-4.1")));
 });
 
