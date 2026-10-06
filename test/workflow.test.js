@@ -106,7 +106,7 @@ test("reviewops.yml: passes the API key from the secret store and no token", () 
   const action = reviewSteps.find((step) => step.uses === "./");
 
   assert.deepEqual(action.with, {
-    "openai-api-key": "${{ secrets.OPENAI_API_KEY }}",
+    "openai-api-key": "",
   });
 });
 

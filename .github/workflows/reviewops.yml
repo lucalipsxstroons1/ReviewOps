@@ -34,4 +34,5 @@ jobs:
       - name: Review the pull request
         uses: ./
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # Only on this throwaway branch: no key, as in a run without secrets.
+          openai-api-key: ""
