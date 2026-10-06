@@ -56,16 +56,51 @@ export function aiLabel(model) {
 }
 
 /**
+ * The line that carries the fingerprint of the commented line. It is the
+ * second line of an inline comment, right below the marker. `readHistory()`
+ * reads it back with a strict pattern.
+ *
+ * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
+ * @returns {string}
+ */
+export const fingerprintLine = (fingerprint) =>
+  `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+
+/**
+ * The line that marks a review as not complete: files were left out or a
+ * request failed. It stands right below the marker. A later run does not
+ * start at such a review, so what was missed is checked again.
+ */
+export const INCOMPLETE_LINE = "<!-- reviewops-incomplete -->";
+
+/**
+ * The first block of a body: the marker, then the line for an incomplete
+ * review and the fingerprints of the findings that stand in the text. A later
+ * run reads only these lines, directly below the marker, never the text of
+ * the model further down.
+ *
+ * @param {{ incomplete: boolean, fingerprints: (string | null)[] }} options
+ * @returns {string}
+ */
+function reviewHead({ incomplete, fingerprints }) {
+  return [
+    REVIEW_MARKER,
+    ...(incomplete ? [INCOMPLETE_LINE] : []),
+    ...fingerprints.filter(Boolean).map(fingerprintLine),
+  ].join("\n");
+}
+
+/**
  * The body of one inline comment.
  *
  * @param {import("../ai/schema.js").Finding} finding
  * @param {string} model
+ * @param {string | null} [fingerprint] Fingerprint of the commented line.
  * @returns {string}
  */
-export function commentBody(finding, model) {
-  return [REVIEW_MARKER, findingMarkdown(finding), "---", aiLabel(model)].join(
-    "\n\n",
-  );
+export function commentBody(finding, model, fingerprint = null) {
+  const head = reviewHead({ incomplete: false, fingerprints: [fingerprint] });
+  return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
 
 /**
@@ -84,6 +119,12 @@ export function commentBody(finding, model) {
  *   were not reviewed, with the reason.
  * @param {boolean} [options.fallback] GitHub rejected the inline comments,
  *   so every finding is listed.
+ * @param {boolean} [options.incomplete] Not everything was reviewed.
+ * @param {(string | null)[]} [options.fingerprints] Fingerprints of the
+ *   findings in `listed`, in their order.
+ * @param {string | null} [options.since] The commit this review starts at,
+ *   when only the changes since an earlier review were checked. It must be a
+ *   full commit SHA.
  * @returns {string} At most {@link MAX_BODY_CHARS} characters.
  */
 export function reviewBody({
@@ -95,6 +136,9 @@ export function reviewBody({
   maxComments,
   skipped,
   fallback = false,
+  incomplete = false,
+  fingerprints = [],
+  since = null,
 }) {
   const shown = [...inline, ...listed];
   const counts = SEVERITIES.map(
@@ -102,7 +146,11 @@ export function reviewBody({
       `${shown.filter((finding) => finding.severity === severity).length} ${severity}`,
   ).join(", ");
 
-  const head = [REVIEW_MARKER, "### ReviewOps"];
+  const head = [reviewHead({ incomplete, fingerprints }), "### ReviewOps"];
+  // The SHA was checked when it was read: it is 40 hex characters.
+  if (since !== null) {
+    head.push(`Reviewed the changes since ${inlineCode(since.slice(0, 7))}.`);
+  }
   const findingsLine = [`**Findings:** ${shown.length} (${counts}).`];
   if (overLimit > 0) {
     findingsLine.push(
@@ -205,11 +253,17 @@ function prefixLengths(blocks) {
  * @param {string[]} options.summaries
  * @param {{
  *   inline: import("../ai/schema.js").Finding[],
+ *   fingerprints?: (string | null)[],
  *   unplaced: import("../ai/schema.js").Finding[],
+ *   unplacedFingerprints?: (string | null)[],
  *   dropped: { overLimit: number },
  * }} options.selection What `selectFindings()` returned.
  * @param {number} options.maxComments
  * @param {{ path: string, reason: string }[]} options.skipped
+ * @param {boolean} [options.incomplete] Files were left out or a request
+ *   failed: a later run must not start at this review.
+ * @param {string | null} [options.since] The commit of the earlier review
+ *   when only the changes since then were checked.
  * @returns {Promise<{ reviewId: number | null, inlineComments: number, fallback: boolean }>}
  * @throws {Error} When GitHub accepts no review, with a message that says
  *   what to do.
@@ -222,14 +276,24 @@ export async function postReview({
   selection,
   maxComments,
   skipped,
+  incomplete = false,
+  since = null,
 }) {
-  const { inline, unplaced, dropped } = selection;
+  const {
+    inline,
+    unplaced,
+    dropped,
+    fingerprints = [],
+    unplacedFingerprints = [],
+  } = selection;
   const common = {
     model,
     summaries,
     overLimit: dropped.overLimit,
     maxComments,
     skipped,
+    incomplete,
+    since,
   };
   const request = (body, comments) =>
     octokit.rest.pulls.createReview({
@@ -244,16 +308,21 @@ export async function postReview({
       ...(comments.length > 0 ? { comments } : {}),
     });
 
-  const comments = inline.map((finding) => ({
+  const comments = inline.map((finding, index) => ({
     path: finding.path,
     line: finding.line,
     side: "RIGHT",
-    body: commentBody(finding, model),
+    body: commentBody(finding, model, fingerprints[index] ?? null),
   }));
 
   try {
     const response = await request(
-      reviewBody({ ...common, inline, listed: unplaced }),
+      reviewBody({
+        ...common,
+        inline,
+        listed: unplaced,
+        fingerprints: unplacedFingerprints,
+      }),
       comments,
     );
     return {
@@ -273,6 +342,7 @@ export async function postReview({
         ...common,
         inline: [],
         listed: [...inline, ...unplaced],
+        fingerprints: [...fingerprints, ...unplacedFingerprints],
         fallback: true,
       }),
       [],

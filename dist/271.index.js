@@ -1,8 +1,8 @@
-export const id = 22;
-export const ids = [22];
+export const id = 271;
+export const ids = [271];
 export const modules = {
 
-/***/ 5022:
+/***/ 7271:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -1652,13 +1652,72 @@ function exclude_anchor(pattern) {
   return fromRoot || glob.includes("/") ? glob : `**/${glob}`;
 }
 
+// EXTERNAL MODULE: external "node:crypto"
+var external_node_crypto_ = __webpack_require__(7598);
+;// CONCATENATED MODULE: ./src/fingerprint.js
+
+
+// Hex characters of the SHA-256 hash that are kept. 64 bits are far more than
+// the few hundred comments of a pull request need.
+const FINGERPRINT_LENGTH = 16;
+
+const GAPS = /\s+/g;
+
+/**
+ * The fingerprint of one line of code: the first 16 hex characters of the
+ * SHA-256 hash over the path, the text of the line and the text of the line
+ * before it, with runs of white space reduced to one space.
+ *
+ * The line before tells equal lines apart (a closing brace, a masked secret)
+ * as long as their surroundings differ. The fingerprint stays the same when
+ * the line moves and changes when the text of the line or of its predecessor
+ * changes. It is taken from the masked diff, so it never depends on a secret,
+ * and it reveals nothing about the line.
+ *
+ * @param {string} path
+ * @param {string} content The text of the line, without the leading `+`.
+ * @param {string} [previous] The text of the line before it in the new file,
+ *   empty at the start of a hunk.
+ * @returns {string}
+ */
+function lineFingerprint(path, content, previous = "") {
+  return (0,external_node_crypto_.createHash)("sha256")
+    .update(JSON.stringify([path, normalize(content), normalize(previous)]))
+    .digest("hex")
+    .slice(0, FINGERPRINT_LENGTH);
+}
+
+const normalize = (text) => text.replace(GAPS, " ").trim();
+
+/**
+ * The fingerprint of every line of a file that has a number in the new file,
+ * added lines and context lines, by line number.
+ *
+ * @param {{ path: string, hunks?: { lines: { type: string, line: number | null, content: string }[] }[] }} file
+ *   A parsed and masked file.
+ * @returns {Map<number, string>}
+ */
+function lineFingerprintsOf(file) {
+  const result = new Map();
+  for (const hunk of file.hunks ?? []) {
+    let previous = "";
+    for (const { line, content } of hunk.lines) {
+      if (line === null) continue;
+      result.set(line, lineFingerprint(file.path, content, previous));
+      previous = content;
+    }
+  }
+  return result;
+}
+
 ;// CONCATENATED MODULE: ./src/findings.js
+
 
 
 // A text made of nothing but white space and invisible format characters
 // (such as a zero-width space) cannot become a comment.
 const BLANK = /^[\s\p{Cf}]*$/u;
-const GAPS = /[\s\p{Cf}]+/gu;
+const findings_GAPS = /[\s\p{Cf}]+/gu;
 
 // "critical" first, "info" last.
 const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
@@ -1674,10 +1733,16 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  *    dropped: the model never saw that file. The path must match exactly.
  * 3. Of the findings with the same path, line and title (compared without
  *    case and extra white space) only the most serious one is kept.
- * 4. The rest is sorted by severity, most serious first. Findings of the same
+ * 4. When only the new lines are reviewed (`newLines`), a finding at an added
+ *    line must be at a new one. A finding for the text of the review must be
+ *    in a file with a new line and at a line of the diff (it has a
+ *    fingerprint); otherwise it is dropped.
+ * 5. A finding at a line whose fingerprint an earlier comment or review of
+ *    this action carries (`known`) is dropped: it was reported already.
+ * 6. The rest is sorted by severity, most serious first. Findings of the same
  *    severity keep the order of the requests and of the model.
- * 5. Only the first `maxComments` findings are shown, the others are counted.
- * 6. A shown finding whose line is an added line of its file becomes an inline
+ * 7. Only the first `maxComments` findings are shown, the others are counted.
+ * 8. A shown finding whose line is an added line of its file becomes an inline
  *    comment (`inline`). Any other line cannot carry a comment on GitHub, so
  *    the finding goes into the text of the review (`unplaced`).
  *
@@ -1692,26 +1757,52 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * }[]} options.reviews The reviews of the requests, as `reviewInBatches()`
  *   returns them.
  * @param {number} options.maxComments How many findings the review shows.
+ * @param {Map<string, Set<number>> | null} [options.newLines] The added lines
+ *   that are new since the last review, by path. `null` reviews the whole
+ *   pull request.
+ * @param {Set<string>} [options.known] Fingerprints of the lines that earlier
+ *   comments of this action are at.
  * @returns {{
  *   inline: import("./ai/schema.js").Finding[],
+ *   fingerprints: (string | null)[],
  *   unplaced: import("./ai/schema.js").Finding[],
+ *   unplacedFingerprints: (string | null)[],
  *   dropped: {
  *     empty: number,
  *     unknownPath: number,
  *     duplicate: number,
+ *     notNew: number,
+ *     known: number,
  *     overLimit: number,
  *   },
  * }} `inline` and `unplaced` together hold at most `maxComments` findings,
- *   each list sorted by severity.
+ *   each list sorted by severity. A fingerprint belongs to the finding at the
+ *   same place of its list and is `null` when the diff does not show the
+ *   line.
  */
-function selectFindings({ reviews, maxComments }) {
-  const dropped = { empty: 0, unknownPath: 0, duplicate: 0, overLimit: 0 };
+function selectFindings({
+  reviews,
+  maxComments,
+  newLines = null,
+  known = new Set(),
+}) {
+  const dropped = {
+    empty: 0,
+    unknownPath: 0,
+    duplicate: 0,
+    notNew: 0,
+    known: 0,
+    overLimit: 0,
+  };
   const kept = [];
   const placeOf = new Map();
 
   for (const { files, findings } of reviews) {
     const linesOf = new Map(
       files.map((file) => [file.path, new Set(file.commentableLines)]),
+    );
+    const printsOf = new Map(
+      files.map((file) => [file.path, lineFingerprintsOf(file)]),
     );
 
     for (const finding of findings) {
@@ -1728,12 +1819,17 @@ function selectFindings({ reviews, maxComments }) {
       const key = JSON.stringify([
         finding.path,
         finding.line,
-        normalize(finding.title),
+        findings_normalize(finding.title),
       ]);
       const place = placeOf.get(key);
       if (place === undefined) {
         placeOf.set(key, kept.length);
-        kept.push({ finding, commentable: lines.has(finding.line) });
+        const commentable = lines.has(finding.line);
+        kept.push({
+          finding,
+          commentable,
+          fingerprint: printsOf.get(finding.path).get(finding.line) ?? null,
+        });
         continue;
       }
       // Same path and line: whether it can carry a comment stays the same.
@@ -1744,28 +1840,54 @@ function selectFindings({ reviews, maxComments }) {
     }
   }
 
+  // Findings that repeat earlier work or that lie outside of the new lines
+  // are dropped before the limit is applied, so they never use up a place.
+  const fresh = kept.filter((item) => {
+    if (newLines && !isNew(item, newLines.get(item.finding.path))) {
+      dropped.notNew += 1;
+      return false;
+    }
+    if (item.fingerprint !== null && known.has(item.fingerprint)) {
+      dropped.known += 1;
+      return false;
+    }
+    return true;
+  });
+
   // Array.prototype.sort is stable: equal severities keep their order.
-  kept.sort((a, b) => rank(a.finding) - rank(b.finding));
-  const shown = kept.slice(0, maxComments);
-  dropped.overLimit = kept.length - shown.length;
+  fresh.sort((a, b) => rank(a.finding) - rank(b.finding));
+  const shown = fresh.slice(0, maxComments);
+  dropped.overLimit = fresh.length - shown.length;
+  const inline = shown.filter((item) => item.commentable);
+  const listed = shown.filter((item) => !item.commentable);
 
   return {
-    inline: shown
-      .filter((item) => item.commentable)
-      .map(({ finding }) => finding),
-    unplaced: shown
-      .filter((item) => !item.commentable)
-      .map(({ finding }) => finding),
+    inline: inline.map(({ finding }) => finding),
+    fingerprints: inline.map(({ fingerprint }) => fingerprint),
+    unplaced: listed.map(({ finding }) => finding),
+    unplacedFingerprints: listed.map(({ fingerprint }) => fingerprint),
     dropped,
   };
+}
+
+/**
+ * Whether a finding belongs to the new lines. `fresh` holds the new lines of
+ * its file and is missing for a file without one. A finding for the text of
+ * the review has no line of its own to compare: it counts when its file has a
+ * new line and the diff shows its line, so it can be told from one that was
+ * reported before. Anything else would come back with every run.
+ */
+function isNew({ finding, commentable, fingerprint }, fresh) {
+  if (!fresh) return false;
+  return commentable ? fresh.has(finding.line) : fingerprint !== null;
 }
 
 function isBlank(...texts) {
   return texts.some((text) => BLANK.test(text));
 }
 
-function normalize(text) {
-  return text.replace(GAPS, " ").trim().toLowerCase();
+function findings_normalize(text) {
+  return text.replace(findings_GAPS, " ").trim().toLowerCase();
 }
 
 function rank(finding) {
@@ -2319,16 +2441,51 @@ function aiLabel(model) {
 }
 
 /**
+ * The line that carries the fingerprint of the commented line. It is the
+ * second line of an inline comment, right below the marker. `readHistory()`
+ * reads it back with a strict pattern.
+ *
+ * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
+ * @returns {string}
+ */
+const fingerprintLine = (fingerprint) =>
+  `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+
+/**
+ * The line that marks a review as not complete: files were left out or a
+ * request failed. It stands right below the marker. A later run does not
+ * start at such a review, so what was missed is checked again.
+ */
+const INCOMPLETE_LINE = "<!-- reviewops-incomplete -->";
+
+/**
+ * The first block of a body: the marker, then the line for an incomplete
+ * review and the fingerprints of the findings that stand in the text. A later
+ * run reads only these lines, directly below the marker, never the text of
+ * the model further down.
+ *
+ * @param {{ incomplete: boolean, fingerprints: (string | null)[] }} options
+ * @returns {string}
+ */
+function reviewHead({ incomplete, fingerprints }) {
+  return [
+    REVIEW_MARKER,
+    ...(incomplete ? [INCOMPLETE_LINE] : []),
+    ...fingerprints.filter(Boolean).map(fingerprintLine),
+  ].join("\n");
+}
+
+/**
  * The body of one inline comment.
  *
  * @param {import("../ai/schema.js").Finding} finding
  * @param {string} model
+ * @param {string | null} [fingerprint] Fingerprint of the commented line.
  * @returns {string}
  */
-function commentBody(finding, model) {
-  return [REVIEW_MARKER, findingMarkdown(finding), "---", aiLabel(model)].join(
-    "\n\n",
-  );
+function commentBody(finding, model, fingerprint = null) {
+  const head = reviewHead({ incomplete: false, fingerprints: [fingerprint] });
+  return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
 
 /**
@@ -2347,6 +2504,12 @@ function commentBody(finding, model) {
  *   were not reviewed, with the reason.
  * @param {boolean} [options.fallback] GitHub rejected the inline comments,
  *   so every finding is listed.
+ * @param {boolean} [options.incomplete] Not everything was reviewed.
+ * @param {(string | null)[]} [options.fingerprints] Fingerprints of the
+ *   findings in `listed`, in their order.
+ * @param {string | null} [options.since] The commit this review starts at,
+ *   when only the changes since an earlier review were checked. It must be a
+ *   full commit SHA.
  * @returns {string} At most {@link MAX_BODY_CHARS} characters.
  */
 function reviewBody({
@@ -2358,6 +2521,9 @@ function reviewBody({
   maxComments,
   skipped,
   fallback = false,
+  incomplete = false,
+  fingerprints = [],
+  since = null,
 }) {
   const shown = [...inline, ...listed];
   const counts = SEVERITIES.map(
@@ -2365,7 +2531,11 @@ function reviewBody({
       `${shown.filter((finding) => finding.severity === severity).length} ${severity}`,
   ).join(", ");
 
-  const head = [REVIEW_MARKER, "### ReviewOps"];
+  const head = [reviewHead({ incomplete, fingerprints }), "### ReviewOps"];
+  // The SHA was checked when it was read: it is 40 hex characters.
+  if (since !== null) {
+    head.push(`Reviewed the changes since ${inlineCode(since.slice(0, 7))}.`);
+  }
   const findingsLine = [`**Findings:** ${shown.length} (${counts}).`];
   if (overLimit > 0) {
     findingsLine.push(
@@ -2468,11 +2638,17 @@ function prefixLengths(blocks) {
  * @param {string[]} options.summaries
  * @param {{
  *   inline: import("../ai/schema.js").Finding[],
+ *   fingerprints?: (string | null)[],
  *   unplaced: import("../ai/schema.js").Finding[],
+ *   unplacedFingerprints?: (string | null)[],
  *   dropped: { overLimit: number },
  * }} options.selection What `selectFindings()` returned.
  * @param {number} options.maxComments
  * @param {{ path: string, reason: string }[]} options.skipped
+ * @param {boolean} [options.incomplete] Files were left out or a request
+ *   failed: a later run must not start at this review.
+ * @param {string | null} [options.since] The commit of the earlier review
+ *   when only the changes since then were checked.
  * @returns {Promise<{ reviewId: number | null, inlineComments: number, fallback: boolean }>}
  * @throws {Error} When GitHub accepts no review, with a message that says
  *   what to do.
@@ -2485,14 +2661,24 @@ async function postReview({
   selection,
   maxComments,
   skipped,
+  incomplete = false,
+  since = null,
 }) {
-  const { inline, unplaced, dropped } = selection;
+  const {
+    inline,
+    unplaced,
+    dropped,
+    fingerprints = [],
+    unplacedFingerprints = [],
+  } = selection;
   const common = {
     model,
     summaries,
     overLimit: dropped.overLimit,
     maxComments,
     skipped,
+    incomplete,
+    since,
   };
   const request = (body, comments) =>
     octokit.rest.pulls.createReview({
@@ -2507,16 +2693,21 @@ async function postReview({
       ...(comments.length > 0 ? { comments } : {}),
     });
 
-  const comments = inline.map((finding) => ({
+  const comments = inline.map((finding, index) => ({
     path: finding.path,
     line: finding.line,
     side: "RIGHT",
-    body: commentBody(finding, model),
+    body: commentBody(finding, model, fingerprints[index] ?? null),
   }));
 
   try {
     const response = await request(
-      reviewBody({ ...common, inline, listed: unplaced }),
+      reviewBody({
+        ...common,
+        inline,
+        listed: unplaced,
+        fingerprints: unplacedFingerprints,
+      }),
       comments,
     );
     return {
@@ -2536,6 +2727,7 @@ async function postReview({
         ...common,
         inline: [],
         listed: [...inline, ...unplaced],
+        fingerprints: [...fingerprints, ...unplacedFingerprints],
         fallback: true,
       }),
       [],
@@ -2642,6 +2834,319 @@ function capLength(text) {
   return text.length > MAX_BODY_CHARS
     ? `${text.slice(0, MAX_BODY_CHARS - 1)}…`
     : text;
+}
+
+;// CONCATENATED MODULE: ./src/github/history.js
+
+
+
+
+
+const history_COMMIT_SHA = /^[0-9a-f]{40}$/;
+
+// The second line of an inline comment of this action. Only this exact shape
+// is read; anything else in a comment is ignored.
+const FINGERPRINT_LINE = new RegExp(
+  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}}) -->$`,
+);
+
+// A comparison lists at most this many files, 100 per request.
+const COMPARE_PAGE_SIZE = 100;
+const COMPARE_FILE_LIMIT = 3000;
+
+// The statuses of a comparison where only new commits were added.
+const AHEAD = "ahead";
+const IDENTICAL = "identical";
+
+// Statuses of a file where a missing patch means the content is the same.
+const history_STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
+  "renamed",
+  "copied",
+  "changed",
+  "unchanged",
+]);
+
+// What a 403 or a 404 means when the earlier reviews are read.
+const LIST_HINTS = Object.freeze({
+  403: "The token may not read this pull request. The workflow needs the `pull-requests` permission.",
+  404: "The pull request was not found, or the token has no access to the repository.",
+});
+
+const COMPARE_HINTS = Object.freeze({
+  403: "The token may not read the commits of this repository. The workflow needs the `contents: read` permission.",
+});
+
+/** Why a run reviews the whole pull request instead of the new lines. */
+const FULL_REASONS = Object.freeze({
+  noReview: "there is no earlier review of ReviewOps",
+  notComparable:
+    "the commit of the earlier review is no longer part of this branch (force-push or rebase)",
+  incomplete:
+    "GitHub did not list every file of the comparison with the earlier commit",
+});
+
+/**
+ * Tells whether GitHub shows an account as an automation account. Only such
+ * accounts count as the author of an earlier review: a person, who could
+ * copy the marker into a comment, is never read.
+ *
+ * @param {{ user?: { type?: unknown } | null }} item
+ */
+const isBot = (item) => item?.user?.type === "Bot";
+
+/** A review or a comment that this action posted: the marker and a bot. */
+const isOwn = (item) =>
+  isBot(item) &&
+  typeof item.body === "string" &&
+  item.body.startsWith(REVIEW_MARKER);
+
+/**
+ * Reads what ReviewOps already did on this pull request, so a new run does
+ * not repeat it.
+ *
+ * - The reviews of this action are the ones with the marker at the start of
+ *   their text and a bot as author. The `commit_id` of the newest one is the
+ *   last commit that was reviewed.
+ * - The fingerprints come from the second line of every inline comment of
+ *   this action, including old and resolved ones.
+ * - The lines that are new since the last reviewed commit come from a
+ *   comparison of that commit with the head. Whenever that does not work
+ *   out, the whole pull request is reviewed again: when in doubt, more is
+ *   checked, never less.
+ *
+ * Nothing in here writes to the log or posts anything. Everything read from
+ * GitHub is untrusted: a body is only checked against fixed patterns.
+ *
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
+ * @param {{ owner: string, repo: string, pullNumber: number, headSha: string }} pullRequest
+ * @returns {Promise<{
+ *   mode: "full" | "incremental",
+ *   since: string | null,
+ *   reason: string | null,
+ *   newLines: Map<string, Set<number> | null> | null,
+ *   fingerprints: Set<string>,
+ *   ownReviews: number,
+ *   ownComments: number,
+ * }>} In `incremental` mode, `since` is the last reviewed commit and
+ *   `newLines` holds the added lines of the comparison by path. `null` as
+ *   the value of a path stands for every line of that file. A path that is
+ *   missing has no new line. In `full` mode, `newLines` is `null` and
+ *   `reason` is one of {@link FULL_REASONS}.
+ */
+async function readHistory(octokit, pullRequest) {
+  const { owner, repo, pullNumber } = pullRequest;
+  const listParameters = {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  };
+
+  let reviews;
+  let comments;
+  try {
+    reviews = await octokit.paginate(
+      octokit.rest.pulls.listReviews,
+      listParameters,
+    );
+    comments = await octokit.paginate(
+      octokit.rest.pulls.listReviewComments,
+      listParameters,
+    );
+  } catch (error) {
+    throw describeApiError(error, LIST_HINTS);
+  }
+
+  const ownReviews = reviews.filter(isOwn);
+  const ownComments = comments.filter(isOwn);
+  const fingerprints = new Set();
+  for (const item of [...ownComments, ...ownReviews]) {
+    for (const fingerprint of readHead(item.body).fingerprints) {
+      fingerprints.add(fingerprint);
+    }
+  }
+
+  const base = {
+    fingerprints,
+    ownReviews: ownReviews.length,
+    ownComments: ownComments.length,
+  };
+  const full = (reason) => ({
+    ...base,
+    mode: "full",
+    since: null,
+    reason,
+    newLines: null,
+  });
+
+  const since = lastReviewedCommit(ownReviews);
+  if (since === null) return full(FULL_REASONS.noReview);
+
+  // The head was reviewed already: nothing is new, and nothing is compared.
+  if (since === pullRequest.headSha) {
+    return {
+      ...base,
+      mode: "incremental",
+      since,
+      reason: null,
+      newLines: new Map(),
+    };
+  }
+
+  const comparison = await compare(octokit, pullRequest, since);
+  if (comparison.status === "not-comparable") {
+    return full(FULL_REASONS.notComparable);
+  }
+  if (comparison.status === "incomplete") return full(FULL_REASONS.incomplete);
+  return {
+    ...base,
+    mode: "incremental",
+    since,
+    reason: null,
+    newLines: comparison.newLines,
+  };
+}
+
+/**
+ * Keeps the files with at least one new line and says which lines are new:
+ * the added lines of the pull request that the comparison shows as added as
+ * well. A line that only came with a merge of the base branch is not in the
+ * comparison of the pull request's own diff, so it drops out.
+ *
+ * @template {{ path: string, commentableLines: number[] }} T
+ * @param {T[]} diffs The parsed files of the pull request.
+ * @param {Map<string, Set<number> | null>} newLines `newLines` of
+ *   {@link readHistory}.
+ * @returns {{ diffs: T[], newLines: Map<string, Set<number>> }}
+ */
+function scopeDiffs(diffs, newLines) {
+  const kept = [];
+  const lines = new Map();
+  for (const diff of diffs) {
+    const compared = newLines.get(diff.path);
+    if (compared === undefined) continue;
+    const fresh =
+      compared === null
+        ? diff.commentableLines
+        : diff.commentableLines.filter((line) => compared.has(line));
+    if (fresh.length === 0) continue;
+    kept.push(diff);
+    lines.set(diff.path, new Set(fresh));
+  }
+  return { diffs: kept, newLines: lines };
+}
+
+/**
+ * The lines right below the marker of a body of this action: the fingerprints
+ * and the note of an incomplete review. The first line that is neither ends
+ * the head, so the text further down, which comes from the model, is never
+ * read. Both kinds of line ending are accepted: GitHub keeps the ones of an
+ * edit.
+ *
+ * @param {string} body
+ * @returns {{ fingerprints: string[], incomplete: boolean }}
+ */
+function readHead(body) {
+  const result = { fingerprints: [], incomplete: false };
+  for (const line of body.split(/\r?\n/, 40).slice(1)) {
+    const match = FINGERPRINT_LINE.exec(line);
+    if (match) result.fingerprints.push(match[1]);
+    else if (line === INCOMPLETE_LINE) result.incomplete = true;
+    else break;
+  }
+  return result;
+}
+
+/** `commit_id` of the newest complete review in the list, or `null`. */
+function lastReviewedCommit(ownReviews) {
+  // GitHub lists reviews from the oldest to the newest. A review that was
+  // never submitted is not a finished review, and neither is one that left
+  // files or lines out: a later run has to look at those again.
+  for (const review of ownReviews.toReversed()) {
+    if (review.state === "PENDING") continue;
+    if (readHead(review.body).incomplete) continue;
+    if (
+      typeof review.commit_id === "string" &&
+      history_COMMIT_SHA.test(review.commit_id)
+    ) {
+      return review.commit_id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Compares the last reviewed commit with the head.
+ *
+ * @returns {Promise<
+ *   | { status: "ok", newLines: Map<string, Set<number> | null> }
+ *   | { status: "not-comparable" }
+ *   | { status: "incomplete" }
+ * >}
+ */
+async function compare(octokit, { owner, repo, headSha }, since) {
+  const files = [];
+  let page = 1;
+  for (;;) {
+    let data;
+    try {
+      ({ data } = await octokit.rest.repos.compareCommitsWithBasehead({
+        owner,
+        repo,
+        basehead: `${since}...${headSha}`,
+        per_page: COMPARE_PAGE_SIZE,
+        page,
+      }));
+    } catch (error) {
+      // The commit is gone after a force-push: that is no failure.
+      if (error?.status === 404) return { status: "not-comparable" };
+      throw describeApiError(error, COMPARE_HINTS);
+    }
+
+    // Only a comparison that adds commits to the earlier state tells what is
+    // new. After a rebase or a force-push, the earlier commit is not an
+    // ancestor ("diverged" or "behind").
+    if (page === 1) {
+      if (data?.status === IDENTICAL)
+        return { status: "ok", newLines: new Map() };
+      if (data?.status !== AHEAD) return { status: "not-comparable" };
+    }
+    if (!Array.isArray(data?.files)) return { status: "incomplete" };
+
+    files.push(...data.files);
+    if (files.length >= COMPARE_FILE_LIMIT) return { status: "incomplete" };
+    if (data.files.length < COMPARE_PAGE_SIZE) break;
+    page += 1;
+  }
+
+  const newLines = new Map();
+  for (const file of files) {
+    if (typeof file?.filename !== "string" || file.filename === "") {
+      return { status: "incomplete" };
+    }
+    newLines.set(file.filename, addedLinesOfComparison(file));
+  }
+  return { status: "ok", newLines };
+}
+
+/**
+ * The added lines of one file of a comparison. `null` means every line: the
+ * file has a change that shows no readable patch, so nothing can be ruled
+ * out.
+ */
+function addedLinesOfComparison(file) {
+  if (file.status === "removed") return new Set();
+  if (typeof file.patch === "string" && file.patch !== "") {
+    try {
+      return new Set(parse_parsePatch(file.patch).commentableLines);
+    } catch (error) {
+      if (!(error instanceof PatchFormatError)) throw error;
+      return null;
+    }
+  }
+  const unchanged =
+    history_STATUSES_WITHOUT_CONTENT_CHANGE.has(file.status) && !file.changes;
+  return unchanged ? new Set() : null;
 }
 
 ;// CONCATENATED MODULE: ./src/inputs.js
@@ -3197,6 +3702,7 @@ async function reviewInBatches({
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -3272,6 +3778,22 @@ async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
+    // What ReviewOps did on this pull request before: the commit it reviewed
+    // last and the lines it commented on. Reading it fails the run before
+    // anything costs money.
+    const history = await readHistory(octokit, pullRequest);
+    // Numbers and a checked commit SHA only. A first run says nothing here.
+    if (history.ownReviews > 0 || history.ownComments > 0) {
+      core.info(
+        `Earlier work of ReviewOps on this pull request: ${history.ownReviews} reviews, ${history.ownComments} comments.`,
+      );
+      core.info(
+        history.mode === "incremental"
+          ? `Reviewing only the changes since commit ${history.since}.`
+          : `Reviewing the whole pull request: ${history.reason}.`,
+      );
+    }
+
     // Files that may hold secrets are left out first, under their new and
     // their old name, whatever the inputs say. Then generated and irrelevant
     // files, and files whose name cannot be put into the prompt. All of this
@@ -3302,10 +3824,20 @@ async function run({
     // this point, the limits included, sees only the masked text.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
 
+    // After an earlier review, only files with a line that is new since then
+    // go on. The others were checked already: they count in the log, not
+    // under "not reviewed".
+    let newLines = null;
+    let scoped = diffs;
+    if (history.mode === "incremental") {
+      ({ diffs: scoped, newLines } = scopeDiffs(diffs, history.newLines));
+    }
+    const alreadyReviewed = diffs.length - scoped.length;
+
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
     const { selected, overLimit, tooLarge, usedChars } = applyLimits(
-      diffs,
+      scoped,
       limits,
       {
         maxChars: MAX_REQUEST_CHARS,
@@ -3326,8 +3858,13 @@ async function run({
       ...listing.skipped,
     ];
     core.info(
-      `Found ${selected.length + skipped.length} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
+      `Found ${selected.length + skipped.length + alreadyReviewed} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
+    if (alreadyReviewed > 0) {
+      core.info(
+        `${alreadyReviewed} files have no new line since commit ${history.since} and are not sent again.`,
+      );
+    }
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
       core.info(`Skipped ${printable(path)}: ${reason}.`);
@@ -3386,7 +3923,9 @@ async function run({
     // point: a pull request without reviewable files ends here.
     if (selected.length === 0) {
       core.notice(
-        "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
+        scoped.length === 0 && alreadyReviewed > 0
+          ? `ReviewOps found no new lines to review since commit ${history.since}. A green run does not mean that new changes were reviewed.`
+          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
       );
       return;
     }
@@ -3450,11 +3989,23 @@ async function run({
 
     // Every finding is checked against the files of its own request: only an
     // added line of such a file can carry an inline comment.
-    const { inline, unplaced, dropped } = selectFindings({
-      reviews: review.reviews,
-      maxComments: limits.maxComments,
-    });
+    const { inline, fingerprints, unplaced, unplacedFingerprints, dropped } =
+      selectFindings({
+        reviews: review.reviews,
+        maxComments: limits.maxComments,
+        newLines,
+        known: history.fingerprints,
+      });
     const shown = [...inline, ...unplaced];
+    // Whatever was not reviewed or not shown must be looked at again: a later
+    // run does not start at a review that left something out.
+    const incomplete =
+      notReviewed.length > 0 ||
+      unreadable.length > 0 ||
+      tooLarge.length > 0 ||
+      overLimit.length > 0 ||
+      listing.truncated ||
+      dropped.overLimit > 0;
     const received = review.reviews.reduce(
       (sum, { findings }) => sum + findings.length,
       0,
@@ -3463,7 +4014,7 @@ async function run({
     // Numbers only: the findings and the summary hold code from the pull
     // request.
     core.info(
-      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
+      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates, ${dropped.notNew} outside of the new lines, ${dropped.known} at lines that were commented before and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
     );
     const counts = SEVERITIES.map(
       (severity) =>
@@ -3487,8 +4038,16 @@ async function run({
       pullRequest,
       model,
       summaries: review.reviews.map(({ summary }) => summary),
-      selection: { inline, unplaced, dropped },
+      selection: {
+        inline,
+        fingerprints,
+        unplaced,
+        unplacedFingerprints,
+        dropped,
+      },
       maxComments: limits.maxComments,
+      incomplete,
+      since: history.since,
       skipped: [
         ...skipped,
         ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),

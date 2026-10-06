@@ -31,19 +31,55 @@ export const apiFiles = (count) =>
  * @param {(parameters: object, index: number) => object} [options.createReview]
  *   Answers a request to post a review: the response, or an error to throw.
  *   Without it, every review is created with a new id.
+ * @param {object[]} [options.existingReviews] Reviews already on the pull
+ *   request, in the shape of GitHub's answer.
+ * @param {object[]} [options.existingComments] Review comments already on
+ *   the pull request.
+ * @param {(parameters: object) => { status: string, files?: object[] } | Error} [options.compare]
+ *   Answers a comparison of two commits. Without it, every comparison fails
+ *   with 404. The files are served in pages like GitHub does.
  */
-export function createFakeOctokit(entries = [], { createReview } = {}) {
+export function createFakeOctokit(
+  entries = [],
+  { createReview, existingReviews = [], existingComments = [], compare } = {},
+) {
   const calls = [];
   const reviews = [];
-  const listFiles = () => {
+  const comparisons = [];
+  const endpointCalled = () => {
     throw new Error("the endpoint must be passed to paginate, not called");
   };
+  // Distinct functions: paginate() tells the endpoints apart by identity.
+  const listFiles = () => endpointCalled();
+  const listReviews = () => endpointCalled();
+  const listReviewComments = () => endpointCalled();
   return {
     calls,
     reviews,
+    comparisons,
     rest: {
+      repos: {
+        compareCommitsWithBasehead: async (parameters) => {
+          comparisons.push(parameters);
+          const answer = compare
+            ? compare(parameters)
+            : apiFailure(404, { message: "Not Found" });
+          if (answer instanceof Error) throw answer;
+          const { files = [], ...rest } = answer;
+          const start = (parameters.page - 1) * parameters.per_page;
+          return {
+            status: 200,
+            data: {
+              ...rest,
+              files: files.slice(start, start + parameters.per_page),
+            },
+          };
+        },
+      },
       pulls: {
         listFiles,
+        listReviews,
+        listReviewComments,
         createReview: async (parameters) => {
           const index = reviews.length;
           reviews.push(parameters);
@@ -57,6 +93,8 @@ export function createFakeOctokit(entries = [], { createReview } = {}) {
     },
     paginate: async (endpoint, parameters) => {
       calls.push({ endpoint, parameters });
+      if (endpoint === listReviews) return existingReviews;
+      if (endpoint === listReviewComments) return existingComments;
       return entries;
     },
   };
@@ -84,6 +122,14 @@ export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
  * @param {(request: object, index: number) => { status: number, body?: object }} [answer.reviews]
  *   Answers a request to post a review. Without it, every review is
  *   created with a new id.
+ * @param {object[]} [answer.existingReviews] Reviews already on the pull
+ *   request, split into pages.
+ * @param {object[]} [answer.existingComments] Review comments already on the
+ *   pull request, split into pages.
+ * @param {(basehead: string) => { status: number, body?: object }} [answer.compare]
+ *   Answers a comparison of two commits, given as "base...head". Without it,
+ *   every comparison fails with 404. The files of the body are split into
+ *   pages.
  * @returns {Promise<{
  *   url: string,
  *   requests: { method: string, path: string, authorization: string | undefined, body: any }[],
@@ -92,7 +138,16 @@ export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
  */
 export async function startGitHubApi(
   t,
-  { files = [], status, message = "Not Found", headers = {}, reviews } = {},
+  {
+    files = [],
+    status,
+    message = "Not Found",
+    headers = {},
+    reviews,
+    existingReviews = [],
+    existingComments = [],
+    compare,
+  } = {},
 ) {
   const requests = [];
   const reviewRequests = [];
@@ -143,21 +198,48 @@ export async function startGitHubApi(
       return;
     }
 
-    if (!/^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/.test(url.pathname)) {
+    const perPage = Number(url.searchParams.get("per_page") ?? 30);
+    const page = Number(url.searchParams.get("page") ?? 1);
+    const start = (page - 1) * perPage;
+
+    const compared = /^\/repos\/[^/]+\/[^/]+\/compare\/([^/]+)$/.exec(
+      url.pathname,
+    );
+    if (request.method === "GET" && compared) {
+      const chosen = compare
+        ? compare(decodeURIComponent(compared[1]))
+        : { status: 404 };
+      const { files: compareFiles = [], ...rest } = chosen.body ?? {
+        message: "Not Found",
+      };
+      json(chosen.status, {
+        ...rest,
+        ...(chosen.status === 200
+          ? { files: compareFiles.slice(start, start + perPage) }
+          : {}),
+      });
+      return;
+    }
+
+    const lists = [
+      [/^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/, files],
+      [/^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/, existingReviews],
+      [/^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/, existingComments],
+    ];
+    const list = lists.find(([pattern]) => pattern.test(url.pathname));
+    if (request.method !== "GET" || !list) {
       json(404, { message: "Not Found" });
       return;
     }
 
-    const perPage = Number(url.searchParams.get("per_page") ?? 30);
-    const page = Number(url.searchParams.get("page") ?? 1);
-    const start = (page - 1) * perPage;
+    const entries = list[1];
     const responseHeaders = {};
-    if (start + perPage < files.length) {
+    if (start + perPage < entries.length) {
       const next = new URL(url);
       next.searchParams.set("page", String(page + 1));
       responseHeaders.link = `<${address()}${next.pathname}${next.search}>; rel="next"`;
     }
-    json(200, files.slice(start, start + perPage), responseHeaders);
+    json(200, entries.slice(start, start + perPage), responseHeaders);
   }
 
   const address = () => `http://127.0.0.1:${server.address().port}`;

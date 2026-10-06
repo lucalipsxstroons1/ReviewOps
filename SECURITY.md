@@ -43,7 +43,25 @@ The workflow that runs the action grants these permissions and no others:
 - `contents: read`
 - `pull-requests: write`
 
-The action reads the changed files of the pull request through the GitHub API. It does not read the working tree of the runner. With `pull-requests: write` it posts one review of the type `COMMENT` per run, with its inline comments at added lines of the diff, and only when there are findings. Without that right the step fails with a message that points at `permissions`.
+The action reads the changed files, the reviews and the review comments of the pull request and compares commits through the GitHub API. It does not read the working tree of the runner. With `pull-requests: write` it posts one review of the type `COMMENT` per run, with its inline comments at added lines of the diff, and only when there are findings. Without that right the step fails with a message that points at `permissions`.
+
+## Repeated runs on one pull request
+
+Every push to a pull request starts a new run. Without a countermeasure, the same comments would appear again and again. ReviewOps avoids that in two ways, and it reads from GitHub to do so:
+
+- **Only what is new.** The action lists the reviews and the review comments of the pull request. A review or a comment counts as its own only if its text starts with `<!-- reviewops -->` **and** GitHub shows a bot as its author. The `commit_id` of its newest review is the last commit it reviewed. The action compares that commit with the head, and a file that has no new line since then is not sent to the model again. A line is new if it is added in the comparison and in the diff of the pull request, so lines that only came with a merge of the base branch do not count.
+- **Fingerprints.** The second line of every inline comment is `<!-- reviewops-fingerprint: … -->` with the first 16 hex characters of a SHA-256 hash over the path and the text of the commented line (white space reduced to one space). The text comes from the masked diff, so the hash never depends on a secret. The text of the line before it is part of the hash, so equal lines such as a closing brace get different fingerprints as long as their surroundings differ. A finding at a line with a known fingerprint is not posted again, also when the thread was resolved. Findings that stand in the text of a review (a line outside of the added lines) carry their fingerprint in the head of that review text, right below the marker. Only the lines directly below the marker are read, never the text further down, which comes from the model.
+
+When something does not fit, the action checks more, never less: with no earlier review, after a force-push or a rebase (the comparison fails or is not a plain continuation) and when GitHub does not list every file of the comparison, the whole pull request is reviewed again. Comments with a known fingerprint are still not repeated.
+
+What the action reads is untrusted, like the diff. Nothing from it is written to the log except numbers and a commit SHA that was checked as 40 hex characters. A comment of a person or of another bot is never used and never changed, even if it holds the marker or a fingerprint. The action only reads and posts its own new review: it does not edit, hide, resolve or delete anything.
+
+Limits you should know:
+
+- A review of a run that left something out (a request that failed, files over a limit, files whose diff could not be read, findings over `max-comments`) is marked with `<!-- reviewops-incomplete -->` below the marker. A later run does not start at such a review but at the last complete one, so what was missed is looked at again. A run without findings posts no review, so it leaves the starting point where it was. A new finding at code that an earlier complete run checked without a finding can not come up in a later run.
+- If the workflow uses a personal access token instead of `GITHUB_TOKEN`, GitHub shows the author as a user, not as a bot. The action does not recognise its own reviews and comments then. It reviews the whole pull request on every run, and its comments repeat.
+- A finding for a line that the diff does not show has no fingerprint. A run that reviews only new lines drops it; a run that reviews the whole pull request can report it again.
+- The action needs `contents: read` to compare commits, which the workflow already grants.
 
 ## Events, forks and Dependabot
 
