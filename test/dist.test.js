@@ -196,6 +196,19 @@ test("the bundle fails the step when the model is not a model name", async (t) =
   assert.deepEqual(api.requests, []);
 });
 
+test("the bundle fails the step when the language is not a language code", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    INPUT_LANGUAGE: "xx",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::Input `language` must be one of en,/m);
+  assert.deepEqual(api.requests, []);
+});
+
 test("the bundle fails the step when a limit is not a positive number", async (t) => {
   const api = await startGitHubApi(t, { files: apiFiles(1) });
 

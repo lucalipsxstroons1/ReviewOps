@@ -9,17 +9,19 @@
  *   githubToken: string,
  *   openaiApiKey: string,
  *   openaiModel: string,
+ *   language: string,
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
- * }} The model and the limits stay text here: `parseModel()` and
- *   `parseLimits()` check them.
+ * }} The model, the language and the limits stay text here: `parseModel()`,
+ *   `parseLanguage()` and `parseLimits()` check them.
  */
 export function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     openaiModel: core.getInput("openai-model"),
+    language: core.getInput("language"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),

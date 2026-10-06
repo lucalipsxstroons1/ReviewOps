@@ -1,8 +1,8 @@
-export const id = 334;
-export const ids = [334];
+export const id = 309;
+export const ids = [309];
 export const modules = {
 
-/***/ 6334:
+/***/ 3309:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -76,6 +76,564 @@ function parseModel(value = "") {
     );
   }
   return name;
+}
+
+;// CONCATENATED MODULE: ./src/ai/error.js
+/**
+ * An error of the AI client. The message says what to do. It never contains
+ * text from the answer of the API: OpenAI repeats the first and the last
+ * characters of an invalid key in its own message, and the model may repeat
+ * code from the pull request.
+ *
+ * This file does not import the SDK. Modules that only need the error, such
+ * as the parser of the review format, must not pull the SDK into the bundle
+ * before `run()` needs it.
+ */
+class error_AiError extends Error {
+  name = "AiError";
+
+  /**
+   * @param {"auth" | "permission" | "model" | "quota" | "rate_limit" | "server" | "timeout" | "network" | "request" | "response" | "refusal" | "truncated" | "filtered"} kind
+   *   Tells a caller whether other requests are still worth a try: after
+   *   `auth`, `permission`, `model` and `quota`, they are not.
+   * @param {string} message
+   * @param {number | null} [status] HTTP status, if there was an answer.
+   */
+  constructor(kind, message, status = null) {
+    super(message);
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+;// CONCATENATED MODULE: ./src/ai/json-schema.js
+// A small check for the part of JSON Schema that the review format uses. It
+// takes the place of a library: the format is ours, and the check has to read
+// the very same schema object that goes into the request.
+//
+// The check does not know more than the strict mode of OpenAI allows. A
+// keyword it does not know is an error of the schema, never skipped: a
+// constraint that is silently ignored would let invalid answers pass.
+
+const TYPES = (/* unused pure expression or super */ null && ([
+  "object",
+  "array",
+  "string",
+  "integer",
+  "number",
+  "boolean",
+  "null",
+]));
+
+// `description` and `title` only explain. All others are checked.
+const KEYWORDS = new Set([
+  "type",
+  "enum",
+  "properties",
+  "required",
+  "additionalProperties",
+  "items",
+  "description",
+  "title",
+]);
+
+const isObject = (value) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Checks that a schema only uses what this module can check, and that it
+ * follows the rules of the strict mode: every property is required and every
+ * object forbids additional properties.
+ *
+ * @param {object} schema
+ * @param {string} [path] Where the schema sits, for the message.
+ * @throws {Error} With the place and the reason.
+ */
+function assertSchema(schema, path = "$") {
+  if (!isObject(schema))
+    throw new Error(`${path}: a schema must be an object.`);
+
+  for (const keyword of Object.keys(schema)) {
+    if (!KEYWORDS.has(keyword)) {
+      throw new Error(`${path}: the keyword "${keyword}" is not supported.`);
+    }
+  }
+  if (!TYPES.includes(schema.type)) {
+    throw new Error(`${path}: "type" must be one of ${TYPES.join(", ")}.`);
+  }
+
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+      throw new Error(`${path}: "enum" must be a non-empty list.`);
+    }
+  }
+
+  if (schema.type === "object") {
+    if (!isObject(schema.properties)) {
+      throw new Error(`${path}: an object needs "properties".`);
+    }
+    if (schema.additionalProperties !== false) {
+      throw new Error(
+        `${path}: an object needs "additionalProperties": false.`,
+      );
+    }
+    const names = Object.keys(schema.properties);
+    const required = schema.required;
+    if (
+      !Array.isArray(required) ||
+      required.length !== names.length ||
+      !names.every((name) => required.includes(name))
+    ) {
+      throw new Error(`${path}: every property must be listed in "required".`);
+    }
+    for (const name of names) {
+      assertSchema(schema.properties[name], `${path}.${name}`);
+    }
+  } else if (
+    schema.properties !== undefined ||
+    schema.required !== undefined ||
+    schema.additionalProperties !== undefined
+  ) {
+    throw new Error(`${path}: object keywords on a ${schema.type}.`);
+  }
+
+  if (schema.type === "array") {
+    if (schema.items === undefined) {
+      throw new Error(`${path}: an array needs "items".`);
+    }
+    assertSchema(schema.items, `${path}[]`);
+  } else if (schema.items !== undefined) {
+    throw new Error(`${path}: "items" on a ${schema.type}.`);
+  }
+}
+
+function matchesType(type, value) {
+  switch (type) {
+    case "object":
+      return isObject(value);
+    case "array":
+      return Array.isArray(value);
+    case "string":
+      return typeof value === "string";
+    case "integer":
+      return Number.isSafeInteger(value);
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    default:
+      return value === null;
+  }
+}
+
+const checkedSchemas = new WeakSet();
+
+const at = (path) => (path === "" ? "the answer" : path);
+const join = (path, name) => (path === "" ? name : `${path}.${name}`);
+
+/**
+ * Checks a value against a schema.
+ *
+ * The result names the place and the rule, never the value: the value comes
+ * from the model and may hold code from the pull request. The same goes for
+ * the names of properties the schema does not know.
+ *
+ * @param {object} schema Checked with `assertSchema()` on first use.
+ * @param {unknown} value
+ * @returns {string | null} The first problem, or `null` if the value fits.
+ * @throws {Error} When the schema itself is not supported.
+ */
+function json_schema_validate(schema, value) {
+  // Once per schema: a keyword that cannot be checked must not be skipped.
+  if (!checkedSchemas.has(schema)) {
+    assertSchema(schema);
+    checkedSchemas.add(schema);
+  }
+  return check(schema, value, "");
+}
+
+function check(schema, value, path) {
+  if (!matchesType(schema.type, value)) {
+    return `${at(path)}: must be of type ${schema.type}.`;
+  }
+  if (schema.enum !== undefined && !schema.enum.includes(value)) {
+    return `${at(path)}: is not one of the allowed values.`;
+  }
+
+  if (schema.type === "object") {
+    for (const name of schema.required) {
+      if (!Object.hasOwn(value, name)) {
+        return `${join(path, name)}: is missing.`;
+      }
+    }
+    for (const name of Object.keys(value)) {
+      if (!Object.hasOwn(schema.properties, name)) {
+        return `${at(path)}: has a property that the schema does not allow.`;
+      }
+    }
+    for (const name of schema.required) {
+      const problem = check(
+        schema.properties[name],
+        value[name],
+        join(path, name),
+      );
+      if (problem) return problem;
+    }
+  }
+
+  if (schema.type === "array") {
+    for (let index = 0; index < value.length; index += 1) {
+      const problem = check(schema.items, value[index], `${path}[${index}]`);
+      if (problem) return problem;
+    }
+  }
+
+  return null;
+}
+
+;// CONCATENATED MODULE: ./src/ai/schema.js
+
+
+
+// The one place where the format of the review is defined. The request sends
+// this schema to the model, and `parseReview()` checks the answer against the
+// very same object. The descriptions go to the model as well, and a test keeps
+// them equal to the table in docs/response-format.md.
+
+const schema_SEVERITIES = ["critical", "major", "minor", "info"];
+const schema_CATEGORIES = ["code-quality", "react", "efcore", "security"];
+
+// The schema is shared by the request and the check. Nothing may change it.
+function deepFreeze(value) {
+  if (typeof value === "object" && value !== null) {
+    Object.values(value).forEach(deepFreeze);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+// About 30 findings fit in this. It also keeps one attempt below the timeout
+// of the client.
+const MAX_OUTPUT_TOKENS = 4096;
+
+/** The schema of the answer. Strict mode: every property is required. */
+const REVIEW_SCHEMA = deepFreeze({
+  type: "object",
+  description: "The review of one pull request.",
+  properties: {
+    summary: {
+      type: "string",
+      description:
+        "Short conclusion about the reviewed files, in the language the prompt asks for.",
+    },
+    findings: {
+      type: "array",
+      description: "The findings. An empty list if nothing stands out.",
+      items: {
+        type: "object",
+        description: "One finding at one line of the new file.",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path of the file, exactly as in the request.",
+          },
+          line: {
+            type: "integer",
+            description:
+              "Line number in the new file, one of the numbers shown in the annotated diff.",
+          },
+          severity: {
+            type: "string",
+            enum: schema_SEVERITIES,
+            description: "How serious the problem is.",
+          },
+          category: {
+            type: "string",
+            enum: schema_CATEGORIES,
+            description:
+              "Focus area of the finding. If more than one fits, security wins.",
+          },
+          title: {
+            type: "string",
+            description: "Headline of the finding in one sentence.",
+          },
+          comment: {
+            type: "string",
+            description: "What the problem is and why it matters.",
+          },
+          suggestion: {
+            type: "string",
+            description: "What to change, with a short code example if needed.",
+          },
+        },
+        required: [
+          "path",
+          "line",
+          "severity",
+          "category",
+          "title",
+          "comment",
+          "suggestion",
+        ],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "findings"],
+  additionalProperties: false,
+});
+
+/** The `response_format` of the request: a Structured Output in strict mode. */
+const REVIEW_FORMAT = deepFreeze({
+  type: "json_schema",
+  json_schema: { name: "review", strict: true, schema: REVIEW_SCHEMA },
+});
+
+/**
+ * @typedef {object} Finding
+ * @property {string} path
+ * @property {number} line
+ * @property {"critical" | "major" | "minor" | "info"} severity
+ * @property {"code-quality" | "react" | "efcore" | "security"} category
+ * @property {string} title
+ * @property {string} comment
+ * @property {string} suggestion
+ */
+
+/**
+ * Reads the answer of the model. A cut-off or filtered answer and one that
+ * does not fit the schema are errors. None of them counts as "no findings".
+ *
+ * The strict mode is not trusted: the answer is always checked here. Error
+ * messages name the place (`findings[2].severity`), never the content, which
+ * comes from the model and may hold code from the pull request.
+ *
+ * @param {{ content: string, finishReason: string | null }} answer
+ *   The result of `complete()`.
+ * @returns {{ summary: string, findings: Finding[] }}
+ * @throws {AiError} With the kind `truncated`, `filtered` or `response`.
+ */
+function parseReview({ content, finishReason }) {
+  // Checked first: a cut-off answer is usually not JSON any more.
+  if (finishReason === "length") {
+    throw new AiError(
+      "truncated",
+      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Reduce \`max-files\` or \`max-diff-chars\`, or run the workflow again.`,
+    );
+  }
+  if (finishReason === "content_filter") {
+    throw new AiError(
+      "filtered",
+      "The content filter of OpenAI stopped the answer, so the review is incomplete. Run the workflow again; if it keeps happening, exclude the files that trigger it with the input `exclude`.",
+    );
+  }
+
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    throw new AiError(
+      "response",
+      "The answer of the model is not valid JSON. Run the workflow again.",
+    );
+  }
+
+  const problem = validate(REVIEW_SCHEMA, data);
+  if (problem) {
+    throw new AiError(
+      "response",
+      `The answer of the model does not match the review format (${problem.replace(/\.$/, "")}). Run the workflow again.`,
+    );
+  }
+  return data;
+}
+
+;// CONCATENATED MODULE: ./src/ai/prompt.js
+
+
+
+// The prompt is versioned so that a measurement of the model can be matched
+// to one state of the text. Raise it with every change of the wording.
+const PROMPT_VERSION = 5;
+
+// The same value is written into action.yml. A test keeps them equal.
+const DEFAULT_LANGUAGE = "en";
+
+// Language codes and the English names that go into the prompt. The value of
+// the workflow never reaches the prompt: only a name from this table does.
+const LANGUAGES = Object.freeze({
+  en: "English",
+  de: "German",
+  fr: "French",
+  es: "Spanish",
+  it: "Italian",
+  pt: "Portuguese",
+  nl: "Dutch",
+  pl: "Polish",
+  tr: "Turkish",
+  ja: "Japanese",
+  zh: "Chinese",
+  ko: "Korean",
+});
+
+/**
+ * Reads the `language` input. An empty value means the default: it is
+ * usually a variable of the workflow that was not set.
+ *
+ * @param {string} [value] The value as the workflow passed it.
+ * @returns {keyof typeof LANGUAGES}
+ * @throws {Error} When the value is not one of the language codes.
+ */
+function parseLanguage(value = "") {
+  const code = String(value).trim().toLowerCase();
+  if (code === "") return DEFAULT_LANGUAGE;
+
+  if (!Object.hasOwn(LANGUAGES, code)) {
+    // The value is a setting of the workflow, which a pull request can change.
+    throw new Error(
+      `Input \`language\` must be one of ${Object.keys(LANGUAGES).join(", ")}, but is "${printable(String(value).trim())}".`,
+    );
+  }
+  return code;
+}
+
+// What the model checks, per focus area. The area names are the values of
+// the schema, so that the prompt and the answer use the same words.
+const FOCUS_AREAS = {
+  "code-quality": {
+    title: "General code quality",
+    checks: [
+      "logic errors, such as wrong conditions, off-by-one errors and inverted checks",
+      "missing error handling: ignored errors, swallowed exceptions, unhandled promise rejections",
+      "null or undefined access that can happen with real input",
+      "race conditions and unsafe shared state",
+      "needless complexity that hides a bug or makes one likely",
+    ],
+  },
+  react: {
+    title: "React",
+    checks: [
+      "Rules of Hooks: hooks called conditionally, in loops or after an early return",
+      "dependency arrays of useEffect, useMemo and useCallback that miss a value used inside (a prop, a state value or a variable of the component), also when the array is empty, or that are missing altogether",
+      "state mutation: changing state or props in place instead of creating a new value",
+      "lists rendered without a stable `key`, or with the array index as key where the list changes",
+      "effects that start a subscription, timer or request without cleanup",
+      "`dangerouslySetInnerHTML` with content that is not sanitized",
+    ],
+  },
+  efcore: {
+    title: "C# and Entity Framework Core",
+    checks: [
+      "N+1 queries: an awaited query (`ToListAsync`, `FirstOrDefaultAsync`, `CountAsync` and similar) inside a `foreach`, `for` or `while` loop, so that one more query runs for every item, or navigation properties loaded one by one",
+      "read-only queries without `AsNoTracking()`",
+      "`FromSqlRaw` or `ExecuteSqlRaw` with string interpolation or concatenation instead of parameters",
+      "sync-over-async: `.Result`, `.Wait()` or `.GetAwaiter().GetResult()` on a task",
+      "a missing `await` on an async call, so that the task is never observed",
+    ],
+  },
+  security: {
+    title: "Security (zero trust)",
+    checks: [
+      "missing authentication or authorization on an endpoint or an action",
+      "input that is used without validation, for example in paths, queries, commands or redirects",
+      "injection: SQL, command, template, path traversal, cross-site scripting",
+      "secrets in code: keys, tokens, passwords, connection strings",
+      "permissions that are wider than needed",
+      "sensitive data in logs or error messages",
+    ],
+  },
+};
+
+// What the severities mean. The values themselves come from the schema.
+const SEVERITY_MEANING = {
+  critical:
+    "can be exploited, loses or corrupts data, or breaks a common path. It must be fixed before the merge.",
+  major:
+    "a defect that will probably cause wrong behaviour, a crash or a serious slowdown under realistic conditions.",
+  minor:
+    "a real but small problem, or a weakness with a concrete risk that is unlikely to hit soon.",
+  info: "a remark that needs no change, for example a hint about a better way.",
+};
+
+/**
+ * Builds the system prompt of the review.
+ *
+ * The text is fixed. The only thing that varies is the name of the language,
+ * taken from a table.
+ *
+ * @param {object} options
+ * @param {keyof typeof LANGUAGES} [options.language] A code that
+ *   `parseLanguage()` returned.
+ * @returns {string}
+ * @throws {Error} When the language is not in the table.
+ */
+function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
+  if (typeof language !== "string" || !Object.hasOwn(LANGUAGES, language)) {
+    throw new Error(
+      "The language of the prompt is not one of the known codes.",
+    );
+  }
+  const languageName = LANGUAGES[language];
+
+  const focus = CATEGORIES.map((category) => {
+    const { title, checks } = FOCUS_AREAS[category];
+    return [
+      `${title} (category "${category}"):`,
+      ...checks.map((check) => `- ${check}`),
+    ].join("\n");
+  }).join("\n\n");
+
+  const severities = SEVERITIES.map(
+    (severity) => `- ${severity}: ${SEVERITY_MEANING[severity]}`,
+  ).join("\n");
+
+  const categories = CATEGORIES.map((category) => `"${category}"`).join(", ");
+
+  return [
+    "You are an experienced software engineer who reviews the diff of a pull request. Be factual and concrete. Give no praise and no general remarks. Do not comment on style that a linter or a formatter covers, such as indentation, quotes, semicolons, import order, line length or naming conventions.",
+    "",
+    "## The input",
+    "",
+    "The user message holds the changed files. Each file starts with a line `File: <path>`, followed by its diff. A diff line looks like this:",
+    "",
+    "```",
+    "  12 | +  const sum = items.reduce(add, 0);",
+    "     | -  return items.length;",
+    "     |    const tax = 0.19;",
+    "```",
+    "",
+    "The marker after the bar is `+` for an added line, `-` for a removed line and a space for an unchanged line. Only added lines carry a line number, and it is the line number in the new file. Removed and unchanged lines are there to help you understand the change.",
+    "",
+    "## What to look for",
+    "",
+    "Look for real problems in these areas, and only in them:",
+    "",
+    focus,
+    "",
+    `Every finding has exactly one category: ${categories}. If more than one fits, use "security".`,
+    "",
+    "## Rules",
+    "",
+    "- Comment only on added lines. Take the line number from the diff exactly as it is shown. Never calculate a number and never use the line of a removed or unchanged line.",
+    "- Use the path exactly as it is written after `File:`.",
+    "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does.",
+    "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line where it starts.",
+    "- Do not ask for tests, documentation or comments, and do not remark on what the change does.",
+    "- An empty list of findings is a good answer when nothing is wrong. Say so in the summary.",
+    '- Every finding needs a concrete suggestion: what to change, with a short code example if that helps. Never write only "consider" or "check".',
+    "",
+    "## Severity",
+    "",
+    "Choose the severity by what happens if the problem stays in:",
+    "",
+    severities,
+    "",
+    '"critical" and "major" are for problems that you can show from the code in the diff. Do not use them for doubts.',
+    "",
+    "## Language",
+    "",
+    `Write the summary, the title, the comment and the suggestion in ${languageName}. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
+  ].join("\n");
 }
 
 ;// CONCATENATED MODULE: ./src/diff/parse.js
@@ -429,7 +987,7 @@ const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
  */
 function readPullRequest(context) {
   const pullRequest = context.payload?.pull_request;
-  if (!isObject(pullRequest)) {
+  if (!context_isObject(pullRequest)) {
     throw new Error(
       "The event carries no pull request. ReviewOps has to run on the `pull_request` event.",
     );
@@ -480,7 +1038,7 @@ function readSha(value, side) {
   return value;
 }
 
-const isObject = (value) => typeof value === "object" && value !== null;
+const context_isObject = (value) => typeof value === "object" && value !== null;
 
 const isRepositoryPart = (value) =>
   typeof value === "string" && REPOSITORY_PART.test(value);
@@ -626,17 +1184,19 @@ function isRateLimited(error) {
  *   githubToken: string,
  *   openaiApiKey: string,
  *   openaiModel: string,
+ *   language: string,
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
- * }} The model and the limits stay text here: `parseModel()` and
- *   `parseLimits()` check them.
+ * }} The model, the language and the limits stay text here: `parseModel()`,
+ *   `parseLanguage()` and `parseLimits()` check them.
  */
 function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     openaiModel: core.getInput("openai-model"),
+    language: core.getInput("language"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
@@ -893,6 +1453,7 @@ function createRedactor(secrets) {
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -934,11 +1495,13 @@ async function run({
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
-    // A pattern, a limit or a model name that cannot be used fails the run
-    // here, before any request. The model is handed to the AI client later.
+    // A pattern, a limit, a model name or a language that cannot be used
+    // fails the run here, before any request. The model and the language are
+    // handed to the AI client and the prompt later.
     const excludeReason = createExcludeFilter(inputs.exclude);
     const limits = parseLimits(inputs);
     parseModel(inputs.openaiModel);
+    parseLanguage(inputs.language);
 
     core.info("ReviewOps started.");
 

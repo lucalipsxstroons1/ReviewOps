@@ -18,6 +18,10 @@ inputs:
     description: OpenAI model that writes the review, for example gpt-4o-mini or gpt-4.1. The default is gpt-4o-mini.
     required: false
     default: gpt-4o-mini
+  language:
+    description: Language of the feedback, as one of the codes en, de, fr, es, it, pt, nl, pl, tr, ja, zh and ko. Code, identifiers, file paths, severities and categories stay in English. The default is en.
+    required: false
+    default: en
   exclude:
     description: Additional glob patterns for files to leave out of the review, one per line. They extend the built-in list (lockfiles, build output, generated code, binary files). A pattern without a slash applies in every directory, a pattern with a slash from the root of the repository.
     required: false

@@ -192,6 +192,34 @@ test("fails the step before any request when openai-model is not a model name", 
   assert.equal(result.stderr, "");
 });
 
+test("fails the step before any request when language is not a language code", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(
+    pullRequestRun(api, { INPUT_LANGUAGE: "klingon" }),
+  );
+
+  assert.equal(result.status, 1);
+  assert.ok(
+    result.stdout.includes(
+      '::error::Input `language` must be one of en, de, fr, es, it, pt, nl, pl, tr, ja, zh, ko, but is "klingon".',
+    ),
+  );
+  assert.doesNotMatch(result.stdout, /ReviewOps started\./);
+  assert.deepEqual(api.requests, []);
+  assert.equal(result.stderr, "");
+});
+
+test("runs with a language from the input and never calls OpenAI", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(pullRequestRun(api, { INPUT_LANGUAGE: "de" }));
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout, /OpenAI|::error::/);
+  assert.equal(result.stderr, "");
+});
+
 test("runs with a model from the input and never calls OpenAI", async (t) => {
   const api = await startGitHubApi(t, { files: apiFiles(1) });
 

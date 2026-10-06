@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
 import { DEFAULT_MODEL } from "../src/ai/model.js";
+import { DEFAULT_LANGUAGE, LANGUAGES } from "../src/ai/prompt.js";
 import { DEFAULT_MAX_DIFF_CHARS, DEFAULT_MAX_FILES } from "../src/limits.js";
 
 const source = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
@@ -61,6 +62,22 @@ test("the model is optional and defaults to the model in the code", () => {
   assert.equal(input.required, false);
   assert.equal(input.default, DEFAULT_MODEL);
   assert.match(input.description, /default is gpt-4o-mini\./);
+});
+
+test("the language is optional and defaults to the language in the code", () => {
+  const input = action.inputs.language;
+
+  assert.equal(input.required, false);
+  assert.equal(input.default, DEFAULT_LANGUAGE);
+  assert.match(input.description, /default is en\./);
+});
+
+test("the description of the language names every code", () => {
+  const description = action.inputs.language.description;
+  const listed = /one of the codes ([^.]+)\./.exec(description)?.[1];
+
+  assert.ok(listed, "the codes are not listed");
+  assert.deepEqual(listed.split(/, | and /), Object.keys(LANGUAGES));
 });
 
 test("the descriptions of the limits name their default", () => {
