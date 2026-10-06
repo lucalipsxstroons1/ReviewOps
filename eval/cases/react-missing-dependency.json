@@ -1,0 +1,10 @@
+{
+  "description": "A useEffect that reads userId but has an empty dependency array, so the profile is never reloaded when userId changes.",
+  "path": "src/components/Profile.jsx",
+  "patch": "@@ -1,9 +1,13 @@\n import { useEffect, useState } from \"react\";\n import { fetchProfile } from \"../api/profile.js\";\n \n export function Profile({ userId }) {\n   const [profile, setProfile] = useState(null);\n \n+  useEffect(() => {\n+    fetchProfile(userId).then(setProfile);\n+  }, []);\n+\n   if (!profile) return <p>Loading...</p>;\n   return <h1>{profile.name}</h1>;\n }",
+  "expect": {
+    "category": "react",
+    "lines": [7, 8, 9],
+    "minSeverity": "major"
+  }
+}

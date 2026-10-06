@@ -1,0 +1,6 @@
+{
+  "description": "A search component with a complete dependency array, cleanup of the request, error handling and keys. Nothing to report.",
+  "path": "src/components/SearchResults.jsx",
+  "patch": "@@ -0,0 +1,33 @@\n+import { useEffect, useState } from \"react\";\n+\n+export function SearchResults({ query, search }) {\n+  const [results, setResults] = useState([]);\n+  const [failed, setFailed] = useState(false);\n+\n+  useEffect(() => {\n+    setFailed(false);\n+    if (!query) {\n+      setResults([]);\n+      return undefined;\n+    }\n+\n+    const controller = new AbortController();\n+    search(query, { signal: controller.signal })\n+      .then(setResults)\n+      .catch((error) => {\n+        if (error.name !== \"AbortError\") setFailed(true);\n+      });\n+\n+    return () => controller.abort();\n+  }, [query, search]);\n+\n+  if (failed) return <p>The search failed.</p>;\n+\n+  return (\n+    <ul>\n+      {results.map((item) => (\n+        <li key={item.id}>{item.title}</li>\n+      ))}\n+    </ul>\n+  );\n+}",
+  "clean": true
+}

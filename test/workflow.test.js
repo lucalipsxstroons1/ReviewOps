@@ -141,3 +141,62 @@ test("ci.yml: takes the Node.js version from .node-version", () => {
 
   assert.equal(setup.with["node-version-file"], ".node-version");
 });
+
+// --- eval.yml: the prompt measured against the real API ---------------------
+
+const evaluation = workflows["eval.yml"];
+const evalSteps = evaluation.config.jobs.eval.steps;
+const evalStep = evalSteps.find((step) => step.run === "npm run eval");
+
+test("eval.yml: runs for changes of the prompt, the format and the cases, and by hand", () => {
+  assert.deepEqual(Object.keys(evaluation.config.on).sort(), [
+    "pull_request",
+    "workflow_dispatch",
+  ]);
+  assert.deepEqual(evaluation.config.on.pull_request.paths, [
+    "src/ai/**",
+    "eval/**",
+    ".github/workflows/eval.yml",
+  ]);
+});
+
+test("eval.yml: never runs on pull_request_target, which hands secrets to forks", () => {
+  assert.equal("pull_request_target" in evaluation.config.on, false);
+});
+
+test("eval.yml: may only read the code", () => {
+  assert.deepEqual(evaluation.config.permissions, { contents: "read" });
+});
+
+test("eval.yml: has a time limit and cancels the older run", () => {
+  assert.equal(typeof evaluation.config.jobs.eval["timeout-minutes"], "number");
+  assert.ok(evaluation.config.jobs.eval["timeout-minutes"] <= 30);
+  assert.equal(evaluation.config.concurrency["cancel-in-progress"], true);
+});
+
+test("eval.yml: passes the key only to the step that needs it", () => {
+  const withSecret = evalSteps.filter((step) =>
+    JSON.stringify(step).includes("secrets."),
+  );
+
+  assert.deepEqual(withSecret, [evalStep]);
+  assert.equal(evalStep.env.OPENAI_API_KEY, "${{ secrets.OPENAI_API_KEY }}");
+  assert.doesNotMatch(
+    JSON.stringify(evaluation.config.jobs.eval.env ?? {}),
+    /secrets\./,
+  );
+  assert.equal("env" in evaluation.config, false);
+});
+
+test("eval.yml: hands the model to the program through the environment, not the command", () => {
+  assert.equal(evalStep.env.EVAL_MODEL, "${{ inputs.model }}");
+  for (const step of evalSteps) {
+    assert.doesNotMatch(step.run ?? "", /\$\{\{/);
+  }
+});
+
+test("eval.yml: installs exactly what the lock file says before it evaluates", () => {
+  const commands = evalSteps.map((step) => step.run).filter(Boolean);
+
+  assert.deepEqual(commands, ["npm ci", "npm run eval"]);
+});

@@ -710,6 +710,34 @@ for (const value of INVALID_MODELS) {
   });
 }
 
+const INVALID_LANGUAGES = ["xx", "german", "de-DE", "__proto__"];
+
+for (const value of INVALID_LANGUAGES) {
+  test(`fails before any request when language is "${value}"`, async () => {
+    const core = createFakeCore({ ...VALID_INPUTS, language: value });
+
+    const { tokens } = await runWith(core);
+
+    assert.equal(core.messages("setFailed").length, 1);
+    assert.match(
+      core.messages("setFailed")[0],
+      /^Input `language` must be one of en, de, fr, es, it, pt, nl, pl, tr, ja, zh, ko, but is /,
+    );
+    assert.deepEqual(core.messages("info"), []);
+    assert.deepEqual(tokens, [], "no API client may be created");
+  });
+}
+
+test("accepts every language code and the default without a message", async () => {
+  for (const language of ["en", "DE", " fr ", "ko", ""]) {
+    const core = createFakeCore({ ...VALID_INPUTS, language });
+
+    await runWith(core);
+
+    assert.deepEqual(core.messages("setFailed"), [], language);
+  }
+});
+
 test("accepts a valid model name and the default without a message", async () => {
   for (const model of ["gpt-4.1", "", "ft:gpt-4o-mini:org::id"]) {
     const core = createFakeCore({ ...VALID_INPUTS, "openai-model": model });
