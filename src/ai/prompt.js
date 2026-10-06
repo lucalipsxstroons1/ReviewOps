@@ -3,7 +3,7 @@ import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-export const PROMPT_VERSION = 4;
+export const PROMPT_VERSION = 5;
 
 // The same value is written into action.yml. A test keeps them equal.
 export const DEFAULT_LANGUAGE = "en";
@@ -73,7 +73,7 @@ const FOCUS_AREAS = {
   efcore: {
     title: "C# and Entity Framework Core",
     checks: [
-      "N+1 queries: a query inside a loop, or navigation properties loaded one by one",
+      "N+1 queries: an awaited query (`ToListAsync`, `FirstOrDefaultAsync`, `CountAsync` and similar) inside a `foreach`, `for` or `while` loop, so that one more query runs for every item, or navigation properties loaded one by one",
       "read-only queries without `AsNoTracking()`",
       "`FromSqlRaw` or `ExecuteSqlRaw` with string interpolation or concatenation instead of parameters",
       "sync-over-async: `.Result`, `.Wait()` or `.GetAwaiter().GetResult()` on a task",

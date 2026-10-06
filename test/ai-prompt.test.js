@@ -209,6 +209,15 @@ test("names an empty dependency array as a case of a missing dependency", () => 
   );
 });
 
+test("describes an N+1 query as an awaited query inside a loop", () => {
+  const prompt = buildSystemPrompt();
+
+  assert.match(
+    prompt,
+    /N\+1 queries: an awaited query \(`ToListAsync`.*\) inside a `foreach`, `for` or `while` loop/,
+  );
+});
+
 test("describes the annotated diff the way annotateDiff() writes it", () => {
   const prompt = buildSystemPrompt();
 
@@ -277,6 +286,7 @@ const PROMPT_HASHES = {
   2: "d718d5077aaaf15a35f4adff4f8784631dd28836e1816c5dc2538a1fa4989ab3",
   3: "b46b750252cad3d97e9e7d5ae48dd7c919d54c6f9702d9e1239e2810563aef85",
   4: "5caa68dd6e7a08ec2b95d4bbadfa21ef5e57e059aee2193b945b45b7dc8cfca8",
+  5: "cef023c40cb7d0a8c195be64f8892d389e533fe6fe33c6fd02298b8365a91b04",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {
