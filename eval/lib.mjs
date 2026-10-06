@@ -4,8 +4,9 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AiError } from "../src/ai/error.js";
+import { AiError, isFatal } from "../src/ai/error.js";
 import { buildSystemPrompt } from "../src/ai/prompt.js";
+import { buildUserPrompt } from "../src/ai/user-prompt.js";
 import {
   CATEGORIES,
   MAX_OUTPUT_TOKENS,
@@ -58,7 +59,7 @@ export const SEVERITY_RANK = Object.fromEntries(
   SEVERITIES.map((severity, index) => [severity, SEVERITIES.length - index]),
 );
 
-const KEYS = ["description", "path", "patch"];
+const KEYS = ["description", "title", "path", "patch"];
 
 /**
  * Loads the reference diffs from a directory, in the order of their names.
@@ -67,6 +68,7 @@ const KEYS = ["description", "path", "patch"];
  * @returns {{
  *   name: string,
  *   description: string,
+ *   title: string,
  *   path: string,
  *   patch: string,
  *   clean: boolean,
@@ -124,13 +126,18 @@ function toCase(name, data) {
   return {
     name,
     description: data.description,
+    title: data.title,
     path: data.path,
     patch: data.patch,
     clean,
     expect,
     commentableLines,
-    // The same shape as in the prompt: a `File:` line and the annotated diff.
-    user: `File: ${data.path}\n${annotateDiff(hunks)}`,
+    // Built by the action's own builder, so the evaluation measures exactly
+    // the message the action sends.
+    user: buildUserPrompt({
+      title: data.title,
+      files: [{ path: data.path, annotated: annotateDiff(hunks) }],
+    }),
   };
 }
 
@@ -236,9 +243,6 @@ export function renderTable({ model, promptVersion, rows, result }) {
   return lines.join("\n");
 }
 
-// After these errors another request is not worth a try.
-const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
-
 /**
  * Sends every case to the model and judges the answers: `RUNS_PER_CASE` runs
  * in English.
@@ -290,7 +294,7 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
       } catch (error) {
         // Anything but an error of the client is a defect of this program.
         if (!(error instanceof AiError)) throw error;
-        if (FATAL_KINDS.has(error.kind)) stopped = true;
+        if (isFatal(error)) stopped = true;
         job.result = { error: error.kind };
       }
     }

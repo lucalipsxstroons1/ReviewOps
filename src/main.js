@@ -3,8 +3,12 @@ import {
   context as actionsContext,
   getOctokit as actionsGetOctokit,
 } from "@actions/github";
+import { MAX_REQUEST_CHARS, planBatches, requestSize } from "./ai/batch.js";
+import { createAiClient as aiCreateClient } from "./ai/client.js";
 import { parseModel } from "./ai/model.js";
-import { parseLanguage } from "./ai/prompt.js";
+import { buildSystemPrompt, parseLanguage } from "./ai/prompt.js";
+import { SEVERITIES } from "./ai/schema.js";
+import { UNUSABLE_PATH_REASON, isUsablePath } from "./ai/user-prompt.js";
 import {
   PatchFormatError,
   parsePatch as diffParsePatch,
@@ -16,6 +20,7 @@ import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { applyLimits, parseLimits } from "./limits.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
+import { reviewInBatches } from "./review.js";
 
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
@@ -38,12 +43,14 @@ const UNREADABLE_DIFF = "the diff could not be read";
  * @param {typeof import("@actions/github").context} [deps.context]
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
+ * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
  */
 export async function run({
   core = actionsCore,
   context = actionsContext,
   getOctokit = actionsGetOctokit,
   parsePatch = diffParsePatch,
+  createAiClient = aiCreateClient,
 } = {}) {
   let redact = String;
 
@@ -59,12 +66,11 @@ export async function run({
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
     // A pattern, a limit, a model name or a language that cannot be used
-    // fails the run here, before any request. The model and the language are
-    // handed to the AI client and the prompt later.
+    // fails the run here, before any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
     const limits = parseLimits(inputs);
-    parseModel(inputs.openaiModel);
-    parseLanguage(inputs.language);
+    const model = parseModel(inputs.openaiModel);
+    const language = parseLanguage(inputs.language);
 
     core.info("ReviewOps started.");
 
@@ -78,11 +84,14 @@ export async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
-    // Generated and irrelevant files are left out before anything is parsed.
+    // Generated and irrelevant files are left out before anything is parsed,
+    // and so are files whose name cannot be put into the prompt.
     const relevant = [];
     const excluded = [];
     for (const file of listing.files) {
-      const reason = excludeReason(file.path);
+      const reason =
+        excludeReason(file.path) ||
+        (isUsablePath(file.path) ? null : UNUSABLE_PATH_REASON);
       if (reason) excluded.push({ path: file.path, reason });
       else relevant.push(file);
     }
@@ -90,8 +99,16 @@ export async function run({
     // Line numbers are calculated here and never taken from the model.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
 
-    // Large pull requests are cut to the limits, in the order of GitHub.
-    const { selected, overLimit, usedChars } = applyLimits(diffs, limits);
+    // Large pull requests are cut to the limits, in the order of GitHub. A
+    // file that does not fit into one request to the model is left out too.
+    const { selected, overLimit, tooLarge, usedChars } = applyLimits(
+      diffs,
+      limits,
+      {
+        maxChars: MAX_REQUEST_CHARS,
+        sizeOf: (file) => requestSize(pullRequest.title, file),
+      },
+    );
 
     // The list below is cut off, so the order matters: unreadable diffs and
     // files that the limits left out are the ones someone has to look at,
@@ -99,6 +116,7 @@ export async function run({
     // reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...tooLarge,
       ...overLimit,
       ...excluded,
       ...listing.skipped,
@@ -122,6 +140,11 @@ export async function run({
       for (const { path, detail } of unreadable) {
         core.debug(`${printable(path)}: ${detail}`);
       }
+    }
+    if (tooLarge.length > 0) {
+      core.warning(
+        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters of diff.`,
+      );
     }
     if (overLimit.length > 0) {
       core.warning(
@@ -151,6 +174,60 @@ export async function run({
       `Parsed the diffs of ${selected.length} files: ${addedLines} added lines can receive comments.`,
     );
     core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
+
+    // The title of the pull request goes into the prompt, never into the log.
+    const batches = planBatches({ title: pullRequest.title, files: selected });
+    core.info(
+      `Sending ${selected.length} files to ${model} in ${batches.length} requests.`,
+    );
+    const client = createAiClient({
+      apiKey: inputs.openaiApiKey,
+      model,
+      core,
+    });
+    const review = await reviewInBatches({
+      client,
+      system: buildSystemPrompt({ language }),
+      batches,
+    });
+
+    // Not one request worked: there is no review, and the message of the
+    // first error says what to do.
+    if (review.succeeded === 0) throw review.failed[0].error;
+
+    if (review.failed.length > 0) {
+      const notReviewed = review.failed.flatMap(({ paths }) => paths);
+      // The messages of the client are its own texts, without anything from
+      // the answer of the API.
+      const reasons = [
+        ...new Set(review.failed.map(({ error }) => error.message)),
+      ];
+      core.warning(
+        redact(
+          `Requests to the model that failed: ${review.failed.length} of ${batches.length}. ${notReviewed.length} files were not reviewed. ${reasons.join(" ")}`,
+        ),
+      );
+      for (const path of notReviewed.slice(0, MAX_SKIPPED_LINES)) {
+        core.info(
+          `Not reviewed ${printable(path)}: the request to the model failed.`,
+        );
+      }
+      if (notReviewed.length > MAX_SKIPPED_LINES) {
+        core.info(
+          `${notReviewed.length - MAX_SKIPPED_LINES} more files that were not reviewed are not listed.`,
+        );
+      }
+    }
+
+    // Numbers only: the findings and the summary hold code from the pull
+    // request. Checking and posting them follows in later steps.
+    const counts = SEVERITIES.map(
+      (severity) =>
+        `${review.findings.filter((item) => item.severity === severity).length} ${severity}`,
+    ).join(", ");
+    core.info(
+      `Review finished: ${review.findings.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
+    );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));

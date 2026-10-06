@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { PROXY_VARIABLE } from "./no-proxy.js";
 
 // Recognisable stand-ins. They must not look like real credentials.
@@ -9,6 +9,11 @@ export const API_KEY = "TESTKEY-not-a-real-key-654321";
 // Nothing listens on the discard port. A test that forgets to start the local
 // API server fails here instead of reaching GitHub.
 const UNREACHABLE_API = "http://127.0.0.1:9";
+
+// Sends the requests to OpenAI to TEST_OPENAI_URL, or nowhere without it.
+const REDIRECT_OPENAI = pathToFileURL(
+  fileURLToPath(new URL("./redirect-openai.js", import.meta.url)),
+).href;
 
 /** Absolute path of a file given relative to the repository root. */
 export const fromRoot = (path) =>
@@ -21,6 +26,9 @@ export const fromRoot = (path) =>
  * Variables the runner itself sets and proxy settings of the machine are
  * removed first, so the result does not depend on where the tests run. The
  * process is started without blocking, so a test can serve its API requests.
+ *
+ * Requests to OpenAI go to the local server in `TEST_OPENAI_URL`, or to an
+ * address where nothing listens: see `redirect-openai.js`.
  *
  * @param {string} entryPoint Absolute path of the file to start.
  * @param {Record<string, string>} env Variables for this run.
@@ -35,9 +43,18 @@ export function startAction(entryPoint, env) {
   );
 
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entryPoint], {
-      env: { ...inherited, GITHUB_API_URL: UNREACHABLE_API, ...env },
-    });
+    const child = spawn(
+      process.execPath,
+      ["--import", REDIRECT_OPENAI, entryPoint],
+      {
+        env: {
+          ...inherited,
+          GITHUB_API_URL: UNREACHABLE_API,
+          TEST_OPENAI_URL: "",
+          ...env,
+        },
+      },
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));

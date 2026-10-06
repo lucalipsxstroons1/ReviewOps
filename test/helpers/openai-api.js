@@ -30,6 +30,12 @@ export function completion({
   };
 }
 
+/** A successful answer in the review format of `src/ai/schema.js`. */
+export const reviewCompletion = (
+  findings = [],
+  summary = "Nothing stands out.",
+) => completion({ content: JSON.stringify({ summary, findings }) });
+
 /** The answer of OpenAI for a failed request, in the shape of the real API. */
 export function apiError(
   status,

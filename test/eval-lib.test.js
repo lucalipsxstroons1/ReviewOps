@@ -263,7 +263,7 @@ test("renders the result as a table with the version, the model and the runs nee
 // --- runEvaluation() ---------------------------------------------------------
 
 const byPath = (user) =>
-  cases.find((c) => user.startsWith(`File: ${c.path}\n`));
+  cases.find((c) => user.includes(`<file path="${c.path}">\n`));
 
 /** A model that finds every defect and is silent on clean code. */
 function goodModel(calls) {

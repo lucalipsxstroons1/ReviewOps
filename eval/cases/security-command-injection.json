@@ -1,5 +1,6 @@
 {
   "description": "A value from the query string is put into a shell command, so a caller can run any command.",
+  "title": "Add a diagnostics route",
   "path": "src/routes/diagnostics.js",
   "patch": "@@ -1,5 +1,11 @@\n import { exec } from \"node:child_process\";\n import express from \"express\";\n \n export const router = express.Router();\n \n+router.get(\"/ping\", (req, res) => {\n+  exec(`ping -c 1 ${req.query.host}`, (error, stdout) => {\n+    if (error) return res.status(500).send(\"ping failed\");\n+    res.send(stdout);\n+  });\n+});",
   "expect": {
