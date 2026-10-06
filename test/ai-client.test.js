@@ -4,6 +4,12 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import OpenAI from "openai";
 import { AiError, createAiClient } from "../src/ai/client.js";
+import { AiError as ErrorFromFile } from "../src/ai/error.js";
+import {
+  MAX_OUTPUT_TOKENS,
+  REVIEW_FORMAT,
+  parseReview,
+} from "../src/ai/schema.js";
 import { createFakeCore } from "./helpers/fake-core.js";
 import { apiError, completion, startOpenAiApi } from "./helpers/openai-api.js";
 import { fromRoot } from "./helpers/run-action.js";
@@ -892,4 +898,245 @@ test("only the tests decide where the SDK sends its requests", () => {
   assert.equal(source.match(/https?:\/\//g)?.length, 1);
   assert.doesNotMatch(source, /process\.env|OPENAI_BASE_URL/);
   assert.doesNotMatch(source, /console\./);
+});
+
+// --- The review format -------------------------------------------------------
+
+const FORMAT = {
+  type: "json_schema",
+  json_schema: { name: "test", strict: true, schema: { type: "object" } },
+};
+
+test("sends the response format and the output limit when they are given", async (t) => {
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api);
+
+  await client.complete({
+    ...PROMPT,
+    responseFormat: FORMAT,
+    maxOutputTokens: 4096,
+  });
+
+  assert.deepEqual(api.requests[0].body, {
+    model: "gpt-4o-mini",
+    temperature: 0.1,
+    messages: [
+      { role: "system", content: "SYSTEM-MARKER-1" },
+      { role: "user", content: "USER-MARKER-2" },
+    ],
+    response_format: FORMAT,
+    max_completion_tokens: 4096,
+  });
+});
+
+test("keeps the response format and the output limit when the request is repeated without temperature", async (t) => {
+  const api = await startOpenAiApi(t, [TEMPERATURE_REFUSED, completion()]);
+  const { client } = clientFor(api, { model: "o3-mini" });
+
+  await client.complete({
+    ...PROMPT,
+    responseFormat: FORMAT,
+    maxOutputTokens: 100,
+  });
+
+  assert.equal(api.requests.length, 2);
+  assert.equal(api.requests[1].body.temperature, undefined);
+  assert.deepEqual(api.requests[1].body.response_format, FORMAT);
+  assert.equal(api.requests[1].body.max_completion_tokens, 100);
+});
+
+test("refuses an output limit that is not a positive whole number", async (t) => {
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api);
+
+  for (const maxOutputTokens of [0, -1, 1.5, "100", null, NaN]) {
+    await assert.rejects(
+      client.complete({ ...PROMPT, maxOutputTokens }),
+      TypeError,
+    );
+  }
+  assert.equal(api.requests.length, 0);
+});
+
+test("reports a refusal of the model without its text", async (t) => {
+  const refusal = "REFUSAL-TEXT-REPEATING-CODE-FROM-THE-DIFF";
+  const api = await startOpenAiApi(t, completion({ content: null, refusal }));
+  const { client, core } = clientFor(api);
+
+  const error = await failure(
+    client.complete({ ...PROMPT, responseFormat: FORMAT }),
+  );
+
+  assert.ok(error instanceof AiError);
+  assert.equal(error.kind, "refusal");
+  assert.match(error.message, /refused to review/);
+  assert.match(error.message, /openai-model/);
+  const everything = [
+    error.message,
+    error.stack,
+    JSON.stringify(error),
+    JSON.stringify(core.calls),
+  ].join("\n");
+  assert.equal(everything.includes(refusal), false);
+  assert.deepEqual(core.messages("info"), []);
+});
+
+test("takes an empty refusal for no refusal", async (t) => {
+  const api = await startOpenAiApi(t, completion({ refusal: "" }));
+  const { client } = clientFor(api);
+
+  const answer = await client.complete(PROMPT);
+
+  assert.equal(answer.content, "the answer");
+});
+
+for (const [reason, content] of [
+  ["length", '{"summary": "cut o'],
+  ["length", ""],
+  ["length", null],
+  ["content_filter", ""],
+  ["content_filter", null],
+]) {
+  test(`hands on an answer that ended with ${reason} and ${content === null ? "no text" : content === "" ? "an empty text" : "a part of the text"}`, async (t) => {
+    const api = await startOpenAiApi(
+      t,
+      completion({ content, finishReason: reason }),
+    );
+    const { client } = clientFor(api);
+
+    const answer = await client.complete(PROMPT);
+
+    assert.equal(answer.finishReason, reason);
+    assert.equal(answer.content, content ?? "");
+  });
+}
+
+test("a cut-off answer is an error of the review, not an empty review", async (t) => {
+  const api = await startOpenAiApi(
+    t,
+    completion({
+      content: '{"summary": "s", "findings": [',
+      finishReason: "length",
+    }),
+  );
+  const { client } = clientFor(api);
+
+  const answer = await client.complete({
+    ...PROMPT,
+    responseFormat: REVIEW_FORMAT,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+  });
+  const error = await failure(
+    Promise.resolve().then(() => parseReview(answer)),
+  );
+
+  assert.equal(error.kind, "truncated");
+});
+
+test("an answer of the test server passes the review check", async (t) => {
+  const review = {
+    summary: "s",
+    findings: [
+      {
+        path: "a.js",
+        line: 1,
+        severity: "info",
+        category: "code-quality",
+        title: "t",
+        comment: "c",
+        suggestion: "s",
+      },
+    ],
+  };
+  const api = await startOpenAiApi(
+    t,
+    completion({ content: JSON.stringify(review) }),
+  );
+  const { client } = clientFor(api);
+
+  const answer = await client.complete({
+    ...PROMPT,
+    responseFormat: REVIEW_FORMAT,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+  });
+
+  assert.deepEqual(parseReview(answer), review);
+});
+
+// The shape of this answer is what the API is known to send for a model
+// without Structured Outputs (an HTTP 400 for the parameter
+// `response_format`). It is not yet measured against the real API.
+const NO_STRUCTURED_OUTPUTS = apiError(400, {
+  param: "response_format",
+  message:
+    "Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model.",
+});
+
+test("explains a model without Structured Outputs and points to the input", async (t) => {
+  const api = await startOpenAiApi(t, NO_STRUCTURED_OUTPUTS);
+  const { client } = clientFor(api, { model: "gpt-3.5-turbo" });
+
+  const error = await failure(
+    client.complete({ ...PROMPT, responseFormat: FORMAT }),
+  );
+
+  assert.ok(error instanceof AiError);
+  assert.equal(error.kind, "model");
+  assert.equal(error.status, 400);
+  assert.match(
+    error.message,
+    /"gpt-3\.5-turbo" does not support Structured Outputs/,
+  );
+  assert.match(error.message, /`openai-model`/);
+  assert.equal(api.requests.length, 1);
+});
+
+test("does not repeat a request for a model without Structured Outputs", async (t) => {
+  const api = await startOpenAiApi(t, NO_STRUCTURED_OUTPUTS);
+  const { client } = clientFor(api);
+
+  await failure(client.complete({ ...PROMPT, responseFormat: FORMAT }));
+
+  assert.equal(api.requests.length, 1);
+});
+
+test("reports the missing Structured Outputs also after temperature was refused", async (t) => {
+  const api = await startOpenAiApi(t, [
+    TEMPERATURE_REFUSED,
+    NO_STRUCTURED_OUTPUTS,
+  ]);
+  const { client } = clientFor(api);
+
+  const error = await failure(
+    client.complete({ ...PROMPT, responseFormat: FORMAT }),
+  );
+
+  assert.equal(error.kind, "model");
+  assert.equal(api.requests.length, 2);
+});
+
+test("takes any other refused parameter for a refused request", async (t) => {
+  const api = await startOpenAiApi(
+    t,
+    apiError(400, { param: "max_completion_tokens" }),
+  );
+  const { client } = clientFor(api);
+
+  const error = await failure(
+    client.complete({ ...PROMPT, responseFormat: FORMAT }),
+  );
+
+  assert.equal(error.kind, "request");
+});
+
+test("the error class lives in its own file, without the SDK", () => {
+  assert.equal(AiError, ErrorFromFile);
+  const source = readFileSync(fromRoot("src/ai/error.js"), "utf8");
+  assert.equal(/^import /m.test(source), false);
+  const schemaSource = ["src/ai/schema.js", "src/ai/json-schema.js"].map(
+    (file) => readFileSync(fromRoot(file), "utf8"),
+  );
+  for (const text of schemaSource) {
+    assert.equal(/from "openai"|client\.js/.test(text), false);
+  }
 });
