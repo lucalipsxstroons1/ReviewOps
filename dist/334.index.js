@@ -1,8 +1,8 @@
-export const id = 969;
-export const ids = [969];
+export const id = 334;
+export const ids = [334];
 export const modules = {
 
-/***/ 7969:
+/***/ 6334:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -15,6 +15,69 @@ __webpack_require__.d(__webpack_exports__, {
 var lib_core = __webpack_require__(6257);
 // EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js + 22 modules
 var github = __webpack_require__(2413);
+;// CONCATENATED MODULE: ./src/printable.js
+const MAX_LENGTH = 200;
+
+// \p{Cc}: control characters, including line breaks.
+// \p{Cf}: invisible format characters, which can reorder what a reader sees.
+// \p{Zl}, \p{Zp}: the Unicode line and paragraph separators.
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * Makes text from outside safe to write into the log on one line.
+ *
+ * File names and similar values come from the author of the pull request.
+ * A line break in such a value could start a new log line with a workflow
+ * command such as `::error::`. Unsafe characters are therefore shown by
+ * their code point, a line feed for example as backslash-u-000a, instead of
+ * being written out.
+ *
+ * @param {unknown} text
+ * @returns {string}
+ */
+function printable(text) {
+  const visible = String(text).replace(
+    UNSAFE,
+    (character) =>
+      `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return visible.length > MAX_LENGTH
+    ? `${visible.slice(0, MAX_LENGTH)}…`
+    : visible;
+}
+
+;// CONCATENATED MODULE: ./src/ai/model.js
+
+
+// The same value is written into action.yml. A test keeps them equal.
+const DEFAULT_MODEL = "gpt-4o-mini";
+
+// Letters, digits and the characters that model names use, such as
+// "gpt-4.1", "o3-mini" or the fine-tuning name "ft:gpt-4o-mini:org::id".
+// The name ends up in a request and in messages, so nothing else is allowed.
+const MODEL_NAME = /^[A-Za-z0-9._:-]{1,100}$/;
+
+/**
+ * Reads the `openai-model` input. An empty value means the default: it is
+ * usually a variable of the workflow that was not set.
+ *
+ * @param {string} [value] The value as the workflow passed it.
+ * @returns {string}
+ * @throws {Error} When the value is not the name of a model.
+ */
+function parseModel(value = "") {
+  const name = String(value).trim();
+  if (name === "") return DEFAULT_MODEL;
+
+  if (!MODEL_NAME.test(name)) {
+    // The value is a setting of the workflow, which a pull request can change.
+    throw new Error(
+      `Input \`openai-model\` must be the name of an OpenAI model (letters, digits, ".", "-", "_" and ":", at most 100 characters), but is "${printable(name)}".`,
+    );
+  }
+  return name;
+}
+
 ;// CONCATENATED MODULE: ./src/diff/parse.js
 // `@@ -a,b +c,d @@ section`. A missing length means one line. Line numbers
 // with more than nine digits do not occur and would lose precision.
@@ -147,37 +210,6 @@ function parse_parsePatch(patch) {
 
 // EXTERNAL MODULE: ./node_modules/picomatch/index.js
 var picomatch = __webpack_require__(4006);
-;// CONCATENATED MODULE: ./src/printable.js
-const MAX_LENGTH = 200;
-
-// \p{Cc}: control characters, including line breaks.
-// \p{Cf}: invisible format characters, which can reorder what a reader sees.
-// \p{Zl}, \p{Zp}: the Unicode line and paragraph separators.
-const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-
-/**
- * Makes text from outside safe to write into the log on one line.
- *
- * File names and similar values come from the author of the pull request.
- * A line break in such a value could start a new log line with a workflow
- * command such as `::error::`. Unsafe characters are therefore shown by
- * their code point, a line feed for example as backslash-u-000a, instead of
- * being written out.
- *
- * @param {unknown} text
- * @returns {string}
- */
-function printable(text) {
-  const visible = String(text).replace(
-    UNSAFE,
-    (character) =>
-      `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
-  );
-  return visible.length > MAX_LENGTH
-    ? `${visible.slice(0, MAX_LENGTH)}…`
-    : visible;
-}
-
 ;// CONCATENATED MODULE: ./src/exclude.js
 
 
@@ -593,15 +625,18 @@ function isRateLimited(error) {
  * @returns {{
  *   githubToken: string,
  *   openaiApiKey: string,
+ *   openaiModel: string,
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
- * }} The limits stay text here: `parseLimits()` checks them.
+ * }} The model and the limits stay text here: `parseModel()` and
+ *   `parseLimits()` check them.
  */
 function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
+    openaiModel: core.getInput("openai-model"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
@@ -634,6 +669,14 @@ function assertInputs(inputs) {
   if (!inputs.openaiApiKey) {
     throw new Error(
       "Input `openai-api-key` is missing. Store the key as a repository secret and pass it to the action, for example `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`.",
+    );
+  }
+  // A real key is made of visible ASCII characters. Anything else, such as a
+  // space, a line break or the ellipsis of a shortened display, is a copy
+  // error. Without this check the SDK fails with a message about a header.
+  if (/[^!-~]/.test(inputs.openaiApiKey)) {
+    throw new Error(
+      "Input `openai-api-key` contains a character that is not allowed: a space, a line break or a character outside of ASCII. Copy the key from OpenAI again and store it as the repository secret `OPENAI_API_KEY`.",
     );
   }
   if (!inputs.githubToken) {
@@ -849,6 +892,7 @@ function createRedactor(secrets) {
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -890,10 +934,11 @@ async function run({
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
-    // A pattern or a limit that cannot be used fails the run here, before
-    // any request.
+    // A pattern, a limit or a model name that cannot be used fails the run
+    // here, before any request. The model is handed to the AI client later.
     const excludeReason = createExcludeFilter(inputs.exclude);
     const limits = parseLimits(inputs);
+    parseModel(inputs.openaiModel);
 
     core.info("ReviewOps started.");
 

@@ -180,6 +180,22 @@ test("the bundle leaves out the files over the limit and names them", async (t) 
   assert.equal(result.stderr, "");
 });
 
+test("the bundle fails the step when the model is not a model name", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runBundle({
+    ...pullRequestRun(api),
+    "INPUT_OPENAI-MODEL": "../secrets",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::Input `openai-model` must be the name of an OpenAI model/m,
+  );
+  assert.deepEqual(api.requests, []);
+});
+
 test("the bundle fails the step when a limit is not a positive number", async (t) => {
   const api = await startGitHubApi(t, { files: apiFiles(1) });
 

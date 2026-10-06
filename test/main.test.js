@@ -674,6 +674,66 @@ for (const [input, value] of INVALID_LIMITS) {
   });
 }
 
+test("fails before any request when the API key has a character that is not allowed", async () => {
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    "openai-api-key": "sk-abcdef ghijkl",
+  });
+
+  const { tokens } = await runWith(core);
+
+  assert.equal(core.messages("setFailed").length, 1);
+  assert.match(
+    core.messages("setFailed")[0],
+    /^Input `openai-api-key` contains a character that is not allowed/,
+  );
+  assert.equal(core.messages("setFailed")[0].includes("abcdef"), false);
+  assert.deepEqual(core.messages("info"), []);
+  assert.deepEqual(tokens, [], "no API client may be created");
+});
+
+const INVALID_MODELS = ["gpt 4", "../secrets", "gpt`4`", "a".repeat(101)];
+
+for (const value of INVALID_MODELS) {
+  test(`fails before any request when openai-model is "${value.slice(0, 20)}"`, async () => {
+    const core = createFakeCore({ ...VALID_INPUTS, "openai-model": value });
+
+    const { tokens } = await runWith(core);
+
+    assert.equal(core.messages("setFailed").length, 1);
+    assert.match(
+      core.messages("setFailed")[0],
+      /^Input `openai-model` must be the name of an OpenAI model/,
+    );
+    assert.deepEqual(core.messages("info"), []);
+    assert.deepEqual(tokens, [], "no API client may be created");
+  });
+}
+
+test("accepts a valid model name and the default without a message", async () => {
+  for (const model of ["gpt-4.1", "", "ft:gpt-4o-mini:org::id"]) {
+    const core = createFakeCore({ ...VALID_INPUTS, "openai-model": model });
+
+    await runWith(core);
+
+    assert.deepEqual(core.messages("setFailed"), [], model);
+  }
+});
+
+test("does not call the model yet", async () => {
+  // The client exists since #11, but only #14 puts it into the run. Until
+  // then the run must not need an API key that works.
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core);
+
+  assert.doesNotMatch(
+    core.messages("info").join("\n"),
+    /OpenAI answered|OpenAI error/,
+  );
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
 test("fails with the same message for a limit that is a secret-looking value", async () => {
   // A limit is a setting. A value that equals a credential is still shown
   // as the redactor of the run knows it.
