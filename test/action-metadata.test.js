@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { DEFAULT_MODEL } from "../src/ai/model.js";
 import { DEFAULT_MAX_DIFF_CHARS, DEFAULT_MAX_FILES } from "../src/limits.js";
 
 const source = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
@@ -52,6 +53,14 @@ test("the limits are optional and default to the values in the code", () => {
   assert.equal(chars.required, false);
   assert.equal(files.default, String(DEFAULT_MAX_FILES));
   assert.equal(chars.default, String(DEFAULT_MAX_DIFF_CHARS));
+});
+
+test("the model is optional and defaults to the model in the code", () => {
+  const input = action.inputs["openai-model"];
+
+  assert.equal(input.required, false);
+  assert.equal(input.default, DEFAULT_MODEL);
+  assert.match(input.description, /default is gpt-4o-mini\./);
 });
 
 test("the descriptions of the limits name their default", () => {

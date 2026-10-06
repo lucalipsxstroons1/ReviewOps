@@ -8,15 +8,18 @@
  * @returns {{
  *   githubToken: string,
  *   openaiApiKey: string,
+ *   openaiModel: string,
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
- * }} The limits stay text here: `parseLimits()` checks them.
+ * }} The model and the limits stay text here: `parseModel()` and
+ *   `parseLimits()` check them.
  */
 export function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
+    openaiModel: core.getInput("openai-model"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
@@ -49,6 +52,14 @@ export function assertInputs(inputs) {
   if (!inputs.openaiApiKey) {
     throw new Error(
       "Input `openai-api-key` is missing. Store the key as a repository secret and pass it to the action, for example `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`.",
+    );
+  }
+  // A real key is made of visible ASCII characters. Anything else, such as a
+  // space, a line break or the ellipsis of a shortened display, is a copy
+  // error. Without this check the SDK fails with a message about a header.
+  if (/[^!-~]/.test(inputs.openaiApiKey)) {
+    throw new Error(
+      "Input `openai-api-key` contains a character that is not allowed: a space, a line break or a character outside of ASCII. Copy the key from OpenAI again and store it as the repository secret `OPENAI_API_KEY`.",
     );
   }
   if (!inputs.githubToken) {

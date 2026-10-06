@@ -7,6 +7,7 @@ test("reads all inputs", () => {
   const core = createFakeCore({
     "github-token": "token-value",
     "openai-api-key": "key-value",
+    "openai-model": "gpt-4.1",
     exclude: "docs/**\n*.txt",
     "max-files": "10",
     "max-diff-chars": "5000",
@@ -15,6 +16,7 @@ test("reads all inputs", () => {
   assert.deepEqual(readInputs(core), {
     githubToken: "token-value",
     openaiApiKey: "key-value",
+    openaiModel: "gpt-4.1",
     exclude: "docs/**\n*.txt",
     maxFiles: "10",
     maxDiffChars: "5000",
@@ -43,10 +45,11 @@ test("reads a missing exclude input as empty text", () => {
   assert.equal(readInputs(core).exclude, "");
 });
 
-test("masks the credentials, but not the exclude patterns or the limits", () => {
+test("masks the credentials, but not the model, the patterns or the limits", () => {
   const core = createFakeCore({
     "github-token": "token-value",
     "openai-api-key": "key-value",
+    "openai-model": "gpt-4.1-long-name",
     exclude: "documentation/**",
     "max-files": "1000000",
     "max-diff-chars": "1000000",
@@ -88,6 +91,46 @@ test("rejects a missing API key and says how to provide it", () => {
     () => assertInputs({ githubToken: "token-value", openaiApiKey: "" }),
     /`openai-api-key` is missing.*repository secret/,
   );
+});
+
+const LINE_FEED = String.fromCodePoint(0x0a);
+const ELLIPSIS = String.fromCodePoint(0x2026);
+const NO_BREAK_SPACE = String.fromCodePoint(0xa0);
+
+for (const [name, key] of [
+  ["a space", "sk-abcdef ghijkl"],
+  ["a line break", `sk-abcdef${LINE_FEED}ghijkl`],
+  ["a tab", `sk-abcdef${String.fromCodePoint(0x09)}ghijkl`],
+  ["the ellipsis of a shortened display", `sk-abcdef${ELLIPSIS}ghijkl`],
+  ["a no-break space", `sk-abcdef${NO_BREAK_SPACE}ghijkl`],
+  ["a letter outside of ASCII", "sk-abcdefö-ghijkl"],
+]) {
+  test(`rejects an API key with ${name} without repeating the key`, () => {
+    assert.throws(
+      () => assertInputs({ githubToken: "token-value", openaiApiKey: key }),
+      (error) => {
+        assert.match(
+          error.message,
+          /^Input `openai-api-key` contains a character that is not allowed.*Copy the key from OpenAI again.*`OPENAI_API_KEY`/,
+        );
+        assert.equal(error.message.includes("abcdef"), false);
+        return true;
+      },
+    );
+  });
+}
+
+test("accepts the characters of real keys", () => {
+  for (const key of [
+    "sk-proj-AbC123_dEf-456",
+    "sk-svcacct-0123456789abcdefABCDEF_-",
+    "placeholder-until-issue-11",
+    "key-value",
+  ]) {
+    assert.doesNotThrow(() =>
+      assertInputs({ githubToken: "token-value", openaiApiKey: key }),
+    );
+  }
 });
 
 test("rejects an empty token", () => {

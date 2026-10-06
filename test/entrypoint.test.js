@@ -153,6 +153,57 @@ test("does not fail on a pull request with 3000 files", async (t) => {
   assert.doesNotMatch(result.stdout, /::error::/);
 });
 
+test("fails the step before any request when the API key has a space in it", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(
+    pullRequestRun(api, { "INPUT_OPENAI-API-KEY": "TESTKEY-not a-real-key" }),
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::Input `openai-api-key` contains a character that is not allowed/m,
+  );
+  assert.equal(
+    withoutMaskCommands(result.output).includes("not a-real"),
+    false,
+  );
+  assert.doesNotMatch(result.stdout, /ReviewOps started\./);
+  assert.deepEqual(api.requests, []);
+  assert.equal(result.stderr, "");
+});
+
+test("fails the step before any request when openai-model is not a model name", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(
+    pullRequestRun(api, { "INPUT_OPENAI-MODEL": "gpt 4" }),
+  );
+
+  assert.equal(result.status, 1);
+  assert.ok(
+    result.stdout.includes(
+      '::error::Input `openai-model` must be the name of an OpenAI model (letters, digits, ".", "-", "_" and ":", at most 100 characters), but is "gpt 4".',
+    ),
+  );
+  assert.doesNotMatch(result.stdout, /ReviewOps started\./);
+  assert.deepEqual(api.requests, []);
+  assert.equal(result.stderr, "");
+});
+
+test("runs with a model from the input and never calls OpenAI", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(
+    pullRequestRun(api, { "INPUT_OPENAI-MODEL": "gpt-4.1" }),
+  );
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout, /OpenAI|::error::/);
+  assert.equal(result.stderr, "");
+});
+
 for (const [input, value] of [
   ["INPUT_MAX-FILES", "0"],
   ["INPUT_MAX-FILES", "many"],

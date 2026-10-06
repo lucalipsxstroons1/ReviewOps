@@ -3,6 +3,7 @@ import {
   context as actionsContext,
   getOctokit as actionsGetOctokit,
 } from "@actions/github";
+import { parseModel } from "./ai/model.js";
 import {
   PatchFormatError,
   parsePatch as diffParsePatch,
@@ -56,10 +57,11 @@ export async function run({
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
-    // A pattern or a limit that cannot be used fails the run here, before
-    // any request.
+    // A pattern, a limit or a model name that cannot be used fails the run
+    // here, before any request. The model is handed to the AI client later.
     const excludeReason = createExcludeFilter(inputs.exclude);
     const limits = parseLimits(inputs);
+    parseModel(inputs.openaiModel);
 
     core.info("ReviewOps started.");
 
