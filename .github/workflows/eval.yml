@@ -22,7 +22,9 @@ on:
 permissions:
   contents: read
 
-# A newer push replaces the older run, which would only cost money.
+# A newer push replaces the older run, which would only cost money. Runs by
+# hand on the same branch share this group as well: start them one after
+# the other, or each new one cancels the one before.
 concurrency:
   group: eval-${{ github.ref }}
   cancel-in-progress: true
