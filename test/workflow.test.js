@@ -110,6 +110,20 @@ test("reviewops.yml: passes the API key from the secret store and no token", () 
   });
 });
 
+test("reviewops.yml: hands the outputs to a later step through the environment", () => {
+  const action = reviewSteps.find((step) => step.uses === "./");
+  const show = reviewSteps[reviewSteps.indexOf(action) + 1];
+
+  assert.equal(action.id, "review");
+  assert.deepEqual(show.env, {
+    FINDINGS_COUNT: "${{ steps.review.outputs.findings-count }}",
+    CRITICAL_COUNT: "${{ steps.review.outputs.critical-count }}",
+    REVIEW_URL: "${{ steps.review.outputs.review-url }}",
+  });
+  // No expression inside the command: a value can never become shell code.
+  assert.doesNotMatch(show.run, /\$\{\{/);
+});
+
 // --- ci.yml: lint, test and build -------------------------------------------
 
 const ci = workflows["ci.yml"];

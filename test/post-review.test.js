@@ -434,10 +434,50 @@ test("puts the fingerprint on the second line of an inline comment", () => {
 
   const lines = body.split("\n");
   assert.equal(lines[0], REVIEW_MARKER);
-  assert.equal(lines[1], fingerprintLine(FINGERPRINT));
-  assert.equal(lines[1], `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`);
+  assert.equal(lines[1], fingerprintLine(FINGERPRINT, "critical"));
+  assert.equal(
+    lines[1],
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} severity: critical -->`,
+  );
   assert.equal(lines[2], "");
   assert.ok(body.endsWith(aiLabel("gpt-4.1")));
+});
+
+test("writes the severity of the finding next to the fingerprint", () => {
+  for (const severity of ["critical", "major", "minor", "info"]) {
+    const body = commentBody(finding({ severity }), "gpt-4.1", FINGERPRINT);
+
+    assert.equal(
+      body.split("\n")[1],
+      `<!-- reviewops-fingerprint: ${FINGERPRINT} severity: ${severity} -->`,
+    );
+  }
+});
+
+test("writes a fingerprint line without a severity that is not one of the known ones", () => {
+  assert.equal(
+    fingerprintLine(FINGERPRINT, "blocker"),
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`,
+  );
+  assert.equal(
+    fingerprintLine(FINGERPRINT, 1),
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`,
+  );
+});
+
+test("keeps the fingerprints in the text of a review without a severity", () => {
+  const body = reviewBody({
+    model: "gpt-4.1",
+    summaries: [],
+    inline: [],
+    listed: [finding()],
+    overLimit: 0,
+    maxComments: 10,
+    skipped: [],
+    fingerprints: [FINGERPRINT],
+  });
+
+  assert.equal(body.split("\n")[1], fingerprintLine(FINGERPRINT));
 });
 
 test("writes no fingerprint line without a fingerprint", () => {
@@ -479,7 +519,10 @@ test("posts every inline comment with the fingerprint of its line", async () => 
   });
 
   const [first, second] = octokit.reviews[0].comments;
-  assert.equal(first.body.split("\n")[1], fingerprintLine("aaaaaaaaaaaaaaaa"));
+  assert.equal(
+    first.body.split("\n")[1],
+    fingerprintLine("aaaaaaaaaaaaaaaa", "critical"),
+  );
   assert.ok(!second.body.includes("reviewops-fingerprint"));
 });
 

@@ -38,6 +38,18 @@ inputs:
     description: Maximum number of findings the review shows, a whole number of at least 1. The most serious findings come first; findings at a line of the diff become inline comments, the others are listed in the text of the review. Findings beyond the limit are left out and counted in the log. The default is 10.
     required: false
     default: "10"
+  fail-on:
+    description: Lets the step fail when open findings reach this severity, as one of none, critical and major. major includes critical. The step fails only after the review is posted. Open findings are the findings of this run and earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. The default is none, so no finding fails the workflow.
+    required: false
+    default: none
+
+outputs:
+  findings-count:
+    description: Number of open findings, the findings of this run and the earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. Set on every run that does not fail with an error, also when fail-on lets the step fail.
+  critical-count:
+    description: Number of open findings with the severity critical, counted like findings-count.
+  review-url:
+    description: Address of the review that this run posted. Empty when the run posted no review.
 
 runs:
   using: node24

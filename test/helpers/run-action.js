@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PROXY_VARIABLE } from "./no-proxy.js";
 
@@ -30,9 +33,20 @@ export const fromRoot = (path) =>
  * Requests to OpenAI go to the local server in `TEST_OPENAI_URL`, or to an
  * address where nothing listens: see `redirect-openai.js`.
  *
+ * Like the runner, it hands the action a file for the job summary
+ * (`GITHUB_STEP_SUMMARY`) and one for the outputs (`GITHUB_OUTPUT`), unless
+ * `env` sets them. Their content is returned as `summary` and `outputs`.
+ *
  * @param {string} entryPoint Absolute path of the file to start.
  * @param {Record<string, string>} env Variables for this run.
- * @returns {Promise<{ status: number | null, stdout: string, stderr: string, output: string }>}
+ * @returns {Promise<{
+ *   status: number | null,
+ *   stdout: string,
+ *   stderr: string,
+ *   output: string,
+ *   summary: string,
+ *   outputs: Record<string, string>,
+ * }>}
  */
 export function startAction(entryPoint, env) {
   const inherited = Object.fromEntries(
@@ -41,6 +55,29 @@ export function startAction(entryPoint, env) {
         !/^(GITHUB_|INPUT_|RUNNER_)/.test(name) && !PROXY_VARIABLE.test(name),
     ),
   );
+  const folder = mkdtempSync(join(tmpdir(), "reviewops-run-"));
+  const files = {
+    GITHUB_STEP_SUMMARY: join(folder, "summary.md"),
+    GITHUB_OUTPUT: join(folder, "output.txt"),
+  };
+  for (const file of Object.values(files)) writeFileSync(file, "");
+  const collect = () => {
+    const summaryFile = env.GITHUB_STEP_SUMMARY ?? files.GITHUB_STEP_SUMMARY;
+    const outputFile = env.GITHUB_OUTPUT ?? files.GITHUB_OUTPUT;
+    const read = (file) => {
+      try {
+        return readFileSync(file, "utf8");
+      } catch {
+        return "";
+      }
+    };
+    const result = {
+      summary: read(summaryFile),
+      outputs: readOutputs(read(outputFile)),
+    };
+    rmSync(folder, { recursive: true, force: true });
+    return result;
+  };
 
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -51,6 +88,7 @@ export function startAction(entryPoint, env) {
           ...inherited,
           GITHUB_API_URL: UNREACHABLE_API,
           TEST_OPENAI_URL: "",
+          ...files,
           ...env,
         },
       },
@@ -61,9 +99,33 @@ export function startAction(entryPoint, env) {
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
     child.on("close", (status) =>
-      resolve({ status, stdout, stderr, output: stdout + stderr }),
+      resolve({
+        status,
+        stdout,
+        stderr,
+        output: stdout + stderr,
+        ...collect(),
+      }),
     );
   });
+}
+
+/**
+ * Reads the file the runner hands out as `GITHUB_OUTPUT`: `@actions/core`
+ * writes every output as `name<<delimiter`, the value and the delimiter.
+ */
+function readOutputs(text) {
+  const outputs = {};
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^([^<]+)<<(.+)$/.exec(lines[index]);
+    if (!match) continue;
+    const end = lines.indexOf(match[2], index + 1);
+    if (end === -1) break;
+    outputs[match[1]] = lines.slice(index + 1, end).join("\n");
+    index = end;
+  }
+  return outputs;
 }
 
 /** What the runner sets for a pull_request event, with the example payload. */

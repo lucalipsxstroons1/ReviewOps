@@ -160,7 +160,7 @@ test("a new commit with a new problem gets one comment at the new line", async (
   );
   assert.equal(
     review.body.comments[0].body.split("\n")[1],
-    fingerprintLine(fingerprintOf("c", "b")),
+    fingerprintLine(fingerprintOf("c", "b"), "major"),
   );
   assert.match(
     review.body.body,

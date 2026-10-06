@@ -37,9 +37,17 @@ export const MAX_PARALLEL_REQUESTS = 4;
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
  *   shortened: number,
+ *   usage: {
+ *     inputTokens: number,
+ *     outputTokens: number,
+ *     totalTokens: number,
+ *     withoutCount: number,
+ *   },
  * }>} The reviews of the requests that worked, in the order of the batches.
  *   Their texts are bounded and cleaned (`boundReview()`); `shortened`
- *   counts the texts that were cut, over all requests.
+ *   counts the texts that were cut, over all requests. `usage` adds up the
+ *   tokens of the requests that worked; `withoutCount` counts the ones whose
+ *   answer had no token count.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -72,7 +80,7 @@ export async function reviewInBatches({
         // The texts are bounded and cleaned right here: nothing after this
         // point sees a text of the model that is not.
         const { review, shortened } = boundReview(parseReview(answer));
-        results[index] = { review, shortened };
+        results[index] = { review, shortened, usage: answer.usage ?? null };
       } catch (error) {
         if (!(error instanceof AiError)) {
           defect ??= { error };
@@ -92,12 +100,27 @@ export async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { reviews: [], succeeded: 0, failed: [], shortened: 0 };
+  const merged = {
+    reviews: [],
+    succeeded: 0,
+    failed: [],
+    shortened: 0,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, withoutCount: 0 },
+  };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
       merged.shortened += result.shortened;
+      // The client hands on a token count only if all three numbers are
+      // whole numbers of at least 0.
+      if (result.usage) {
+        merged.usage.inputTokens += result.usage.inputTokens;
+        merged.usage.outputTokens += result.usage.outputTokens;
+        merged.usage.totalTokens += result.usage.totalTokens;
+      } else {
+        merged.usage.withoutCount += 1;
+      }
       merged.reviews.push({
         files: batch.files,
         summary: result.review.summary,

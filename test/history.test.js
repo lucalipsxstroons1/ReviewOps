@@ -251,6 +251,111 @@ test("reads a fingerprint only from the second line and only in its exact shape"
   assert.equal(history.ownComments, bodies.length);
 });
 
+// --- Earlier findings with their severity --------------------------------------
+
+const ownFinding = (id, fingerprint, severity, fields = {}) => ({
+  id,
+  body: `${REVIEW_MARKER}\n${fingerprintLine(fingerprint, severity)}\n\ntext`,
+  user: BOT,
+  ...fields,
+});
+
+test("lists the earlier findings of own inline comments with id and severity", async () => {
+  const history = await read({
+    existingComments: [
+      ownFinding(11, FP, "critical"),
+      ownFinding(12, FP2, "minor"),
+    ],
+  });
+  assert.deepEqual(history.earlierFindings, [
+    { id: 11, fingerprint: FP, severity: "critical" },
+    { id: 12, fingerprint: FP2, severity: "minor" },
+  ]);
+  assert.deepEqual([...history.fingerprints].sort(), [FP, FP2].sort());
+});
+
+test("reads back the severity that commentBody() writes", async () => {
+  const body = commentBody(
+    {
+      severity: "major",
+      category: "security",
+      path: "a.js",
+      line: 1,
+      title: "Title",
+      comment: "Comment",
+      suggestion: "Suggestion",
+    },
+    "gpt-4.1",
+    FP,
+  );
+  const history = await read({
+    existingComments: [{ id: 5, body, user: BOT }],
+  });
+  assert.deepEqual(history.earlierFindings, [
+    { id: 5, fingerprint: FP, severity: "major" },
+  ]);
+});
+
+test("keeps the fingerprint of a comment without a severity, but not as an earlier finding", async () => {
+  const history = await read({ existingComments: [ownComment(FP, { id: 7 })] });
+  assert.ok(history.fingerprints.has(FP));
+  assert.deepEqual(history.earlierFindings, []);
+});
+
+test("takes no earlier finding from a person, an unknown severity or a bad id", async () => {
+  const history = await read({
+    existingComments: [
+      ownFinding(1, FP, "critical", { user: HUMAN }),
+      {
+        id: 2,
+        body: `${REVIEW_MARKER}\n<!-- reviewops-fingerprint: ${FP} severity: blocker -->`,
+        user: BOT,
+      },
+      {
+        id: 3,
+        body: `${REVIEW_MARKER}\n<!-- reviewops-fingerprint: ${FP} severity: Critical -->`,
+        user: BOT,
+      },
+      ownFinding("4", FP, "critical"),
+      ownFinding(0, FP, "critical"),
+      ownFinding(1.5, FP, "critical"),
+      ownFinding(undefined, FP, "critical"),
+    ],
+  });
+  assert.deepEqual(history.earlierFindings, []);
+  // The own comments with a bad id still count for the fingerprints.
+  assert.ok(history.fingerprints.has(FP));
+});
+
+test("takes no earlier finding from the text of a review", async () => {
+  const history = await read({
+    existingReviews: [
+      ownReview(FIRST, {
+        id: 9,
+        body: `${REVIEW_MARKER}\n${fingerprintLine(FP, "critical")}\n\n### ReviewOps`,
+      }),
+    ],
+    compare: () => ahead(),
+  });
+  assert.deepEqual(history.earlierFindings, []);
+  assert.ok(history.fingerprints.has(FP));
+});
+
+test("takes only the first fingerprint line of a comment as its finding", async () => {
+  const history = await read({
+    existingComments: [
+      {
+        id: 21,
+        body: `${REVIEW_MARKER}\n${fingerprintLine(FP, "minor")}\n${fingerprintLine(FP2, "critical")}`,
+        user: BOT,
+      },
+    ],
+  });
+  assert.deepEqual(history.earlierFindings, [
+    { id: 21, fingerprint: FP, severity: "minor" },
+  ]);
+});
+
 test("keeps the fingerprints of old comments", async () => {
   const history = await read({
     existingComments: [
