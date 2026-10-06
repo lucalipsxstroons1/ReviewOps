@@ -21,6 +21,7 @@ import {
 import { selectFindings } from "./findings.js";
 import { explainMissingSecret, readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
+import { readHistory, scopeDiffs } from "./github/history.js";
 import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { applyLimits, parseLimits } from "./limits.js";
@@ -104,6 +105,22 @@ export async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
+    // What ReviewOps did on this pull request before: the commit it reviewed
+    // last and the lines it commented on. Reading it fails the run before
+    // anything costs money.
+    const history = await readHistory(octokit, pullRequest);
+    // Numbers and a checked commit SHA only. A first run says nothing here.
+    if (history.ownReviews > 0 || history.ownComments > 0) {
+      core.info(
+        `Earlier work of ReviewOps on this pull request: ${history.ownReviews} reviews, ${history.ownComments} comments.`,
+      );
+      core.info(
+        history.mode === "incremental"
+          ? `Reviewing only the changes since commit ${history.since}.`
+          : `Reviewing the whole pull request: ${history.reason}.`,
+      );
+    }
+
     // Files that may hold secrets are left out first, under their new and
     // their old name, whatever the inputs say. Then generated and irrelevant
     // files, and files whose name cannot be put into the prompt. All of this
@@ -134,10 +151,20 @@ export async function run({
     // this point, the limits included, sees only the masked text.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
 
+    // After an earlier review, only files with a line that is new since then
+    // go on. The others were checked already: they count in the log, not
+    // under "not reviewed".
+    let newLines = null;
+    let scoped = diffs;
+    if (history.mode === "incremental") {
+      ({ diffs: scoped, newLines } = scopeDiffs(diffs, history.newLines));
+    }
+    const alreadyReviewed = diffs.length - scoped.length;
+
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
     const { selected, overLimit, tooLarge, usedChars } = applyLimits(
-      diffs,
+      scoped,
       limits,
       {
         maxChars: MAX_REQUEST_CHARS,
@@ -158,8 +185,13 @@ export async function run({
       ...listing.skipped,
     ];
     core.info(
-      `Found ${selected.length + skipped.length} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
+      `Found ${selected.length + skipped.length + alreadyReviewed} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
+    if (alreadyReviewed > 0) {
+      core.info(
+        `${alreadyReviewed} files have no new line since commit ${history.since} and are not sent again.`,
+      );
+    }
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
       core.info(`Skipped ${printable(path)}: ${reason}.`);
@@ -218,7 +250,9 @@ export async function run({
     // point: a pull request without reviewable files ends here.
     if (selected.length === 0) {
       core.notice(
-        "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
+        scoped.length === 0 && alreadyReviewed > 0
+          ? `ReviewOps found no new lines to review since commit ${history.since}. A green run does not mean that new changes were reviewed.`
+          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
       );
       return;
     }
@@ -282,11 +316,20 @@ export async function run({
 
     // Every finding is checked against the files of its own request: only an
     // added line of such a file can carry an inline comment.
-    const { inline, unplaced, dropped } = selectFindings({
-      reviews: review.reviews,
-      maxComments: limits.maxComments,
-    });
+    const { inline, fingerprints, unplaced, unplacedFingerprints, dropped } =
+      selectFindings({
+        reviews: review.reviews,
+        maxComments: limits.maxComments,
+        newLines,
+        known: history.fingerprints,
+      });
     const shown = [...inline, ...unplaced];
+    // A later run does not start at a review whose gaps a new run can fill: a
+    // request that failed, and findings over max-comments (the ones posted
+    // now are left out next time, so the next ones come up). Files over a
+    // limit or with an unreadable diff are not counted: a run over the whole
+    // pull request leaves out the same files again.
+    const incomplete = notReviewed.length > 0 || dropped.overLimit > 0;
     const received = review.reviews.reduce(
       (sum, { findings }) => sum + findings.length,
       0,
@@ -295,7 +338,7 @@ export async function run({
     // Numbers only: the findings and the summary hold code from the pull
     // request.
     core.info(
-      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
+      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates, ${dropped.notNew} outside of the new lines, ${dropped.known} at lines that were commented before and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
     );
     const counts = SEVERITIES.map(
       (severity) =>
@@ -319,8 +362,16 @@ export async function run({
       pullRequest,
       model,
       summaries: review.reviews.map(({ summary }) => summary),
-      selection: { inline, unplaced, dropped },
+      selection: {
+        inline,
+        fingerprints,
+        unplaced,
+        unplacedFingerprints,
+        dropped,
+      },
       maxComments: limits.maxComments,
+      incomplete,
+      since: history.since,
       skipped: [
         ...skipped,
         ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),

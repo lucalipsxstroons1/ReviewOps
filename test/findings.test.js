@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { lineFingerprint } from "../src/fingerprint.js";
 import { selectFindings } from "../src/findings.js";
 
 const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b);
@@ -29,6 +30,8 @@ const NOTHING_DROPPED = {
   empty: 0,
   unknownPath: 0,
   duplicate: 0,
+  notNew: 0,
+  known: 0,
   overLimit: 0,
 };
 
@@ -37,7 +40,9 @@ const NOTHING_DROPPED = {
 test("returns nothing for an empty list of findings", () => {
   assert.deepEqual(select([reviewOf(["a.js"], [])]), {
     inline: [],
+    fingerprints: [],
     unplaced: [],
+    unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
   });
 });
@@ -45,7 +50,9 @@ test("returns nothing for an empty list of findings", () => {
 test("returns nothing when no request worked", () => {
   assert.deepEqual(select([]), {
     inline: [],
+    fingerprints: [],
     unplaced: [],
+    unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
   });
 });
@@ -307,12 +314,211 @@ test("drops in the order: empty, unknown path, duplicate, over the limit", () =>
     empty: 1,
     unknownPath: 1,
     duplicate: 1,
+    notNew: 0,
+    known: 0,
     overLimit: 1,
   });
   assert.deepEqual(
     result.inline.map((item) => item.line),
     [3, 1],
   );
+});
+
+// --- Earlier reviews ---------------------------------------------------------
+
+/** A request whose file has the text "code <n>" at every added line 1 to 5. */
+const textReviewOf = (path, findings) => ({
+  files: [
+    {
+      path,
+      commentableLines: [1, 2, 3, 4, 5],
+      hunks: [
+        {
+          section: "",
+          lines: [1, 2, 3, 4, 5].map((line) => ({
+            type: "added",
+            line,
+            content: `code ${line}`,
+          })),
+        },
+      ],
+    },
+  ],
+  summary: "summary",
+  findings,
+});
+
+const fingerprintAt = (path, line) =>
+  lineFingerprint(path, `code ${line}`, line === 1 ? "" : `code ${line - 1}`);
+
+test("gives every inline comment the fingerprint of its line", () => {
+  const result = select([
+    textReviewOf("a.js", [finding("a.js", 4), finding("a.js", 2)]),
+  ]);
+
+  assert.deepEqual(result.fingerprints, [
+    fingerprintAt("a.js", 4),
+    fingerprintAt("a.js", 2),
+  ]);
+});
+
+test("has no fingerprint for a file without the text of its lines", () => {
+  const result = select([reviewOf(["a.js"], [finding("a.js", 2)])]);
+
+  assert.deepEqual(result.fingerprints, [null]);
+});
+
+test("keeps the fingerprints in the order of the sorted inline comments", () => {
+  const result = select([
+    textReviewOf("a.js", [
+      finding("a.js", 1, "info"),
+      finding("a.js", 2, "critical"),
+    ]),
+  ]);
+
+  assert.deepEqual(
+    result.inline.map((item) => item.line),
+    [2, 1],
+  );
+  assert.deepEqual(result.fingerprints, [
+    fingerprintAt("a.js", 2),
+    fingerprintAt("a.js", 1),
+  ]);
+});
+
+test("drops a finding at a line that an earlier comment is at", () => {
+  const known = new Set([fingerprintAt("a.js", 2)]);
+
+  const result = selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 2), finding("a.js", 3)])],
+    maxComments: 10,
+    known,
+  });
+
+  assert.deepEqual(
+    result.inline.map((item) => item.line),
+    [3],
+  );
+  assert.equal(result.dropped.known, 1);
+});
+
+test("does not mix up the same text in another file", () => {
+  const known = new Set([fingerprintAt("a.js", 2)]);
+
+  const result = selectFindings({
+    reviews: [textReviewOf("b.js", [finding("b.js", 2)])],
+    maxComments: 10,
+    known,
+  });
+
+  assert.equal(result.inline.length, 1);
+  assert.equal(result.dropped.known, 0);
+});
+
+test("keeps a finding in the text of the review although a fingerprint is known", () => {
+  // Only a line with an inline comment has a fingerprint.
+  const result = selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 9)])],
+    maxComments: 10,
+    known: new Set([fingerprintAt("a.js", 2)]),
+  });
+
+  assert.equal(result.unplaced.length, 1);
+});
+
+test("drops a finding that is not at a new line, also one in the text of the review", () => {
+  const newLines = new Map([["a.js", new Set([4])]]);
+
+  const result = selectFindings({
+    reviews: [
+      textReviewOf("a.js", [
+        finding("a.js", 2),
+        finding("a.js", 4),
+        finding("a.js", 9),
+      ]),
+    ],
+    maxComments: 10,
+    newLines,
+  });
+
+  assert.deepEqual(
+    result.inline.map((item) => item.line),
+    [4],
+  );
+  assert.deepEqual(result.unplaced, []);
+  assert.equal(result.dropped.notNew, 2);
+});
+
+test("drops a finding in a file without new lines", () => {
+  const result = selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 2)])],
+    maxComments: 10,
+    newLines: new Map(),
+  });
+
+  assert.equal(result.dropped.notNew, 1);
+  assert.deepEqual(result.inline, []);
+});
+
+test("shows everything without a range", () => {
+  const result = selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 2), finding("a.js", 9)])],
+    maxComments: 10,
+    newLines: null,
+  });
+
+  assert.equal(result.inline.length, 1);
+  assert.equal(result.unplaced.length, 1);
+  assert.equal(result.dropped.notNew, 0);
+});
+
+test("drops findings of earlier work before the limit, so they use no place", () => {
+  const known = new Set([fingerprintAt("a.js", 1)]);
+
+  const result = selectFindings({
+    reviews: [
+      textReviewOf("a.js", [
+        finding("a.js", 1, "critical"),
+        finding("a.js", 2, "minor"),
+      ]),
+    ],
+    maxComments: 1,
+    known,
+  });
+
+  assert.deepEqual(
+    result.inline.map((item) => item.line),
+    [2],
+  );
+  assert.equal(result.dropped.overLimit, 0);
+  assert.equal(result.dropped.known, 1);
+});
+
+test("counts the range before the known lines", () => {
+  const result = selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 1)])],
+    maxComments: 10,
+    newLines: new Map(),
+    known: new Set([fingerprintAt("a.js", 1)]),
+  });
+
+  assert.equal(result.dropped.notNew, 1);
+  assert.equal(result.dropped.known, 0);
+});
+
+test("does not change its arguments", () => {
+  const newLines = new Map([["a.js", new Set([2])]]);
+  const known = new Set([fingerprintAt("a.js", 3)]);
+
+  selectFindings({
+    reviews: [textReviewOf("a.js", [finding("a.js", 2)])],
+    maxComments: 10,
+    newLines,
+    known,
+  });
+
+  assert.deepEqual([...newLines.get("a.js")], [2]);
+  assert.deepEqual([...known], [fingerprintAt("a.js", 3)]);
 });
 
 test("does not change its arguments", () => {
@@ -331,4 +537,71 @@ test("does not change its arguments", () => {
   select(reviews, 1);
 
   assert.deepEqual(reviews, copy);
+});
+
+// --- Findings in the text of the review ---------------------------------------
+
+/** One file with the added lines 3 and 4 and the context lines 2 and 5. */
+const contextReviewOf = (path, findings) => ({
+  files: [
+    {
+      path,
+      commentableLines: [3, 4],
+      hunks: [
+        {
+          section: "",
+          lines: [
+            { type: "context", line: 2, content: "before" },
+            { type: "added", line: 3, content: "new one" },
+            { type: "added", line: 4, content: "new two" },
+            { type: "context", line: 5, content: "after" },
+          ],
+        },
+      ],
+    },
+  ],
+  summary: "summary",
+  findings,
+});
+
+test("gives a finding at a context line the fingerprint of that line", () => {
+  const result = select([contextReviewOf("a.js", [finding("a.js", 5)])]);
+
+  assert.equal(result.unplaced.length, 1);
+  assert.deepEqual(result.unplacedFingerprints, [
+    lineFingerprint("a.js", "after", "new two"),
+  ]);
+});
+
+test("drops a finding at a context line that an earlier review reported", () => {
+  const result = selectFindings({
+    reviews: [contextReviewOf("a.js", [finding("a.js", 5)])],
+    maxComments: 10,
+    known: new Set([lineFingerprint("a.js", "after", "new two")]),
+  });
+
+  assert.deepEqual(result.unplaced, []);
+  assert.equal(result.dropped.known, 1);
+});
+
+test("keeps a finding at a context line of a file with a new line after an earlier review", () => {
+  const result = selectFindings({
+    reviews: [contextReviewOf("a.js", [finding("a.js", 2)])],
+    maxComments: 10,
+    newLines: new Map([["a.js", new Set([4])]]),
+  });
+
+  assert.equal(result.unplaced.length, 1);
+  assert.equal(result.dropped.notNew, 0);
+});
+
+test("drops a finding at a context line of a file without a new line", () => {
+  const result = selectFindings({
+    reviews: [contextReviewOf("a.js", [finding("a.js", 2)])],
+    maxComments: 10,
+    newLines: new Map([["b.js", new Set([1])]]),
+  });
+
+  assert.deepEqual(result.unplaced, []);
+  assert.equal(result.dropped.notNew, 1);
 });

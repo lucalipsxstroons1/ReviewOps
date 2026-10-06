@@ -77,9 +77,43 @@ against the files of its own request:
 | 1 | `title`, `comment` or `suggestion` holds only white space or invisible characters | left out, counted as empty |
 | 2 | `path` is not exactly one of the files of the request | left out, counted as unknown path |
 | 3 | Same `path`, `line` and `title` (without case and extra white space) as another finding | only the more serious one is kept |
-| 4 | Sorted by `severity`, `critical` first; equal severities keep their order | |
-| 5 | More findings than `max-comments` (default 10) | the rest is left out and counted |
-| 6 | `line` is an added line of the file | inline comment; any other line goes into the text of the review |
+| 4 | After an earlier review of ReviewOps: an added `line` is not one of the lines that are new since then (see below), or a finding for the text of the review is in a file without a new line or at a line the diff does not show | left out, counted as outside of the new lines |
+| 5 | The line has the same fingerprint as an earlier comment or review of ReviewOps | left out, counted as commented before |
+| 6 | Sorted by `severity`, `critical` first; equal severities keep their order | |
+| 7 | More findings than `max-comments` (default 10) | the rest is left out and counted |
+| 8 | `line` is an added line of the file | inline comment; any other line goes into the text of the review |
+
+Steps 4 and 5 come before the limit, so a finding that was left out there never
+uses up one of the `max-comments` places. On the first run, and when the whole
+pull request is reviewed again, step 4 does nothing.
+
+### Earlier reviews
+
+A run reads the reviews and the review comments of the pull request. Only an
+item that starts with the marker `<!-- reviewops -->` and whose author is a
+bot counts as an item of ReviewOps. Everything else is never used and never
+changed.
+
+- The `commit_id` of the newest review of ReviewOps is the last reviewed
+  commit. The run compares it with the head. Only a line that is added in the
+  comparison **and** in the diff of the pull request is new. A file without a
+  new line is not sent to the model again; every other file is sent with its
+  whole diff.
+- The whole pull request is reviewed again when there is no earlier review, when
+  the comparison answers 404, `diverged` or `behind` (force-push, rebase), or
+  when GitHub did not list every file of the comparison.
+- The second line of every inline comment is
+  `<!-- reviewops-fingerprint: <16 hex characters> -->`. The fingerprint is the
+  start of the SHA-256 hash over the path, the text of the line and the text of
+  the line before it in the hunk (white space reduced to one space), taken from the masked diff. It stays the same when the
+  line moves and changes when the text changes. A line with a known fingerprint
+  gets no second comment, also not when its thread was resolved. A finding for
+the text of the review carries its fingerprint in the head of the review
+  text, right below the marker; only the lines directly below the marker are
+  read.
+- A review that left something out that a new run can fill (failed request,
+  findings over `max-comments`) has the line `<!-- reviewops-incomplete -->` below the
+  marker. A later run does not start at it, but at the last complete review.
 
 The log shows only the numbers of each step, never a path or a text of a
 finding.

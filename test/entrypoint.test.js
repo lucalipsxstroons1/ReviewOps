@@ -78,7 +78,11 @@ test("names the pull request and lists its files", async (t) => {
   assert.equal(result.stderr, "");
   assert.deepEqual(
     api.requests.map((request) => request.path),
-    ["/repos/octo-org/demo/pulls/42/files?per_page=100"],
+    [
+      "/repos/octo-org/demo/pulls/42/files?per_page=100",
+      "/repos/octo-org/demo/pulls/42/reviews?per_page=100",
+      "/repos/octo-org/demo/pulls/42/comments?per_page=100",
+    ],
   );
 });
 
@@ -95,7 +99,8 @@ test("loads a pull request with more than 100 files completely", async (t) => {
     result.stdout,
     /^Found 120 changed files: 120 to review, 0 skipped\.$/m,
   );
-  assert.equal(api.requests.length, 2);
+  // Two pages of files, then the reviews and the comments.
+  assert.equal(api.requests.length, 4);
 });
 
 test("leaves out the files over the limit and names them", async (t) => {

@@ -9,6 +9,8 @@ import {
   REVIEW_MARKER,
   aiLabel,
   commentBody,
+  fingerprintLine,
+  INCOMPLETE_LINE,
   postReview,
   reviewBody,
   reviewUrl,
@@ -421,4 +423,187 @@ test("builds the address of a review from checked values", () => {
     reviewUrl("https://github.com", PULL_REQUEST, 77),
     "https://github.com/octo-org/demo/pull/42#pullrequestreview-77",
   );
+});
+
+// --- Fingerprints and the range of a review ------------------------------------
+
+const FINGERPRINT = "0123456789abcdef";
+
+test("puts the fingerprint on the second line of an inline comment", () => {
+  const body = commentBody(finding(), "gpt-4.1", FINGERPRINT);
+
+  const lines = body.split("\n");
+  assert.equal(lines[0], REVIEW_MARKER);
+  assert.equal(lines[1], fingerprintLine(FINGERPRINT));
+  assert.equal(lines[1], `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`);
+  assert.equal(lines[2], "");
+  assert.ok(body.endsWith(aiLabel("gpt-4.1")));
+});
+
+test("writes no fingerprint line without a fingerprint", () => {
+  const body = commentBody(finding(), "gpt-4.1");
+
+  assert.ok(!body.includes("reviewops-fingerprint"));
+  assert.ok(body.startsWith(`${REVIEW_MARKER}\n\n`));
+});
+
+test("a comment with a fingerprint renders to the same text as one without", () => {
+  const strip = (html) =>
+    html.replace(/<!--[\s\S]*?-->/g, "").replace(/\s+/g, "");
+  assert.equal(
+    strip(markdown.render(commentBody(finding(), "gpt-4.1", FINGERPRINT))),
+    strip(markdown.render(commentBody(finding(), "gpt-4.1"))),
+  );
+});
+
+test("text of the model cannot add a fingerprint line", () => {
+  const body = commentBody(
+    finding({
+      comment: `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`,
+    }),
+    "gpt-4.1",
+  );
+
+  assert.ok(!body.includes("reviewops-fingerprint"));
+});
+
+test("posts every inline comment with the fingerprint of its line", async () => {
+  const octokit = createFakeOctokit();
+  const inline = [finding(), finding({ line: 12 })];
+
+  await post(octokit, {
+    selection: {
+      ...selection({ inline }),
+      fingerprints: ["aaaaaaaaaaaaaaaa", null],
+    },
+  });
+
+  const [first, second] = octokit.reviews[0].comments;
+  assert.equal(first.body.split("\n")[1], fingerprintLine("aaaaaaaaaaaaaaaa"));
+  assert.ok(!second.body.includes("reviewops-fingerprint"));
+});
+
+test("posts comments without fingerprints when the selection has none", async () => {
+  const octokit = createFakeOctokit();
+
+  await post(octokit);
+
+  assert.ok(!octokit.reviews[0].comments[0].body.includes("fingerprint"));
+});
+
+test("the second review lists the findings and carries their fingerprints", async () => {
+  const octokit = createFakeOctokit([], {
+    createReview: (parameters, index) =>
+      index === 0 ? apiFailure(422) : { status: 200, data: { id: 7 } },
+  });
+
+  await post(octokit, {
+    selection: {
+      ...selection({ inline: [finding()] }),
+      fingerprints: [FINGERPRINT],
+    },
+  });
+
+  assert.equal(octokit.reviews.length, 2);
+  assert.equal(octokit.reviews[1].comments, undefined);
+  assert.ok(
+    octokit.reviews[1].body.startsWith(
+      `${REVIEW_MARKER}
+${fingerprintLine(FINGERPRINT)}
+
+`,
+    ),
+  );
+});
+
+test("the review text names the commit it starts at", () => {
+  const body = bodyWith({ since: `abcdef1${"0".repeat(33)}` });
+
+  assert.match(
+    body,
+    /^<!-- reviewops -->\n\n### ReviewOps\n\nReviewed the changes since `abcdef1`\.\n\n/,
+  );
+});
+
+test("the review text says nothing about a start when everything was checked", () => {
+  assert.ok(!bodyWith({}).includes("Reviewed the changes since"));
+});
+
+test("posts the review with the start of the range", async () => {
+  const octokit = createFakeOctokit();
+
+  await post(octokit, { since: "d".repeat(40) });
+
+  assert.match(
+    octokit.reviews[0].body,
+    /Reviewed the changes since `ddddddd`\./,
+  );
+});
+
+test("the review text carries the fingerprints of the findings in its text", async () => {
+  const octokit = createFakeOctokit();
+
+  await post(octokit, {
+    selection: {
+      ...selection({ unplaced: [finding(), finding({ line: 3 })] }),
+      unplacedFingerprints: ["aaaaaaaaaaaaaaaa", null],
+    },
+  });
+
+  assert.ok(
+    octokit.reviews[0].body.startsWith(
+      `${REVIEW_MARKER}
+${fingerprintLine("aaaaaaaaaaaaaaaa")}
+
+### ReviewOps`,
+    ),
+  );
+});
+
+test("an incomplete review says so right below the marker", async () => {
+  const octokit = createFakeOctokit();
+
+  await post(octokit, { incomplete: true });
+
+  assert.ok(
+    octokit.reviews[0].body.startsWith(
+      `${REVIEW_MARKER}
+${INCOMPLETE_LINE}
+
+### ReviewOps`,
+    ),
+  );
+  // Not a line of a comment: only a review is incomplete.
+  assert.ok(!octokit.reviews[0].comments[0].body.includes(INCOMPLETE_LINE));
+});
+
+test("a complete review has no such line", async () => {
+  const octokit = createFakeOctokit();
+
+  await post(octokit);
+
+  assert.ok(!octokit.reviews[0].body.includes(INCOMPLETE_LINE));
+});
+
+test("text of the model cannot add a line below the marker", () => {
+  const body = reviewBody({
+    model: "gpt-4.1",
+    summaries: [
+      `${INCOMPLETE_LINE}
+${fingerprintLine(FINGERPRINT)}`,
+    ],
+    inline: [],
+    listed: [],
+    overLimit: 0,
+    maxComments: 10,
+    skipped: [],
+  });
+
+  assert.ok(
+    body.startsWith(`${REVIEW_MARKER}
+
+### ReviewOps`),
+  );
+  assert.ok(!body.includes(INCOMPLETE_LINE));
+  assert.ok(!body.includes("reviewops-fingerprint"));
 });

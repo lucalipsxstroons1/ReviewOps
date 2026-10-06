@@ -21,6 +21,7 @@ import {
   apiFiles,
   createFakeOctokit,
 } from "./helpers/github-api.js";
+import { lineFingerprint } from "../src/fingerprint.js";
 import { REVIEWING_LINE } from "./helpers/run-action.js";
 
 const VALID_INPUTS = {
@@ -1048,7 +1049,7 @@ test("logs the requests and the findings per severity, nothing else", async () =
 
   assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
     "Sending 2 files to gpt-4o-mini in 1 requests.",
-    "Checked 3 findings: 3 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
+    "Checked 3 findings: 3 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 3 findings (1 critical, 0 major, 2 minor, 0 info) from 1 of 1 requests.",
   ]);
   assert.equal(
@@ -1086,7 +1087,7 @@ test("spreads a pull request over the budget of one request and merges the findi
   }
   assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
     "Sending 4 files to gpt-4o-mini in 3 requests.",
-    "Checked 4 findings: 4 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
+    "Checked 4 findings: 4 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 4 findings (0 critical, 4 major, 0 minor, 0 info) from 3 of 3 requests.",
   ]);
   assert.equal(
@@ -1172,7 +1173,7 @@ test("keeps the other findings and ends green with a warning when one request fa
   assert.deepEqual(core.messages("info").slice(-4 - 1, -1), [
     "Sending 3 files to gpt-4o-mini in 3 requests.",
     "Not reviewed src/b.js: the request to the model failed.",
-    "Checked 2 findings: 2 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
+    "Checked 2 findings: 2 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 2 findings (0 critical, 2 major, 0 minor, 0 info) from 2 of 3 requests.",
   ]);
   assert.equal(
@@ -1200,7 +1201,7 @@ test("keeps the other findings and ends green when one answer is not valid JSON"
     "Requests to the model that failed: 1 of 2. 1 files were not reviewed. The answer of the model is not valid JSON. Run the workflow again.",
   ]);
   assert.deepEqual(core.messages("info").slice(-2 - 1, -1), [
-    "Checked 1 findings: 1 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
+    "Checked 1 findings: 1 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 1 findings (1 critical, 0 major, 0 minor, 0 info) from 1 of 2 requests.",
   ]);
   assert.equal(
@@ -1228,7 +1229,7 @@ test("checks every finding against the diff and counts what it leaves out", asyn
 
   assert.deepEqual(core.messages("setFailed"), []);
   assert.deepEqual(core.messages("info").slice(-2 - 1, -1), [
-    "Checked 7 findings: 2 at an added line, 1 at another line, left out 1 with an empty text, 1 for a file that was not sent, 1 duplicates and 1 over the limit of 3 (max-comments).",
+    "Checked 7 findings: 2 at an added line, 1 at another line, left out 1 with an empty text, 1 for a file that was not sent, 1 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 1 over the limit of 3 (max-comments).",
     "Review finished: 3 findings (1 critical, 1 major, 1 minor, 0 info) from 1 of 1 requests.",
   ]);
   assert.equal(
@@ -1694,4 +1695,210 @@ test("links the review on the server of the run, or on github.com", async () => 
     /: https:\/\/github\.example\.com\/octo-org\/demo\/pull\/42#pullrequestreview-1000$/,
   );
   assert.ok(hostile.messages("info").at(-1).endsWith(`: ${POSTED_TO}`));
+});
+
+// --- Earlier reviews ---------------------------------------------------------
+
+const EARLIER_SHA = "a".repeat(40);
+
+const earlierReview = (commit_id = EARLIER_SHA) => ({
+  body: "<!-- reviewops -->\n\n### ReviewOps",
+  user: { type: "Bot" },
+  state: "COMMENTED",
+  commit_id,
+});
+
+test("reviews only the files with a new line after an earlier review", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(
+    [
+      apiFile("src/old.js", { patch: addedPatch(2) }),
+      apiFile("src/new.js", { patch: addedPatch(2) }),
+    ],
+    {
+      existingReviews: [earlierReview()],
+      compare: () => ({
+        status: "ahead",
+        files: [
+          {
+            filename: "src/new.js",
+            status: "modified",
+            changes: 1,
+            patch: "@@ -1 +1,2 @@\n x\n+x",
+          },
+        ],
+      }),
+    },
+  );
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/new.js", "major", "x", 2)]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 1);
+  assert.deepEqual(pathsIn(ai.requests[0]), ["src/new.js"]);
+  assert.match(
+    core.messages("info").join("\n"),
+    new RegExp(
+      `1 files have no new line since commit ${EARLIER_SHA} and are not sent again\\.`,
+    ),
+  );
+  assert.equal(octokit.reviews.length, 1);
+  assert.match(octokit.reviews[0].body, /Reviewed the changes since `aaaaaaa`/);
+  // The old file is not listed as "not reviewed": it was checked before.
+  assert.doesNotMatch(octokit.reviews[0].body, /src\/old\.js/);
+  assert.equal(
+    octokit.comparisons[0].basehead,
+    `${EARLIER_SHA}...${REVIEWED_HEAD}`,
+  );
+});
+
+const REVIEWED_HEAD = loadEvent().pull_request.head.sha;
+
+test("ends green with a notice and no request when no file has a new line", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(2), {
+    existingReviews: [earlierReview(REVIEWED_HEAD)],
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.deepEqual(octokit.comparisons, []);
+  assert.deepEqual(octokit.reviews, []);
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("notice"), [
+    `ReviewOps found no new lines to review since commit ${REVIEWED_HEAD}. A green run does not mean that new changes were reviewed.`,
+  ]);
+});
+
+test("keeps the notice about files that cannot be reviewed when only such files changed", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([apiFile("package-lock.json")], {
+    existingReviews: [earlierReview(REVIEWED_HEAD)],
+  });
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("notice"), [NOTHING_TO_REVIEW]);
+});
+
+test("reviews the whole pull request when the earlier commit is gone", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(2), {
+    existingReviews: [earlierReview()],
+    compare: () => apiFailure(404),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(pathsIn(ai.requests[0]), ["src/file-0.js", "src/file-1.js"]);
+  assert.match(
+    core.messages("info").join("\n"),
+    /Reviewing the whole pull request: the commit of the earlier review is no longer part of this branch/,
+  );
+});
+
+test("fails before any request to the model when the earlier reviews cannot be read", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(1));
+  octokit.paginate = async (endpoint) => {
+    if (endpoint === octokit.rest.pulls.listReviews) throw apiFailure(403);
+    return apiFiles(1);
+  };
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.match(core.messages("setFailed")[0], /HTTP 403/);
+});
+
+test("does not post a comment at a line that an earlier comment is at", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const fingerprint = lineFingerprint("src/file-0.js", "x");
+  const octokit = createFakeOctokit(
+    [apiFile("src/file-0.js", { patch: addedPatch(2) })],
+    {
+      existingComments: [
+        {
+          body: `<!-- reviewops -->\n<!-- reviewops-fingerprint: ${fingerprint} -->\n\ntext`,
+          user: { type: "Bot" },
+        },
+      ],
+    },
+  );
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/file-0.js", "major", "x", 1)]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  // Both added lines read "x" and share the fingerprint.
+  assert.deepEqual(octokit.reviews, []);
+  assert.match(
+    core.messages("info").join("\n"),
+    /1 at lines that were commented before/,
+  );
+});
+
+// --- Incomplete reviews ------------------------------------------------------
+
+test("marks a review as incomplete when findings are left out by max-comments", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-comments": "1" });
+  const octokit = createFakeOctokit(apiFiles(2));
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/file-0.js"), modelFinding("src/file-1.js")]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(octokit.reviews.length, 1);
+  assert.ok(
+    octokit.reviews[0].body.startsWith(
+      "<!-- reviewops -->\n<!-- reviewops-incomplete -->\n",
+    ),
+  );
+});
+
+test("marks a review as incomplete when a request to the model failed", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    bigFile("src/a.js", 3000),
+    bigFile("src/b.js", 3000),
+  ]);
+  const ai = createFakeAi((request, index) =>
+    index === 0
+      ? modelAnswer([modelFinding("src/a.js")])
+      : new AiError("timeout", "Too slow."),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.ok(octokit.reviews[0].body.includes("<!-- reviewops-incomplete -->"));
+});
+
+test("does not mark a complete review", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(1));
+  const ai = createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+
+  await runWith(core, { octokit, ai });
+
+  assert.ok(!octokit.reviews[0].body.includes("reviewops-incomplete"));
+});
+
+test("does not mark a review as incomplete when files are left out by a limit", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "1" });
+  const octokit = createFakeOctokit(apiFiles(2));
+  const ai = createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(octokit.reviews.length, 1);
+  assert.ok(!octokit.reviews[0].body.includes("reviewops-incomplete"));
 });

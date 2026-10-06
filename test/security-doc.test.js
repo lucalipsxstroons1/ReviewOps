@@ -153,6 +153,10 @@ const ALLOWED_PACKAGES = [
   "picomatch",
 ];
 
+// Modules of Node.js itself that have no access to the network. Each one is
+// named here on purpose: the fingerprint of a line is a SHA-256 hash.
+const ALLOWED_BUILTINS = ["node:crypto"];
+
 const FORBIDDEN = [
   [/\beval\s*\(/, "eval"],
   [/\bnew\s+Function\b|\bFunction\s*\(/, "Function"],
@@ -188,7 +192,10 @@ test("no source file imports a package that is not on the list", () => {
     }
   }
 
-  assert.deepEqual([...used].sort(), [...ALLOWED_PACKAGES].sort());
+  assert.deepEqual(
+    [...used].sort(),
+    [...ALLOWED_PACKAGES, ...ALLOWED_BUILTINS].sort(),
+  );
 });
 
 test("the only dynamic import loads the action itself", () => {
