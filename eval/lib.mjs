@@ -244,6 +244,34 @@ export function renderTable({ model, promptVersion, rows, result }) {
   return lines.join("\n");
 }
 
+// The evaluation sends all its requests within seconds. With more than two
+// at once it went over the token limit per minute of the reference model on
+// the account of this project (#15, #47).
+export const MAX_PARALLEL_EVAL_REQUESTS = 2;
+
+// After a rate limit the request is sent again, at most this often and after
+// this long. The client has retried twice by then; the limit is counted per
+// minute, so a short wait does not help. A rate limit that remains after
+// this is an error of the run, as before.
+export const RATE_LIMIT_RETRIES = 2;
+export const RATE_LIMIT_WAIT_MS = 20_000;
+
+const sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+/** Sends one request and waits out a rate limit before it gives up. */
+async function completeWithPatience(ai, wait, request) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await ai.complete(request);
+    } catch (error) {
+      const limited = error instanceof AiError && error.kind === "rate_limit";
+      if (!limited || attempt >= RATE_LIMIT_RETRIES) throw error;
+      await wait(RATE_LIMIT_WAIT_MS);
+    }
+  }
+}
+
 /**
  * Sends every case to the model and judges the answers: `RUNS_PER_CASE` runs
  * in English.
@@ -257,13 +285,20 @@ export function renderTable({ model, promptVersion, rows, result }) {
  * @param {ReturnType<typeof loadCases>} options.cases
  * @param {{ complete: (request: object) => Promise<{ content: string, finishReason: string | null }> }} options.ai
  * @param {number} [options.concurrency] Requests at the same time.
+ * @param {(milliseconds: number) => Promise<void>} [options.wait] Waits
+ *   before a request that hit the rate limit is sent again. Tests replace it.
  * @returns {Promise<{
  *   rows: ({ name: string, clean: boolean } & ReturnType<typeof tally>)[],
  *   examples: { name: string, finding: import("../src/ai/schema.js").Finding }[],
  *   failures: { name: string, lines: string[] }[],
  * }>}
  */
-export async function runEvaluation({ cases, ai, concurrency = 4 }) {
+export async function runEvaluation({
+  cases,
+  ai,
+  concurrency = MAX_PARALLEL_EVAL_REQUESTS,
+  wait = sleep,
+}) {
   const system = buildSystemPrompt({ language: "en" });
 
   const jobs = [];
@@ -284,7 +319,7 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
         continue;
       }
       try {
-        const answer = await ai.complete({
+        const answer = await completeWithPatience(ai, wait, {
           system,
           user: job.testCase.user,
           responseFormat: REVIEW_FORMAT,
