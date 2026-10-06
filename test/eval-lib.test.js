@@ -4,9 +4,11 @@ import {
   REFERENCE_MODEL,
   RUNS_PER_CASE,
   evalModelName,
+  failureLines,
   judgeRun,
   loadCases,
   missingKeyOutcome,
+  renderExamples,
   renderTable,
   requiredPasses,
   runEvaluation,
@@ -529,4 +531,107 @@ test("passes a run of the evaluation in which a clean diff raises one false alar
   const entry = rows.find((r) => r.name === cleanCase.name);
   assert.equal(entry.passed, 2);
   assert.deepEqual(verdict(rows), { ok: true, problems: [] });
+});
+
+// --- examples ----------------------------------------------------------------
+
+test("returns one example finding for every case with a defect, from a run that found it", async () => {
+  const calls = [];
+
+  const { examples } = await runEvaluation({
+    cases,
+    ai: goodModel(calls),
+  });
+
+  assert.deepEqual(
+    examples.map((entry) => entry.name),
+    cases.filter((c) => !c.clean).map((c) => c.name),
+  );
+  for (const { name, finding: example } of examples) {
+    const testCase = cases.find((c) => c.name === name);
+    assert.equal(example.path, testCase.path);
+    assert.ok(testCase.expect.lines.includes(example.line));
+    assert.equal(example.category, testCase.expect.category);
+  }
+});
+
+test("returns no example for a case in which no run found the defect", async () => {
+  const ai = {
+    async complete() {
+      return {
+        content: JSON.stringify({ summary: "s", findings: [] }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { examples } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.deepEqual(examples, []);
+});
+
+// The runner removes the spaces in front of a line before it looks for a
+// workflow command. So a line is only safe if its first visible character is
+// not the start of `::`.
+const startsCommand = (line) => line.trimStart().startsWith("::");
+
+test("renders every line of an example behind a quote mark, so that none starts a workflow command", () => {
+  const escape = String.fromCodePoint(0x1b);
+  const text = renderExamples([
+    {
+      name: "a",
+      finding: finding(faultyCase, {
+        title: "T",
+        comment: `c\n::error::INJECTED${escape}[31m`,
+        suggestion: "Use this:\n::warning::INJECTED\nconst x = 1;",
+      }),
+    },
+  ]);
+
+  assert.match(text, /^## Example findings\n\n### a\n\n/);
+  assert.equal(text.includes(escape), false);
+  for (const line of text.split("\n")) {
+    assert.equal(startsCommand(line), false, line);
+  }
+  assert.match(text, /^> Suggestion: Use this:$/m);
+  assert.match(text, /^> const x = 1;$/m);
+  assert.match(text, /^> ::error::INJECTED\\u001b\[31m$/m);
+});
+
+test("renders nothing when there are no examples", () => {
+  assert.equal(renderExamples([]), "");
+});
+
+test("writes the lines of a missed run so that a path or a title from the model cannot start a workflow command", async () => {
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const bad = finding(testCase, {
+        severity: "minor",
+        path: "::error::INJECTED",
+        title: "T\n::warning::INJECTED",
+      });
+      return {
+        content: JSON.stringify({ summary: "s", findings: [bad] }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
+  const lines = failureLines(failures);
+
+  assert.ok(lines.length > 3);
+  for (const line of lines) {
+    assert.equal(startsCommand(line), false, line);
+  }
+  assert.ok(lines.some((line) => line.startsWith("- ::error::INJECTED")));
+  assert.match(
+    lines[0],
+    /^react-missing-dependency: a run missed its expectation\. Findings:$/,
+  );
+});
+
+test("lists nothing when no run missed its expectation", () => {
+  assert.deepEqual(failureLines([]), []);
 });

@@ -14,8 +14,10 @@ import { parseModel } from "../src/ai/model.js";
 import { PROMPT_VERSION } from "../src/ai/prompt.js";
 import {
   evalModelName,
+  failureLines,
   loadCases,
   missingKeyOutcome,
+  renderExamples,
   renderTable,
   runEvaluation,
   verdict,
@@ -49,7 +51,7 @@ async function evaluate(apiKey) {
   const cases = loadCases(fileURLToPath(new URL("./cases", import.meta.url)));
 
   const ai = createAiClient({ apiKey, model, core });
-  const { rows, failures } = await runEvaluation({ cases, ai });
+  const { rows, failures, examples } = await runEvaluation({ cases, ai });
   const result = verdict(rows);
 
   for (const { name, errors } of rows) {
@@ -59,10 +61,7 @@ async function evaluate(apiKey) {
       );
     }
   }
-  for (const { name, lines } of failures) {
-    core.info(`${name}: a run missed its expectation. Findings:`);
-    for (const line of lines) core.info(`  ${line}`);
-  }
+  for (const line of failureLines(failures)) core.info(line);
 
   const table = renderTable({
     model,
@@ -70,9 +69,10 @@ async function evaluate(apiKey) {
     rows,
     result,
   });
-  console.log(table);
+  const text = [table, renderExamples(examples)].filter(Boolean).join("\n\n");
+  console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${table}\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);
   }
   if (!result.ok) process.exitCode = 1;
 }

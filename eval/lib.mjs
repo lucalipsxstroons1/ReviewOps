@@ -254,6 +254,7 @@ const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
  * @param {number} [options.concurrency] Requests at the same time.
  * @returns {Promise<{
  *   rows: ({ name: string, clean: boolean } & ReturnType<typeof tally>)[],
+ *   examples: { name: string, finding: import("../src/ai/schema.js").Finding }[],
  *   failures: { name: string, lines: string[] }[],
  * }>}
  */
@@ -323,7 +324,57 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
       };
     });
 
-  return { rows, failures };
+  // One finding per case with a defect, taken from a run that found it, to
+  // show what a suggestion looks like. Only the first matching run is used.
+  const examples = [];
+  for (const testCase of cases.filter((c) => !c.clean)) {
+    const job = jobs.find(
+      (j) => j.testCase === testCase && j.result.ok === true,
+    );
+    if (!job) continue;
+    const { category, lines } = testCase.expect;
+    const finding =
+      job.review.findings.find(
+        (f) =>
+          f.path === testCase.path &&
+          lines.includes(f.line) &&
+          f.category === category,
+      ) ?? job.review.findings[0];
+    examples.push({ name: testCase.name, finding });
+  }
+
+  return { rows, failures, examples };
+}
+
+/**
+ * Renders the example findings as Markdown. Every line is quoted (`> `) and
+ * goes through `printable()`: the text comes from the model, and a line that
+ * starts with `::` would be run as a workflow command in the log. Spaces in
+ * front would not help, the runner removes them before it looks at the line.
+ *
+ * @param {{ name: string, finding: import("../src/ai/schema.js").Finding }[]} examples
+ * @returns {string}
+ */
+export function renderExamples(examples) {
+  if (examples.length === 0) return "";
+  const indent = (text) =>
+    String(text)
+      .split("\n")
+      .map((line) => `> ${printable(line)}`)
+      .join("\n");
+  const blocks = examples.map(({ name, finding }) =>
+    [
+      `### ${name}`,
+      "",
+      indent(
+        `${finding.path}:${finding.line} ${finding.severity} ${finding.category}`,
+      ),
+      indent(`Title: ${finding.title}`),
+      indent(`Comment: ${finding.comment}`),
+      indent(`Suggestion: ${finding.suggestion}`),
+    ].join("\n"),
+  );
+  return ["## Example findings", ...blocks].join("\n\n");
 }
 
 /**
@@ -336,4 +387,19 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
  */
 export function missingKeyOutcome(env) {
   return env.GITHUB_EVENT_NAME === "pull_request" ? "skip" : "fail";
+}
+
+/**
+ * The lines for the log that show why runs missed their expectation. Every
+ * finding line starts with `- `: the path and the title come from the model,
+ * and a line that starts with `::` would be run as a workflow command.
+ *
+ * @param {{ name: string, lines: string[] }[]} failures
+ * @returns {string[]}
+ */
+export function failureLines(failures) {
+  return failures.flatMap(({ name, lines }) => [
+    `${name}: a run missed its expectation. Findings:`,
+    ...lines.map((line) => `- ${line}`),
+  ]);
 }
