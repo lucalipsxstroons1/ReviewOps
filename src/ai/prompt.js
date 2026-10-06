@@ -3,7 +3,7 @@ import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-export const PROMPT_VERSION = 3;
+export const PROMPT_VERSION = 4;
 
 // The same value is written into action.yml. A test keeps them equal.
 export const DEFAULT_LANGUAGE = "en";
@@ -181,6 +181,6 @@ export function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "## Language",
     "",
-    `Write the summary, the title, the comment and the suggestion in ${languageName}. Do not write any of them in another language. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
+    `Write the summary, the title, the comment and the suggestion in ${languageName}. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
   ].join("\n");
 }

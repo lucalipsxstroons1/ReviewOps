@@ -268,7 +268,7 @@ test("sends the schema, the output limit and the English prompt", async () => {
     assert.equal(call.maxOutputTokens, MAX_OUTPUT_TOKENS);
   }
   for (const call of calls) {
-    assert.match(call.system, /in English\. Do not write any of them/);
+    assert.match(call.system, /the suggestion in English\./);
   }
 });
 

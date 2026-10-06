@@ -209,13 +209,6 @@ test("names an empty dependency array as a case of a missing dependency", () => 
   );
 });
 
-test("forbids any other language for the four texts of a finding", () => {
-  assert.match(
-    buildSystemPrompt({ language: "de" }),
-    /in German\. Do not write any of them in another language\./,
-  );
-});
-
 test("describes the annotated diff the way annotateDiff() writes it", () => {
   const prompt = buildSystemPrompt();
 
@@ -283,6 +276,7 @@ const PROMPT_HASHES = {
   1: "f1cff1a3acace3e5aacb3733e06b0b6ebc9ca93273b88835decb5700c6cf3f5a",
   2: "d718d5077aaaf15a35f4adff4f8784631dd28836e1816c5dc2538a1fa4989ab3",
   3: "b46b750252cad3d97e9e7d5ae48dd7c919d54c6f9702d9e1239e2810563aef85",
+  4: "5caa68dd6e7a08ec2b95d4bbadfa21ef5e57e059aee2193b945b45b7dc8cfca8",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {

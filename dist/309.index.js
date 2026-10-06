@@ -454,7 +454,7 @@ function parseReview({ content, finishReason }) {
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-const PROMPT_VERSION = 3;
+const PROMPT_VERSION = 4;
 
 // The same value is written into action.yml. A test keeps them equal.
 const DEFAULT_LANGUAGE = "en";
@@ -632,7 +632,7 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "## Language",
     "",
-    `Write the summary, the title, the comment and the suggestion in ${languageName}. Do not write any of them in another language. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
+    `Write the summary, the title, the comment and the suggestion in ${languageName}. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
   ].join("\n");
 }
 
