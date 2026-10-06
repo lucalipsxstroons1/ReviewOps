@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: OpenAI model to evaluate. Empty means the default model.
+        description: OpenAI model to evaluate. Empty means the reference model of the evaluation (gpt-4.1), not the default model of the action.
         required: false
         default: ""
 

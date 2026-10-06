@@ -3,8 +3,8 @@
 // command fails when a threshold of the issue is missed. It costs a few cents
 // at most and is not part of `npm test`.
 //
-//   OPENAI_API_KEY=... npm run eval
-//   EVAL_MODEL=gpt-4.1 OPENAI_API_KEY=... npm run eval
+//   OPENAI_API_KEY=... npm run eval                       (reference model)
+//   EVAL_MODEL=gpt-4o-mini OPENAI_API_KEY=... npm run eval  (another model)
 
 import * as core from "@actions/core";
 import { appendFileSync } from "node:fs";
@@ -13,6 +13,7 @@ import { createAiClient } from "../src/ai/client.js";
 import { parseModel } from "../src/ai/model.js";
 import { PROMPT_VERSION } from "../src/ai/prompt.js";
 import {
+  evalModelName,
   loadCases,
   missingKeyOutcome,
   renderTable,
@@ -40,7 +41,7 @@ if (apiKey === "") {
 async function evaluate(apiKey) {
   let model;
   try {
-    model = parseModel(process.env.EVAL_MODEL);
+    model = parseModel(evalModelName(process.env));
   } catch (error) {
     core.setFailed(error.message);
     return;

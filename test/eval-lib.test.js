@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  REFERENCE_MODEL,
   RUNS_PER_CASE,
+  evalModelName,
   judgeRun,
   loadCases,
   missingKeyOutcome,
@@ -11,6 +13,7 @@ import {
   verdict,
 } from "../eval/lib.mjs";
 import { AiError } from "../src/ai/error.js";
+import { DEFAULT_MODEL, parseModel } from "../src/ai/model.js";
 import { MAX_OUTPUT_TOKENS, REVIEW_FORMAT } from "../src/ai/schema.js";
 import { fromRoot } from "./helpers/run-action.js";
 
@@ -436,4 +439,26 @@ test("counts invalid findings of every run and names them in the verdict", async
   assert.deepEqual(verdict(rows).problems, [
     `${faultyCase.name}: 9 invalid findings`,
   ]);
+});
+
+// --- evalModelName() ---------------------------------------------------------
+
+test("measures with the reference model unless another one is asked for", () => {
+  assert.equal(REFERENCE_MODEL, "gpt-4.1");
+  for (const env of [{}, { EVAL_MODEL: "" }, { EVAL_MODEL: "  \n" }]) {
+    assert.equal(evalModelName(env), REFERENCE_MODEL, JSON.stringify(env));
+  }
+});
+
+test("takes the model of EVAL_MODEL, without surrounding white space", () => {
+  assert.equal(evalModelName({ EVAL_MODEL: " gpt-4o-mini\n" }), "gpt-4o-mini");
+  assert.equal(
+    evalModelName({ EVAL_MODEL: "ft:gpt-4o-mini:org::id" }),
+    "ft:gpt-4o-mini:org::id",
+  );
+});
+
+test("keeps the reference model apart from the default model of the action", () => {
+  assert.equal(parseModel(REFERENCE_MODEL), REFERENCE_MODEL);
+  assert.notEqual(REFERENCE_MODEL, DEFAULT_MODEL);
 });

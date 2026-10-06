@@ -20,6 +20,25 @@ import { printable } from "../src/printable.js";
 /** How often every reference diff is sent to the model. */
 export const RUNS_PER_CASE = 3;
 
+// The model the prompt is measured with. It is not the default model of the
+// action: with `gpt-4o-mini` the prompt misses the N+1 case (0 of 3 runs),
+// with `gpt-4.1` it meets every threshold. Which model becomes the default
+// of the action is decided in #41.
+export const REFERENCE_MODEL = "gpt-4.1";
+
+/**
+ * The name of the model for the evaluation: `EVAL_MODEL` if it is set and
+ * not empty, else the reference model. An empty value is usually an input of
+ * a workflow that was not filled in.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string} Not yet checked, `parseModel()` does that.
+ */
+export function evalModelName(env) {
+  const requested = (env.EVAL_MODEL ?? "").trim();
+  return requested === "" ? REFERENCE_MODEL : requested;
+}
+
 // "info" is the lowest, "critical" the highest of the schema.
 export const SEVERITY_RANK = Object.fromEntries(
   SEVERITIES.map((severity, index) => [severity, SEVERITIES.length - index]),
