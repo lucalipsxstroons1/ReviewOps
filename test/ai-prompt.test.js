@@ -195,6 +195,37 @@ test("tells the model the rules for the lines and for doubt", () => {
   assert.match(prompt, /Give no praise/);
 });
 
+test("tells the model to report at the line of the cause, not at the head of the method", () => {
+  const prompt = buildSystemPrompt();
+
+  assert.match(prompt, /at the line of the code that causes it/);
+  assert.match(
+    prompt,
+    /Do not report it at the signature of the method or the class/,
+  );
+});
+
+test("tells the model to go through the checkpoints one by one before it answers", () => {
+  assert.match(
+    buildSystemPrompt(),
+    /go through the checkpoints of the areas above for every file, one by one/,
+  );
+});
+
+test("names an empty dependency array as a case of a missing dependency", () => {
+  assert.match(
+    buildSystemPrompt(),
+    /miss a value used inside \(a prop, a state value or a variable of the component\), also when the array is empty/,
+  );
+});
+
+test("forbids any other language for the four texts of a finding", () => {
+  assert.match(
+    buildSystemPrompt({ language: "de" }),
+    /in German\. Do not write any of them in another language\./,
+  );
+});
+
 test("describes the annotated diff the way annotateDiff() writes it", () => {
   const prompt = buildSystemPrompt();
 
@@ -260,6 +291,7 @@ test("contains no characters that are invisible or outside of ASCII", () => {
 // change fails here, until the version is raised and the new hash is added.
 const PROMPT_HASHES = {
   1: "f1cff1a3acace3e5aacb3733e06b0b6ebc9ca93273b88835decb5700c6cf3f5a",
+  2: "d718d5077aaaf15a35f4adff4f8784631dd28836e1816c5dc2538a1fa4989ab3",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {

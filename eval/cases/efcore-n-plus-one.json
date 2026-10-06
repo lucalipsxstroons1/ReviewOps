@@ -4,7 +4,7 @@
   "patch": "@@ -1,9 +1,26 @@\n using Microsoft.EntityFrameworkCore;\n \n public class OrderService\n {\n     private readonly ShopContext _db;\n \n     public OrderService(ShopContext db) => _db = db;\n \n+    public async Task<List<OrderSummary>> GetSummariesAsync(int customerId)\n+    {\n+        var orders = await _db.Orders\n+            .Where(o => o.CustomerId == customerId)\n+            .ToListAsync();\n+\n+        var result = new List<OrderSummary>();\n+        foreach (var order in orders)\n+        {\n+            var items = await _db.OrderItems\n+                .Where(i => i.OrderId == order.Id)\n+                .ToListAsync();\n+            result.Add(new OrderSummary(order.Id, items.Sum(i => i.Price * i.Quantity)));\n+        }\n+\n+        return result;\n+    }\n }",
   "expect": {
     "category": "efcore",
-    "lines": [16, 18, 19, 20, 21],
+    "lines": [9, 16, 18, 19, 20, 21],
     "minSeverity": "major"
   }
 }

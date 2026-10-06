@@ -454,7 +454,7 @@ function parseReview({ content, finishReason }) {
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-const PROMPT_VERSION = 1;
+const PROMPT_VERSION = 2;
 
 // The same value is written into action.yml. A test keeps them equal.
 const DEFAULT_LANGUAGE = "en";
@@ -514,7 +514,7 @@ const FOCUS_AREAS = {
     title: "React",
     checks: [
       "Rules of Hooks: hooks called conditionally, in loops or after an early return",
-      "dependency arrays of useEffect, useMemo and useCallback that miss a value used inside, or that are missing altogether",
+      "dependency arrays of useEffect, useMemo and useCallback that miss a value used inside (a prop, a state value or a variable of the component), also when the array is empty, or that are missing altogether",
       "state mutation: changing state or props in place instead of creating a new value",
       "lists rendered without a stable `key`, or with the array index as key where the list changes",
       "effects that start a subscription, timer or request without cleanup",
@@ -617,8 +617,9 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "- Comment only on added lines. Take the line number from the diff exactly as it is shown. Never calculate a number and never use the line of a removed or unchanged line.",
     "- Use the path exactly as it is written after `File:`.",
     "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does.",
-    "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line where it starts.",
+    "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line of the code that causes it, for example the call inside a loop. Do not report it at the signature of the method or the class that contains it.",
     "- Do not ask for tests, documentation or comments, and do not remark on what the change does.",
+    "- Before you answer, go through the checkpoints of the areas above for every file, one by one. A short diff can hold one of them.",
     "- An empty list of findings is a good answer when nothing is wrong. Say so in the summary.",
     '- Every finding needs a concrete suggestion: what to change, with a short code example if that helps. Never write only "consider" or "check".',
     "",
@@ -632,7 +633,7 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "## Language",
     "",
-    `Write the summary, the title, the comment and the suggestion in ${languageName}. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
+    `Write the summary, the title, the comment and the suggestion in ${languageName}. Do not write any of them in another language. Keep code, identifiers, file paths and the values of severity and category as they are: in English, as in the code.`,
   ].join("\n");
 }
 

@@ -411,14 +411,17 @@ test("reports a run that missed its expectation with the findings, not the whole
   };
 
   const { rows, failures } = await runEvaluation({ cases: [faultyCase], ai });
+  const english = failures.filter(
+    (entry) => !entry.name.endsWith("(German run)"),
+  );
 
   assert.equal(rows[0].passed, 0);
-  assert.equal(failures.length, 3);
+  assert.equal(english.length, 3);
   assert.match(
-    failures[0].lines[0],
+    english[0].lines[0],
     /^src\/components\/Profile\.jsx:\d+ minor code-quality SOME-TITLE$/,
   );
-  assert.equal(JSON.stringify(failures).includes("SUMMARY-TEXT"), false);
+  assert.equal(JSON.stringify(english).includes("SUMMARY-TEXT"), false);
 });
 
 test("passes on an error that is not an error of the client", async () => {
@@ -449,9 +452,12 @@ test("writes path and title of a finding so that a line break cannot start a wor
   };
 
   const { failures } = await runEvaluation({ cases: [faultyCase], ai });
+  const english = failures.filter(
+    (entry) => !entry.name.endsWith("(German run)"),
+  );
 
-  assert.ok(failures.length > 0);
-  for (const { lines } of failures) {
+  assert.ok(english.length > 0);
+  for (const { lines } of english) {
     for (const line of lines) {
       assert.equal(line.includes("\n"), false);
       assert.equal(line.includes(escape), false);
@@ -512,4 +518,78 @@ test("fails without a key in a run by hand, on a push and on a machine", () => {
   ]) {
     assert.equal(missingKeyOutcome(env), "fail", JSON.stringify(env));
   }
+});
+
+test("shows the summary and the findings of a German run that is not German, to see why", async () => {
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const isGerman = request.system.includes("in German");
+      return {
+        content: JSON.stringify({
+          summary: isGerman ? "ENGLISH-SUMMARY-OF-THE-GERMAN-RUN" : "s",
+          findings: [hit(testCase, { title: isGerman ? "A-TITLE" : "t" })],
+        }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { german, failures } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.equal(german[0].german, false);
+  assert.deepEqual(
+    failures.map((entry) => entry.name),
+    [`${faultyCase.name} (German run)`],
+  );
+  assert.equal(
+    failures[0].lines[0],
+    "summary: ENGLISH-SUMMARY-OF-THE-GERMAN-RUN",
+  );
+  assert.match(
+    failures[0].lines[1],
+    /^src\/components\/Profile\.jsx:\d+ major react A-TITLE$/,
+  );
+});
+
+test("does not show the text of a German run that is German", async () => {
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const isGerman = request.system.includes("in German");
+      return {
+        content: JSON.stringify({
+          summary: isGerman ? "Das ist nicht gut und wird nicht halten." : "s",
+          findings: [hit(testCase)],
+        }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.deepEqual(failures, []);
+});
+
+test("writes the summary of a German run so that a line break cannot start a workflow command", async () => {
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const isGerman = request.system.includes("in German");
+      return {
+        content: JSON.stringify({
+          summary: isGerman ? "x\n::error::INJECTED" : "s",
+          findings: [hit(testCase)],
+        }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { failures } = await runEvaluation({ cases: [faultyCase], ai });
+
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].lines[0].includes("\n"), false);
+  assert.match(failures[0].lines[0], /\\u000a::error::INJECTED/);
 });

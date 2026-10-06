@@ -345,22 +345,27 @@ export async function runEvaluation({ cases, ai, concurrency = 4 }) {
       german: job.result.ok === true,
     }));
 
-  // The findings of the runs that missed their expectation, to see why. This
-  // is the only place that shows text of the model, and it is our own test data.
+  // The runs that missed their expectation, to see why. This is the only
+  // place that shows text of the model, and it is our own test data. Path,
+  // title and summary come from the model, which read the diff. A line break
+  // in one of them could start a workflow command in the log, so they go
+  // through `printable()`.
   const failures = jobs
-    .filter((job) => job.language === "en" && job.result.ok === false)
-    .map((job) => ({
-      name: job.testCase.name,
-      lines: job.review.findings.length
-        ? // Path and title come from the model, which read the diff. A line
-          // break in one of them could start a workflow command in the log.
-          job.review.findings.map((f) =>
-            printable(
-              `${f.path}:${f.line} ${f.severity} ${f.category} ${f.title}`,
-            ),
-          )
-        : ["no findings"],
-    }));
+    .filter((job) => job.result.ok === false)
+    .map((job) => {
+      const lines = job.review.findings.map((f) =>
+        printable(`${f.path}:${f.line} ${f.severity} ${f.category} ${f.title}`),
+      );
+      if (job.language === "de") {
+        // A run is not German because of its words. Show them.
+        lines.unshift(printable(`summary: ${job.review.summary}`));
+        return { name: `${job.testCase.name} (German run)`, lines };
+      }
+      return {
+        name: job.testCase.name,
+        lines: lines.length ? lines : ["no findings"],
+      };
+    });
 
   return { rows, german, failures };
 }
