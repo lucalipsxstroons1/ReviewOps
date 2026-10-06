@@ -135,7 +135,7 @@ function toCase(name, data) {
     // Built by the action's own builder, so the evaluation measures exactly
     // the message the action sends.
     user: buildUserPrompt({
-      title: data.title,
+      title: "",
       files: [{ path: data.path, annotated: annotateDiff(hunks) }],
     }),
   };
