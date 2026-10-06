@@ -13,6 +13,8 @@ export const OVER_LIMIT_REASONS = Object.freeze({
   files: (maxFiles) => `over the limit of ${maxFiles} files (max-files)`,
   chars: (maxDiffChars) =>
     `does not fit into the budget of ${maxDiffChars} characters (max-diff-chars)`,
+  request: (maxChars) =>
+    `larger than one request to the model (${maxChars} characters)`,
 });
 
 /**
@@ -63,21 +65,31 @@ function parseLimit(name, value, fallback) {
  * The size is the length of the annotated diff, the text that is later sent
  * to the model. It is created here once and kept as `annotated`.
  *
+ * A file that is larger than one request to the model on its own lands in
+ * `tooLarge`. It counts against neither limit: it could never be sent.
+ *
  * This is a pure function: it uses nothing but its arguments and does not
  * change them.
  *
  * @template {{ path: string, hunks: Parameters<typeof annotateDiff>[0] }} T
  * @param {T[]} diffs Parsed files, as `parsePatch()` returns them plus `path`.
  * @param {{ maxFiles: number, maxDiffChars: number }} limits
+ * @param {{
+ *   maxChars: number,
+ *   sizeOf: (file: T & { annotated: string }) => number,
+ * } | null} [request] The size of one request and how large a file makes
+ *   it. Without it, no file is too large.
  * @returns {{
  *   selected: (T & { annotated: string })[],
  *   overLimit: { path: string, reason: string }[],
+ *   tooLarge: { path: string, reason: string }[],
  *   usedChars: number,
  * }}
  */
-export function applyLimits(diffs, { maxFiles, maxDiffChars }) {
+export function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
   const selected = [];
   const overLimit = [];
+  const tooLarge = [];
   let usedChars = 0;
 
   for (const diff of diffs) {
@@ -90,6 +102,13 @@ export function applyLimits(diffs, { maxFiles, maxDiffChars }) {
     }
 
     const annotated = annotateDiff(diff.hunks);
+    if (request && request.sizeOf({ ...diff, annotated }) > request.maxChars) {
+      tooLarge.push({
+        path: diff.path,
+        reason: OVER_LIMIT_REASONS.request(request.maxChars),
+      });
+      continue;
+    }
     if (usedChars + annotated.length > maxDiffChars) {
       overLimit.push({
         path: diff.path,
@@ -102,5 +121,5 @@ export function applyLimits(diffs, { maxFiles, maxDiffChars }) {
     selected.push({ ...diff, annotated });
   }
 
-  return { selected, overLimit, usedChars };
+  return { selected, overLimit, tooLarge, usedChars };
 }

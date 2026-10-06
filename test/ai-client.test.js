@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import OpenAI from "openai";
 import { AiError, createAiClient } from "../src/ai/client.js";
-import { AiError as ErrorFromFile } from "../src/ai/error.js";
+import { AiError as ErrorFromFile, isFatal } from "../src/ai/error.js";
 import {
   MAX_OUTPUT_TOKENS,
   REVIEW_FORMAT,
@@ -1160,4 +1160,25 @@ test("the error class lives in its own file, without the SDK", () => {
   for (const text of schemaSource) {
     assert.equal(/from "openai"|client\.js/.test(text), false);
   }
+});
+
+test("names the errors after which no further request is worth a try", () => {
+  for (const kind of ["auth", "permission", "model", "quota"]) {
+    assert.equal(isFatal(new AiError(kind, "x")), true, kind);
+  }
+  for (const kind of [
+    "rate_limit",
+    "server",
+    "timeout",
+    "network",
+    "request",
+    "response",
+    "refusal",
+    "truncated",
+    "filtered",
+  ]) {
+    assert.equal(isFatal(new AiError(kind, "x")), false, kind);
+  }
+  assert.equal(isFatal(new Error("auth")), false);
+  assert.equal(isFatal({ kind: "auth" }), false);
 });

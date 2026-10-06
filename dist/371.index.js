@@ -1,8 +1,8 @@
-export const id = 309;
-export const ids = [309];
+export const id = 371;
+export const ids = [371];
 export const modules = {
 
-/***/ 3309:
+/***/ 7371:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -15,6 +15,184 @@ __webpack_require__.d(__webpack_exports__, {
 var lib_core = __webpack_require__(6257);
 // EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js + 22 modules
 var github = __webpack_require__(2413);
+;// CONCATENATED MODULE: ./src/ai/user-prompt.js
+// The user message of a review request. The system prompt in prompt.js
+// describes this shape: change one, and the other has to follow.
+//
+// <file path="src/Profile.jsx">
+// @@ function Profile() {
+//    9 | +  useEffect(() => {
+// </file>
+//
+// The title of the pull request is not part of it on purpose: with the title
+// in the message, the model raised a false alarm on a clean reference diff in
+// every run (#14).
+//
+// Every line of an annotated diff, split at line feeds, starts with the
+// number column, so no such line of code can start with a tag. A carriage
+// return or a Unicode line separator inside a line can still make code look
+// like a new line to the model; #15 defuses those. The path is the only
+// value that stands on its own, and it is checked here.
+
+// A path goes into an attribute in double quotes. Escaping is no way out:
+// the model would have to undo it, and a path it returns changed can no
+// longer be matched to a file of the pull request. The control characters,
+// invisible format characters and Unicode line and paragraph separators
+// could break the tag or hide text from a reader.
+const UNUSABLE_PATH = /["<>\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+const UNUSABLE_PATH_REASON =
+  "the file name contains characters that cannot be put into the prompt";
+
+// Between two blocks of the message.
+const SEPARATOR = "\n\n";
+
+/**
+ * Whether a path can be put into the prompt as it is.
+ *
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isUsablePath(path) {
+  return typeof path === "string" && path !== "" && !UNUSABLE_PATH.test(path);
+}
+
+/**
+ * The block of one file.
+ *
+ * @param {{ path: string, annotated: string }} file
+ * @returns {string}
+ * @throws {Error} When the path cannot be put into the prompt. `run()` leaves
+ *   such files out before, so this is a defect.
+ */
+function fileBlock({ path, annotated }) {
+  if (!isUsablePath(path)) {
+    throw new Error("A file with an unusable path reached the prompt.");
+  }
+  return `<file path="${path}">\n${annotated}\n</file>`;
+}
+
+/**
+ * Builds the user message of one request.
+ *
+ * The result contains code from the pull request. It is meant for the model
+ * and must not be logged.
+ *
+ * @param {object} options
+ * @param {{ path: string, annotated: string }[]} options.files The files of
+ *   this request, with the annotated diff `applyLimits()` created.
+ * @returns {string}
+ */
+function buildUserPrompt({ files }) {
+  return files.map(fileBlock).join(SEPARATOR);
+}
+
+;// CONCATENATED MODULE: ./src/ai/batch.js
+
+
+// The largest user message of one request, in characters: about 12000 to
+// 16000 tokens. It keeps the answer well below its limit of about 30
+// findings and the request below the timeout of the client.
+const MAX_REQUEST_CHARS = 50000;
+
+/**
+ * Length of the user message that holds only this file. A file above
+ * {@link MAX_REQUEST_CHARS} fits into no request.
+ *
+ * @param {{ path: string, annotated: string }} file
+ * @returns {number}
+ */
+function requestSize(file) {
+  return fileBlock(file).length;
+}
+
+/**
+ * Splits the files into requests, in the order they are given.
+ *
+ * A request takes files until the next one no longer fits, then the next
+ * request begins. A file is never split.
+ *
+ * This is a pure function: it uses nothing but its arguments and does not
+ * change them.
+ *
+ * @template {{ path: string, annotated: string }} T
+ * @param {object} options
+ * @param {T[]} options.files The files `applyLimits()` selected.
+ * @param {number} [options.maxChars] The largest user message.
+ * @returns {{ files: T[], user: string }[]} One entry per request, with the
+ *   user message that goes to the model.
+ * @throws {Error} When a single file does not fit: `applyLimits()` leaves
+ *   such files out before, so this is a defect.
+ */
+function planBatches({ files, maxChars = MAX_REQUEST_CHARS }) {
+  const batches = [];
+  let current = [];
+  let used = 0;
+
+  for (const file of files) {
+    const length = requestSize(file);
+    if (length > maxChars) {
+      throw new Error("A file larger than one request reached the batching.");
+    }
+    // A block added to a message that already holds one brings a separator.
+    if (current.length > 0 && used + SEPARATOR.length + length > maxChars) {
+      batches.push(current);
+      current = [];
+    }
+    used = current.length === 0 ? length : used + SEPARATOR.length + length;
+    current.push(file);
+  }
+  if (current.length > 0) batches.push(current);
+
+  return batches.map((batch) => ({
+    files: batch,
+    user: buildUserPrompt({ files: batch }),
+  }));
+}
+
+// EXTERNAL MODULE: ./node_modules/openai/index.mjs + 216 modules
+var openai = __webpack_require__(9111);
+;// CONCATENATED MODULE: ./src/ai/error.js
+/**
+ * An error of the AI client. The message says what to do. It never contains
+ * text from the answer of the API: OpenAI repeats the first and the last
+ * characters of an invalid key in its own message, and the model may repeat
+ * code from the pull request.
+ *
+ * This file does not import the SDK. Modules that only need the error, such
+ * as the parser of the review format, must not pull the SDK into the bundle
+ * before `run()` needs it.
+ */
+class AiError extends Error {
+  name = "AiError";
+
+  /**
+   * @param {"auth" | "permission" | "model" | "quota" | "rate_limit" | "server" | "timeout" | "network" | "request" | "response" | "refusal" | "truncated" | "filtered"} kind
+   *   Tells a caller whether other requests are still worth a try: after
+   *   `auth`, `permission`, `model` and `quota`, they are not.
+   * @param {string} message
+   * @param {number | null} [status] HTTP status, if there was an answer.
+   */
+  constructor(kind, message, status = null) {
+    super(message);
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+// After these, every other request fails the same way.
+const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
+
+/**
+ * Whether further requests are pointless after this error.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isFatal(error) {
+  return error instanceof AiError && FATAL_KINDS.has(error.kind);
+}
+
 ;// CONCATENATED MODULE: ./src/printable.js
 const MAX_LENGTH = 200;
 
@@ -78,32 +256,329 @@ function parseModel(value = "") {
   return name;
 }
 
-;// CONCATENATED MODULE: ./src/ai/error.js
-/**
- * An error of the AI client. The message says what to do. It never contains
- * text from the answer of the API: OpenAI repeats the first and the last
- * characters of an invalid key in its own message, and the model may repeat
- * code from the pull request.
- *
- * This file does not import the SDK. Modules that only need the error, such
- * as the parser of the review format, must not pull the SDK into the bundle
- * before `run()` needs it.
- */
-class error_AiError extends Error {
-  name = "AiError";
+;// CONCATENATED MODULE: ./src/ai/client.js
 
-  /**
-   * @param {"auth" | "permission" | "model" | "quota" | "rate_limit" | "server" | "timeout" | "network" | "request" | "response" | "refusal" | "truncated" | "filtered"} kind
-   *   Tells a caller whether other requests are still worth a try: after
-   *   `auth`, `permission`, `model` and `quota`, they are not.
-   * @param {string} message
-   * @param {number | null} [status] HTTP status, if there was an answer.
-   */
-  constructor(kind, message, status = null) {
-    super(message);
-    this.kind = kind;
-    this.status = status;
+
+
+
+
+
+// Fixed on purpose. The SDK would take the address, the organisation and the
+// project from variables of the environment if they were left out, and it
+// would then send the key and the code to wherever the variable points.
+const BASE_URL = "https://api.openai.com/v1";
+const TIMEOUT_MS = 120_000;
+const MAX_RETRIES = 2;
+
+// Low, so that a second run over the same diff gives similar findings.
+const TEMPERATURE = 0.1;
+
+// Values that come from the answer of the API are shown only if they look
+// like an identifier. Nothing else from the answer is ever written.
+const IDENTIFIER = /^[A-Za-z0-9._:-]{1,100}$/;
+const safe = (value) =>
+  typeof value === "string" && IDENTIFIER.test(value) ? value : "unknown";
+
+/**
+ * Creates the client for the review model.
+ *
+ * Nothing in here writes the prompt or the answer anywhere: both contain code
+ * from the pull request. The log gets numbers only.
+ *
+ * @param {object} options
+ * @param {string} options.apiKey
+ * @param {string} [options.model] Empty means the default model.
+ * @param {Pick<typeof import("@actions/core"), "info" | "debug">} options.core
+ * @param {typeof OpenAI} [options.OpenAIClass] Replacement for the SDK, used by tests.
+ * @returns {{
+ *   complete: (prompt: {
+ *     system: string,
+ *     user: string,
+ *     responseFormat?: object,
+ *     maxOutputTokens?: number,
+ *   }) => Promise<{
+ *     content: string,
+ *     finishReason: string | null,
+ *     usage: { inputTokens: number, outputTokens: number, totalTokens: number } | null,
+ *     model: string,
+ *     requestId: string | null,
+ *   }>,
+ * }}
+ */
+function client_createAiClient({ apiKey, model, core, OpenAIClass = openai/* default */.Ay }) {
+  if (typeof apiKey !== "string" || apiKey === "") {
+    throw new Error("The AI client needs an API key.");
   }
+  const modelName = parseModel(model);
+
+  const sdk = new OpenAIClass({
+    apiKey,
+    baseURL: BASE_URL,
+    organization: null,
+    project: null,
+    logLevel: "off",
+    timeout: TIMEOUT_MS,
+    maxRetries: MAX_RETRIES,
+  });
+
+  // Some models do not accept `temperature`. Once one has refused it, the
+  // following requests leave it out right away.
+  let sendTemperature = true;
+
+  async function send(messages, extra) {
+    // Several requests can be on their way at once, and each of them is
+    // refused on its own. So the refusal is matched to what this request
+    // carried, not to what the flag says by now.
+    const withTemperature = sendTemperature;
+    try {
+      return await sdk.chat.completions.create({
+        model: modelName,
+        messages,
+        ...extra,
+        ...(withTemperature ? { temperature: TEMPERATURE } : {}),
+      });
+    } catch (error) {
+      if (!(withTemperature && rejectsTemperature(error))) throw error;
+      if (sendTemperature) {
+        sendTemperature = false;
+        core.info(
+          "The model does not accept `temperature`. The request is repeated without it.",
+        );
+      }
+      return sdk.chat.completions.create({
+        model: modelName,
+        messages,
+        ...extra,
+      });
+    }
+  }
+
+  return {
+    async complete({ system, user, responseFormat, maxOutputTokens }) {
+      if (typeof system !== "string" || typeof user !== "string") {
+        throw new TypeError("The prompt needs a system text and a user text.");
+      }
+      if (
+        maxOutputTokens !== undefined &&
+        !(Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0)
+      ) {
+        throw new TypeError(
+          "The output limit must be a positive whole number.",
+        );
+      }
+      const extra = {
+        ...(responseFormat === undefined
+          ? {}
+          : { response_format: responseFormat }),
+        ...(maxOutputTokens === undefined
+          ? {}
+          : { max_completion_tokens: maxOutputTokens }),
+      };
+
+      let response;
+      try {
+        response = await send(
+          [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          extra,
+        );
+      } catch (error) {
+        const translated = translate(error, modelName, core);
+        // Anything else is a defect of this action, not a problem of the API.
+        throw translated ?? error;
+      }
+
+      return read(response, modelName, core);
+    },
+  };
+}
+
+function rejectsTemperature(error) {
+  return (
+    error instanceof openai/* default.BadRequestError */.Ay.BadRequestError && error.param === "temperature"
+  );
+}
+
+/** Checks the answer and turns it into the result of the client. */
+function read(response, requestedModel, core) {
+  const choice = response?.choices?.[0];
+  const content = choice?.message?.content;
+  // The text of a refusal is output of the model and may repeat code from the
+  // pull request, so it is neither logged nor put into the error.
+  if (typeof choice?.message?.refusal === "string" && choice.message.refusal) {
+    throw new AiError(
+      "refusal",
+      `The model "${requestedModel}" refused to review the changes, so the review is incomplete. Run the workflow again, or choose another model with the input \`openai-model\`.`,
+    );
+  }
+  const finishReason =
+    typeof choice?.finish_reason === "string" ? choice.finish_reason : null;
+  // A cut-off or filtered answer can be empty. It is handed on with its
+  // finish reason, so that the caller reports what happened and not just
+  // "no text".
+  const stoppedEarly =
+    finishReason === "length" || finishReason === "content_filter";
+  const text = typeof content === "string" ? content : "";
+  if (text === "" && !stoppedEarly) {
+    throw new AiError(
+      "response",
+      "OpenAI answered without any text. The model may have refused the request or the answer was cut off. Run the workflow again.",
+    );
+  }
+
+  const model =
+    safe(response.model) === "unknown" ? requestedModel : response.model;
+  const requestId = IDENTIFIER.test(response._request_id ?? "")
+    ? response._request_id
+    : null;
+  // The numbers end up in the log. They are taken only if all three are
+  // whole numbers, so that nothing else from the answer gets there.
+  const counts = [
+    response.usage?.prompt_tokens,
+    response.usage?.completion_tokens,
+    response.usage?.total_tokens,
+  ];
+  const usage = counts.every(
+    (count) => Number.isSafeInteger(count) && count >= 0,
+  )
+    ? {
+        inputTokens: counts[0],
+        outputTokens: counts[1],
+        totalTokens: counts[2],
+      }
+    : null;
+
+  const where = requestId ? ` (request ${requestId})` : "";
+  core.info(
+    usage
+      ? `OpenAI answered with model ${model}: ${usage.inputTokens} input and ${usage.outputTokens} output tokens${where}.`
+      : `OpenAI answered with model ${model}, without a token count${where}.`,
+  );
+
+  return {
+    content: text,
+    finishReason,
+    usage,
+    model,
+    requestId,
+  };
+}
+
+/**
+ * Turns an error of the SDK into an AiError with its own message. Returns
+ * `null` for anything that is not a problem of the API.
+ */
+function translate(error, model, core) {
+  if (error instanceof openai/* default.APIConnectionTimeoutError */.Ay.APIConnectionTimeoutError) {
+    return new AiError(
+      "timeout",
+      `OpenAI did not answer within ${TIMEOUT_MS / 1000} seconds, also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+    );
+  }
+  if (error instanceof openai/* default.APIConnectionError */.Ay.APIConnectionError) {
+    return new AiError(
+      "network",
+      "OpenAI could not be reached. Check the network of the runner and run the workflow again.",
+    );
+  }
+  if (error instanceof openai/* default.APIError */.Ay.APIError && Number.isInteger(error.status)) {
+    // Status, code, type and request ID tell what happened. The text of the
+    // answer stays out: OpenAI repeats parts of the key in it.
+    core.debug(
+      `OpenAI error: status ${error.status}, code ${describe(error.code)}, type ${describe(error.type)}, request ${describe(error.requestID)}.`,
+    );
+    return byStatus(error, model);
+  }
+  if (error instanceof openai/* default.OpenAIError */.Ay.OpenAIError) {
+    // Which kind of error it was, without anything it says.
+    core.debug(`OpenAI error: ${describe(error.constructor?.name)}.`);
+    return new AiError(
+      "response",
+      "OpenAI answered in a way that could not be read. Run the workflow again.",
+    );
+  }
+  return null;
+}
+
+const describe = (value) =>
+  value === null || value === undefined ? "none" : safe(value);
+
+function byStatus(error, model) {
+  const { status } = error;
+  const http = `HTTP ${status}`;
+
+  if (status === 401) {
+    return new AiError(
+      "auth",
+      `OpenAI rejected the API key (${http}). Check that the repository secret \`OPENAI_API_KEY\` holds a valid key of an active project.`,
+      status,
+    );
+  }
+  if (status === 403) {
+    return new AiError(
+      "permission",
+      `OpenAI denied the request (${http}). The key may not be allowed to use the model "${model}". Check the permissions of the key and of its project.`,
+      status,
+    );
+  }
+  if (status === 404) {
+    return new AiError(
+      "model",
+      `OpenAI does not know the model "${model}", or the key has no access to it (${http}). Check the input \`openai-model\`.`,
+      status,
+    );
+  }
+  // A used-up quota is also an HTTP 429, but waiting does not help. OpenAI
+  // names it in the type of the error. The code differs: an account without
+  // credit answers with `credit_balance_exhausted`, a spending limit with
+  // `insufficient_quota`. Either one counts.
+  if (
+    status === 429 &&
+    (error.type === "insufficient_quota" || error.code === "insufficient_quota")
+  ) {
+    return new AiError(
+      "quota",
+      `The OpenAI account has no credit or quota left (${http}). Add credit, or check the billing and the spending limit of the project of the key. Running the workflow again does not help until then.`,
+      status,
+    );
+  }
+  if (status === 429) {
+    return new AiError(
+      "rate_limit",
+      `The rate limit of OpenAI is reached (${http}), also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+      status,
+    );
+  }
+  if (status >= 500) {
+    return new AiError(
+      "server",
+      `OpenAI could not answer (${http}), also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+      status,
+    );
+  }
+  // The model cannot produce Structured Outputs. There is no fallback to a
+  // weaker format on purpose: the review needs the schema. OpenAI names the
+  // same parameter when it dislikes the schema itself (`invalid_json_schema`).
+  // That is a defect of this action, not a setting, so it stays a plain
+  // refused request.
+  if (
+    status === 400 &&
+    error.param === "response_format" &&
+    error.code !== "invalid_json_schema"
+  ) {
+    return new AiError(
+      "model",
+      `The model "${model}" does not support Structured Outputs (${http}), which the review format needs. Set the input \`openai-model\` to a model that does, such as "gpt-4o-mini" or "gpt-4.1".`,
+      status,
+    );
+  }
+  return new AiError(
+    "request",
+    `OpenAI rejected the request (${http}). Turn on debug logging to see status and error code.`,
+    status,
+  );
 }
 
 ;// CONCATENATED MODULE: ./src/ai/json-schema.js
@@ -115,7 +590,7 @@ class error_AiError extends Error {
 // keyword it does not know is an error of the schema, never skipped: a
 // constraint that is silently ignored would let invalid answers pass.
 
-const TYPES = (/* unused pure expression or super */ null && ([
+const TYPES = [
   "object",
   "array",
   "string",
@@ -123,7 +598,7 @@ const TYPES = (/* unused pure expression or super */ null && ([
   "number",
   "boolean",
   "null",
-]));
+];
 
 // `description` and `title` only explain. All others are checked.
 const KEYWORDS = new Set([
@@ -243,7 +718,7 @@ const join = (path, name) => (path === "" ? name : `${path}.${name}`);
  * @returns {string | null} The first problem, or `null` if the value fits.
  * @throws {Error} When the schema itself is not supported.
  */
-function json_schema_validate(schema, value) {
+function validate(schema, value) {
   // Once per schema: a keyword that cannot be checked must not be skipped.
   if (!checkedSchemas.has(schema)) {
     assertSchema(schema);
@@ -300,8 +775,8 @@ function check(schema, value, path) {
 // very same object. The descriptions go to the model as well, and a test keeps
 // them equal to the table in docs/response-format.md.
 
-const schema_SEVERITIES = ["critical", "major", "minor", "info"];
-const schema_CATEGORIES = ["code-quality", "react", "efcore", "security"];
+const SEVERITIES = ["critical", "major", "minor", "info"];
+const CATEGORIES = ["code-quality", "react", "efcore", "security"];
 
 // The schema is shared by the request and the check. Nothing may change it.
 function deepFreeze(value) {
@@ -344,12 +819,12 @@ const REVIEW_SCHEMA = deepFreeze({
           },
           severity: {
             type: "string",
-            enum: schema_SEVERITIES,
+            enum: SEVERITIES,
             description: "How serious the problem is.",
           },
           category: {
             type: "string",
-            enum: schema_CATEGORIES,
+            enum: CATEGORIES,
             description:
               "Focus area of the finding. If more than one fits, security wins.",
           },
@@ -418,7 +893,7 @@ function parseReview({ content, finishReason }) {
   if (finishReason === "length") {
     throw new AiError(
       "truncated",
-      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Reduce \`max-files\` or \`max-diff-chars\`, or run the workflow again.`,
+      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Run the workflow again; if it keeps happening, leave the largest files out with the input \`exclude\`.`,
     );
   }
   if (finishReason === "content_filter") {
@@ -454,7 +929,7 @@ function parseReview({ content, finishReason }) {
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-const PROMPT_VERSION = 5;
+const PROMPT_VERSION = 7;
 
 // The same value is written into action.yml. A test keeps them equal.
 const DEFAULT_LANGUAGE = "en";
@@ -594,7 +1069,7 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "## The input",
     "",
-    "The user message holds the changed files. Each file starts with a line `File: <path>`, followed by its diff. A diff line looks like this:",
+    'The user message holds the changes of one pull request, or a part of them: other files of the same pull request may come in other messages. Each changed file comes between `<file path="<path>">` and `</file>`, with the diff of that file inside. A diff line looks like this:',
     "",
     "```",
     "  12 | +  const sum = items.reduce(add, 0);",
@@ -615,7 +1090,7 @@ function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "## Rules",
     "",
     "- Comment only on added lines. Take the line number from the diff exactly as it is shown. Never calculate a number and never use the line of a removed or unchanged line.",
-    "- Use the path exactly as it is written after `File:`.",
+    "- Use the path exactly as it is written in the `path` attribute of `<file>`.",
     "- When in doubt, report nothing. Report a problem only if you can point at it in the code you see. Do not guess what code outside the diff does.",
     "- One finding per problem. Do not repeat the same problem on several lines; report it once, at the line where it starts.",
     "- Do not ask for tests, documentation or comments, and do not remark on what the change does.",
@@ -1315,6 +1790,8 @@ const OVER_LIMIT_REASONS = Object.freeze({
   files: (maxFiles) => `over the limit of ${maxFiles} files (max-files)`,
   chars: (maxDiffChars) =>
     `does not fit into the budget of ${maxDiffChars} characters (max-diff-chars)`,
+  request: (maxChars) =>
+    `larger than one request to the model (${maxChars} characters)`,
 });
 
 /**
@@ -1365,21 +1842,31 @@ function parseLimit(name, value, fallback) {
  * The size is the length of the annotated diff, the text that is later sent
  * to the model. It is created here once and kept as `annotated`.
  *
+ * A file that is larger than one request to the model on its own lands in
+ * `tooLarge`. It counts against neither limit: it could never be sent.
+ *
  * This is a pure function: it uses nothing but its arguments and does not
  * change them.
  *
  * @template {{ path: string, hunks: Parameters<typeof annotateDiff>[0] }} T
  * @param {T[]} diffs Parsed files, as `parsePatch()` returns them plus `path`.
  * @param {{ maxFiles: number, maxDiffChars: number }} limits
+ * @param {{
+ *   maxChars: number,
+ *   sizeOf: (file: T & { annotated: string }) => number,
+ * } | null} [request] The size of one request and how large a file makes
+ *   it. Without it, no file is too large.
  * @returns {{
  *   selected: (T & { annotated: string })[],
  *   overLimit: { path: string, reason: string }[],
+ *   tooLarge: { path: string, reason: string }[],
  *   usedChars: number,
  * }}
  */
-function applyLimits(diffs, { maxFiles, maxDiffChars }) {
+function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
   const selected = [];
   const overLimit = [];
+  const tooLarge = [];
   let usedChars = 0;
 
   for (const diff of diffs) {
@@ -1392,6 +1879,13 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }) {
     }
 
     const annotated = annotateDiff(diff.hunks);
+    if (request && request.sizeOf({ ...diff, annotated }) > request.maxChars) {
+      tooLarge.push({
+        path: diff.path,
+        reason: OVER_LIMIT_REASONS.request(request.maxChars),
+      });
+      continue;
+    }
     if (usedChars + annotated.length > maxDiffChars) {
       overLimit.push({
         path: diff.path,
@@ -1404,7 +1898,7 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }) {
     selected.push({ ...diff, annotated });
   }
 
-  return { selected, overLimit, usedChars };
+  return { selected, overLimit, tooLarge, usedChars };
 }
 
 ;// CONCATENATED MODULE: ./src/redact.js
@@ -1440,7 +1934,111 @@ function createRedactor(secrets) {
     );
 }
 
+;// CONCATENATED MODULE: ./src/review.js
+
+
+
+// Requests on their way at the same time. One request can take up to three
+// attempts of 120 seconds, so a pull request of eight requests needs two
+// rounds of about six minutes in the worst case. The job limit in
+// reviewops.yml is set for that.
+const MAX_PARALLEL_REQUESTS = 4;
+
+/**
+ * Sends every batch to the model and merges the answers.
+ *
+ * A batch that fails does not take the others with it: their findings are
+ * kept, and the failed batch is returned with its error. After an error that
+ * every request would hit (`auth`, `permission`, `model`, `quota`), no new
+ * request is started, and the batches that were not sent fail with it.
+ *
+ * Nothing in here writes to the log: the answers hold code from the pull
+ * request. The findings are not checked against the diff yet.
+ *
+ * @param {object} options
+ * @param {{ complete: ReturnType<typeof import("./ai/client.js").createAiClient>["complete"] }} options.client
+ * @param {string} options.system The system prompt.
+ * @param {{ files: { path: string }[], user: string }[]} options.batches
+ *   The requests, as `planBatches()` returns them.
+ * @param {number} [options.concurrency] Requests at the same time.
+ * @returns {Promise<{
+ *   summaries: string[],
+ *   findings: import("./ai/schema.js").Finding[],
+ *   succeeded: number,
+ *   failed: { paths: string[], error: AiError }[],
+ * }>} Summaries and findings in the order of the batches.
+ * @throws Anything that is not an `AiError`: that is a defect, not an
+ *   answer of the API.
+ */
+async function reviewInBatches({
+  client,
+  system,
+  batches,
+  concurrency = MAX_PARALLEL_REQUESTS,
+}) {
+  const results = new Array(batches.length);
+  let next = 0;
+  let fatal = null;
+  let defect = null;
+
+  async function worker() {
+    while (next < batches.length && defect === null) {
+      const index = next;
+      next += 1;
+      if (fatal) {
+        results[index] = { error: fatal };
+        continue;
+      }
+      try {
+        const answer = await client.complete({
+          system,
+          user: batches[index].user,
+          responseFormat: REVIEW_FORMAT,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+        });
+        results[index] = { review: parseReview(answer) };
+      } catch (error) {
+        if (!(error instanceof AiError)) {
+          defect ??= { error };
+          return;
+        }
+        if (isFatal(error)) fatal ??= error;
+        results[index] = { error };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), batches.length) },
+      worker,
+    ),
+  );
+  if (defect) throw defect.error;
+
+  const merged = { summaries: [], findings: [], succeeded: 0, failed: [] };
+  batches.forEach((batch, index) => {
+    const result = results[index];
+    if (result.review) {
+      merged.succeeded += 1;
+      merged.summaries.push(result.review.summary);
+      merged.findings.push(...result.review.findings);
+    } else {
+      merged.failed.push({
+        paths: batch.files.map((file) => file.path),
+        error: result.error,
+      });
+    }
+  });
+  return merged;
+}
+
 ;// CONCATENATED MODULE: ./src/main.js
+
+
+
+
+
 
 
 
@@ -1475,12 +2073,14 @@ const UNREADABLE_DIFF = "the diff could not be read";
  * @param {typeof import("@actions/github").context} [deps.context]
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
+ * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
  */
 async function run({
   core = lib_core,
   context = github/* context */._,
   getOctokit = github/* getOctokit */.Q,
   parsePatch = parse_parsePatch,
+  createAiClient = client_createAiClient,
 } = {}) {
   let redact = String;
 
@@ -1496,12 +2096,11 @@ async function run({
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
     // A pattern, a limit, a model name or a language that cannot be used
-    // fails the run here, before any request. The model and the language are
-    // handed to the AI client and the prompt later.
+    // fails the run here, before any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
     const limits = parseLimits(inputs);
-    parseModel(inputs.openaiModel);
-    parseLanguage(inputs.language);
+    const model = parseModel(inputs.openaiModel);
+    const language = parseLanguage(inputs.language);
 
     core.info("ReviewOps started.");
 
@@ -1515,11 +2114,17 @@ async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
-    // Generated and irrelevant files are left out before anything is parsed.
+    // Generated and irrelevant files are left out before anything is parsed,
+    // and so are files whose name cannot be put into the prompt.
     const relevant = [];
     const excluded = [];
+    let unusableNames = 0;
     for (const file of listing.files) {
-      const reason = excludeReason(file.path);
+      let reason = excludeReason(file.path);
+      if (!reason && !isUsablePath(file.path)) {
+        reason = UNUSABLE_PATH_REASON;
+        unusableNames += 1;
+      }
       if (reason) excluded.push({ path: file.path, reason });
       else relevant.push(file);
     }
@@ -1527,8 +2132,16 @@ async function run({
     // Line numbers are calculated here and never taken from the model.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
 
-    // Large pull requests are cut to the limits, in the order of GitHub.
-    const { selected, overLimit, usedChars } = applyLimits(diffs, limits);
+    // Large pull requests are cut to the limits, in the order of GitHub. A
+    // file that does not fit into one request to the model is left out too.
+    const { selected, overLimit, tooLarge, usedChars } = applyLimits(
+      diffs,
+      limits,
+      {
+        maxChars: MAX_REQUEST_CHARS,
+        sizeOf: requestSize,
+      },
+    );
 
     // The list below is cut off, so the order matters: unreadable diffs and
     // files that the limits left out are the ones someone has to look at,
@@ -1536,6 +2149,7 @@ async function run({
     // reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...tooLarge,
       ...overLimit,
       ...excluded,
       ...listing.skipped,
@@ -1559,6 +2173,16 @@ async function run({
       for (const { path, detail } of unreadable) {
         core.debug(`${printable(path)}: ${detail}`);
       }
+    }
+    if (unusableNames > 0) {
+      core.warning(
+        `Files whose name cannot be put into the prompt: ${unusableNames}. They are not reviewed. A name with a double quote, "<", ">" or a control character cannot be sent.`,
+      );
+    }
+    if (tooLarge.length > 0) {
+      core.warning(
+        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters.`,
+      );
     }
     if (overLimit.length > 0) {
       core.warning(
@@ -1588,9 +2212,62 @@ async function run({
       `Parsed the diffs of ${selected.length} files: ${addedLines} added lines can receive comments.`,
     );
     core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
+
+    const batches = planBatches({ files: selected });
+    core.info(
+      `Sending ${selected.length} files to ${model} in ${batches.length} requests.`,
+    );
+    const client = createAiClient({
+      apiKey: inputs.openaiApiKey,
+      model,
+      core,
+    });
+    const review = await reviewInBatches({
+      client,
+      system: buildSystemPrompt({ language }),
+      batches,
+    });
+
+    // Not one request worked: there is no review, and the message of the
+    // first error says what to do.
+    if (review.succeeded === 0) throw review.failed[0].error;
+
+    if (review.failed.length > 0) {
+      const notReviewed = review.failed.flatMap(({ paths }) => paths);
+      // The messages of the client are its own texts, without anything from
+      // the answer of the API.
+      const reasons = [
+        ...new Set(review.failed.map(({ error }) => error.message)),
+      ];
+      core.warning(
+        redact(
+          `Requests to the model that failed: ${review.failed.length} of ${batches.length}. ${notReviewed.length} files were not reviewed. ${reasons.join(" ")}`,
+        ),
+      );
+      for (const path of notReviewed.slice(0, MAX_SKIPPED_LINES)) {
+        core.info(
+          `Not reviewed ${printable(path)}: the request to the model failed.`,
+        );
+      }
+      if (notReviewed.length > MAX_SKIPPED_LINES) {
+        core.info(
+          `${notReviewed.length - MAX_SKIPPED_LINES} more files that were not reviewed are not listed.`,
+        );
+      }
+    }
+
+    // Numbers only: the findings and the summary hold code from the pull
+    // request. Checking and posting them follows in later steps.
+    const counts = SEVERITIES.map(
+      (severity) =>
+        `${review.findings.filter((item) => item.severity === severity).length} ${severity}`,
+    ).join(", ");
+    core.info(
+      `Review finished: ${review.findings.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
+    );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
-    core.setFailed(redact(describe(error)));
+    core.setFailed(redact(main_describe(error)));
 
     try {
       if (error instanceof Error && error.stack) {
@@ -1626,7 +2303,7 @@ function parseDiffs(files, parsePatch) {
 }
 
 /** Turns anything that was thrown into a message a person can act on. */
-function describe(error) {
+function main_describe(error) {
   if (error instanceof Error) return error.message || error.name;
   if (typeof error === "string" && error.trim()) return error;
   return "ReviewOps failed without an error message.";

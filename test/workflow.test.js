@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { MAX_REQUEST_CHARS } from "../src/ai/batch.js";
+import { DEFAULT_MAX_DIFF_CHARS } from "../src/limits.js";
+import { MAX_PARALLEL_REQUESTS } from "../src/review.js";
 import { fromRoot } from "./helpers/run-action.js";
 
 const WORKFLOW_DIR = ".github/workflows";
@@ -75,6 +78,19 @@ test("reviewops.yml: cancels the older run of the same pull request", () => {
     reviewops.concurrency.group,
     /\$\{\{ github\.event\.pull_request\.number \}\}/,
   );
+});
+
+test("reviewops.yml: gives the requests to the model enough time", () => {
+  // Requests are filled in the order of GitHub, so two neighbouring requests
+  // always hold more than one budget: a pull request of the default size
+  // needs about eight requests at most.
+  const requests = 2 * Math.ceil(DEFAULT_MAX_DIFF_CHARS / MAX_REQUEST_CHARS);
+  const rounds = Math.ceil(requests / MAX_PARALLEL_REQUESTS);
+  // Three attempts of 120 seconds and the waits of the SDK between them.
+  const minutesPerRequest = (3 * 120 + 30) / 60;
+
+  assert.equal(reviewops.jobs.review["timeout-minutes"], 15);
+  assert.ok(rounds * minutesPerRequest <= 15);
 });
 
 test("reviewops.yml: loads the action from the checked-out repository", () => {

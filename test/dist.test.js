@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { apiFile, apiFiles, startGitHubApi } from "./helpers/github-api.js";
+import { reviewCompletion, startOpenAiApi } from "./helpers/openai-api.js";
 import {
   API_KEY,
   PULL_REQUEST_EVENT,
@@ -26,9 +27,23 @@ import {
 const BUNDLE = fromRoot("dist/index.js");
 const runBundle = (env) => startAction(BUNDLE, env);
 
-/** Environment of a complete pull_request run against the local API server. */
+/**
+ * Environment of a complete pull_request run against the local API servers.
+ * Without a server for OpenAI, its requests go nowhere.
+ */
 const pullRequestRun = (api) =>
-  withInputs({ ...PULL_REQUEST_EVENT, GITHUB_API_URL: api.url });
+  withInputs({
+    ...PULL_REQUEST_EVENT,
+    GITHUB_API_URL: api.url,
+    TEST_OPENAI_URL: api.openai?.url ?? "",
+  });
+
+/** Starts the local GitHub API and a stand-in for OpenAI that finds nothing. */
+async function startApis(t, github) {
+  const api = await startGitHubApi(t, github);
+  const openai = await startOpenAiApi(t, reviewCompletion());
+  return { ...api, openai };
+}
 
 test("the build empties dist/ before it writes the bundle", () => {
   // The bundle consists of numbered files. Without this, a file from an
@@ -47,7 +62,7 @@ test("the bundle and the files it needs are present", () => {
 });
 
 test("the bundle names the pull request and lists its files", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [...apiFiles(2), apiFile("docs/old.md", { status: "removed" })],
   });
 
@@ -88,7 +103,7 @@ test("the bundle ends green with a notice when only a lockfile changed", async (
 });
 
 test("the bundle applies the patterns of the exclude input", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [...apiFiles(1), apiFile("docs/guide.md")],
   });
 
@@ -123,7 +138,7 @@ test("the bundle fails the step when an exclude pattern cannot be used", async (
 });
 
 test("the bundle skips a file whose diff cannot be read", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [...apiFiles(1), apiFile("src/odd.js", { patch: "not a diff" })],
   });
 
@@ -143,7 +158,7 @@ test("the bundle skips a file whose diff cannot be read", async (t) => {
 });
 
 test("the bundle loads more than 100 files completely", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(120) });
+  const api = await startApis(t, { files: apiFiles(120) });
 
   // The limit is raised: this test is about loading, not about the limit.
   const result = await runBundle({
@@ -159,7 +174,7 @@ test("the bundle loads more than 100 files completely", async (t) => {
 });
 
 test("the bundle leaves out the files over the limit and names them", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(120) });
+  const api = await startApis(t, { files: apiFiles(120) });
 
   const result = await runBundle(pullRequestRun(api));
 
@@ -177,6 +192,25 @@ test("the bundle leaves out the files over the limit and names them", async (t) 
     /^::warning::Files left out because of the limits: 70\./m,
   );
   assert.match(result.stdout, /^Diff size: \d+ of 200000 characters\.$/m);
+  assert.equal(result.stderr, "");
+});
+
+test("the bundle sends the review to OpenAI and reports the result", async (t) => {
+  const api = await startApis(t, { files: apiFiles(2) });
+
+  const result = await runBundle(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.equal(api.openai.requests.length, 1);
+  assert.equal(api.openai.requests[0].authorization, `Bearer ${API_KEY}`);
+  assert.match(
+    result.stdout,
+    /^Sending 2 files to gpt-4o-mini in 1 requests\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Review finished: 0 findings \(0 critical, 0 major, 0 minor, 0 info\) from 1 of 1 requests\.$/m,
+  );
   assert.equal(result.stderr, "");
 });
 
@@ -258,10 +292,12 @@ test("the bundle skips other events with exit code 0", async () => {
 });
 
 test("the bundle keeps both credentials out of the log", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(1) });
+  const api = await startApis(t, { files: apiFiles(1) });
 
   const result = await runBundle(pullRequestRun(api));
 
+  // Both credentials were used: the token for GitHub, the key for OpenAI.
+  assert.equal(api.openai.requests.length, 1);
   const log = withoutMaskCommands(result.output);
   assert.equal(log.includes(TOKEN), false);
   assert.equal(log.includes(API_KEY), false);

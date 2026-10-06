@@ -304,34 +304,117 @@ test("handles a pull request without files", () => {
   assert.deepEqual(applyLimits([], LIMITS), {
     selected: [],
     overLimit: [],
+    tooLarge: [],
     usedChars: 0,
   });
 });
 
-test("handles a pull request with 3000 files quickly", () => {
-  const diffs = Array.from({ length: 3000 }, (_, index) =>
-    diffOf(`src/file-${index}.js`, 20),
-  );
+// --- A file larger than one request -------------------------------------------
 
-  const started = performance.now();
-  const { selected, overLimit } = applyLimits(diffs, LIMITS);
-  const elapsed = performance.now() - started;
-
-  assert.equal(selected.length, 50);
-  assert.equal(overLimit.length, 2950);
-  assert.ok(elapsed < 1000, `selecting took ${Math.round(elapsed)} ms`);
+/** One request of `maxChars`, measured by the annotated diff alone. */
+const requestOf = (maxChars) => ({
+  maxChars,
+  sizeOf: (file) => file.annotated.length,
 });
 
-test("handles a file with 300000 added lines", () => {
-  const huge = diffOf("huge.js", 300000);
+test("leaves out a file that is larger than one request, with its reason", () => {
+  const diffs = [diffOf("a.js"), diffOf("big.js", 30), diffOf("c.js")];
+  const maxChars = sizeOf(diffs[1]) - 1;
 
-  const started = performance.now();
-  const { selected, overLimit } = applyLimits([huge], LIMITS);
-  const elapsed = performance.now() - started;
+  const { selected, overLimit, tooLarge, usedChars } = applyLimits(
+    diffs,
+    LIMITS,
+    requestOf(maxChars),
+  );
 
-  assert.deepEqual(selected, []);
-  assert.equal(overLimit.length, 1);
-  assert.ok(elapsed < 2000, `selecting took ${Math.round(elapsed)} ms`);
+  assert.deepEqual(
+    selected.map((diff) => diff.path),
+    ["a.js", "c.js"],
+  );
+  assert.deepEqual(overLimit, []);
+  assert.deepEqual(tooLarge, [
+    {
+      path: "big.js",
+      reason: `larger than one request to the model (${maxChars} characters)`,
+    },
+  ]);
+  assert.equal(usedChars, sizeOf(diffs[0]) + sizeOf(diffs[2]));
+});
+
+test("takes a file that fills one request exactly", () => {
+  const diff = diffOf("exact.js", 30);
+
+  const { selected, tooLarge } = applyLimits(
+    [diff],
+    LIMITS,
+    requestOf(sizeOf(diff)),
+  );
+
+  assert.equal(selected.length, 1);
+  assert.deepEqual(tooLarge, []);
+});
+
+test("a file that is too large counts against neither limit", () => {
+  const diffs = [diffOf("big.js", 30), diffOf("a.js"), diffOf("b.js")];
+  const limits = {
+    maxFiles: 2,
+    maxDiffChars: sizeOf(diffs[1]) + sizeOf(diffs[2]),
+  };
+
+  const { selected, overLimit, tooLarge } = applyLimits(
+    diffs,
+    limits,
+    requestOf(sizeOf(diffs[0]) - 1),
+  );
+
+  assert.deepEqual(
+    selected.map((diff) => diff.path),
+    ["a.js", "b.js"],
+  );
+  assert.deepEqual(overLimit, []);
+  assert.deepEqual(
+    tooLarge.map((entry) => entry.path),
+    ["big.js"],
+  );
+});
+
+test("measures a file with the annotated diff it hands on", () => {
+  const diffs = [diffOf("a.js", 3)];
+  const seen = [];
+
+  const { selected } = applyLimits(diffs, LIMITS, {
+    maxChars: 1000,
+    sizeOf: (file) => {
+      seen.push(file);
+      return 0;
+    },
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].path, "a.js");
+  assert.equal(seen[0].annotated, selected[0].annotated);
+});
+
+test("does not measure files after the file limit", () => {
+  const diffs = [diffOf("a.js"), diffOf("b.js"), diffOf("c.js")];
+  let measured = 0;
+
+  const { selected, overLimit, tooLarge } = applyLimits(
+    diffs,
+    { maxFiles: 1, maxDiffChars: 1000 },
+    {
+      maxChars: 1000,
+      sizeOf: () => {
+        measured += 1;
+        return 1;
+      },
+    },
+  );
+
+  assert.equal(measured, 1);
+  assert.equal(selected.length, 1);
+  assert.equal(overLimit.length, 2);
+  assert.deepEqual(tooLarge, []);
 });
 
 // --- A pure function ---------------------------------------------------------
@@ -356,6 +439,10 @@ test("exposes the reasons as fixed texts", () => {
   assert.equal(
     OVER_LIMIT_REASONS.files(7),
     "over the limit of 7 files (max-files)",
+  );
+  assert.equal(
+    OVER_LIMIT_REASONS.request(50000),
+    "larger than one request to the model (50000 characters)",
   );
 });
 

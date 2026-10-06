@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { apiFile, apiFiles, startGitHubApi } from "./helpers/github-api.js";
 import {
+  apiError,
+  reviewCompletion,
+  startOpenAiApi,
+} from "./helpers/openai-api.js";
+import {
   API_KEY,
   PULL_REQUEST_EVENT,
   REVIEWING_LINE,
@@ -17,9 +22,27 @@ import {
 
 const runAction = (env) => startAction(fromRoot("src/index.js"), env);
 
-/** Environment of a complete pull_request run against the local API server. */
+/**
+ * Environment of a complete pull_request run against the local API servers.
+ * Without a server for OpenAI, its requests go nowhere.
+ */
 const pullRequestRun = (api, env = {}) =>
-  withInputs({ ...PULL_REQUEST_EVENT, GITHUB_API_URL: api.url, ...env });
+  withInputs({
+    ...PULL_REQUEST_EVENT,
+    GITHUB_API_URL: api.url,
+    TEST_OPENAI_URL: api.openai?.url ?? "",
+    ...env,
+  });
+
+/**
+ * Starts the local GitHub API and a local stand-in for OpenAI. Without an
+ * answer, the model finds nothing.
+ */
+async function startApis(t, github, answer = reviewCompletion()) {
+  const api = await startGitHubApi(t, github);
+  const openai = await startOpenAiApi(t, answer);
+  return { ...api, openai };
+}
 
 /** Writes an event file with the given content and removes it after the test. */
 function eventFile(t, content) {
@@ -31,7 +54,7 @@ function eventFile(t, content) {
 }
 
 test("names the pull request and lists its files", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [...apiFiles(2), apiFile("docs/old.md", { status: "removed" })],
   });
 
@@ -60,7 +83,7 @@ test("names the pull request and lists its files", async (t) => {
 });
 
 test("loads a pull request with more than 100 files completely", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(120) });
+  const api = await startApis(t, { files: apiFiles(120) });
 
   // The limit is raised: this test is about loading, not about the limit.
   const result = await runAction(
@@ -76,7 +99,7 @@ test("loads a pull request with more than 100 files completely", async (t) => {
 });
 
 test("leaves out the files over the limit and names them", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(120) });
+  const api = await startApis(t, { files: apiFiles(120) });
 
   const result = await runAction(pullRequestRun(api));
 
@@ -101,7 +124,7 @@ test("leaves out the files over the limit and names them", async (t) => {
 });
 
 test("uses the limits from the inputs and tells how the budget is used", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(5) });
+  const api = await startApis(t, { files: apiFiles(5) });
 
   const result = await runAction(
     pullRequestRun(api, {
@@ -140,7 +163,7 @@ test("ends green with a notice when no file fits the budget", async (t) => {
 });
 
 test("does not fail on a pull request with 3000 files", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(3000) });
+  const api = await startApis(t, { files: apiFiles(3000) });
 
   const result = await runAction(pullRequestRun(api));
 
@@ -210,25 +233,130 @@ test("fails the step before any request when language is not a language code", a
   assert.equal(result.stderr, "");
 });
 
-test("runs with a language from the input and never calls OpenAI", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(1) });
+test("asks the model for feedback in the language from the input", async (t) => {
+  const api = await startApis(t, { files: apiFiles(1) });
 
   const result = await runAction(pullRequestRun(api, { INPUT_LANGUAGE: "de" }));
 
   assert.equal(result.status, 0);
-  assert.doesNotMatch(result.stdout, /OpenAI|::error::/);
+  assert.doesNotMatch(result.stdout, /::error::/);
+  assert.equal(api.openai.requests.length, 1);
+  const [system] = api.openai.requests[0].body.messages;
+  assert.match(system.content, /suggestion in German\./);
   assert.equal(result.stderr, "");
 });
 
-test("runs with a model from the input and never calls OpenAI", async (t) => {
-  const api = await startGitHubApi(t, { files: apiFiles(1) });
+test("sends the request with the model from the input", async (t) => {
+  const api = await startApis(t, { files: apiFiles(1) });
 
   const result = await runAction(
     pullRequestRun(api, { "INPUT_OPENAI-MODEL": "gpt-4.1" }),
   );
 
   assert.equal(result.status, 0);
-  assert.doesNotMatch(result.stdout, /OpenAI|::error::/);
+  assert.match(result.stdout, /^Sending 1 files to gpt-4\.1 in 1 requests\.$/m);
+  assert.equal(api.openai.requests[0].body.model, "gpt-4.1");
+  assert.equal(result.stderr, "");
+});
+
+test("sends the key only to the stand-in for OpenAI and reports the review", async (t) => {
+  const api = await startApis(t, { files: apiFiles(2) });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.equal(api.openai.requests.length, 1);
+  const [request] = api.openai.requests;
+  assert.equal(request.path, "/v1/chat/completions");
+  assert.equal(request.authorization, `Bearer ${API_KEY}`);
+  assert.match(
+    request.body.messages[1].content,
+    /^<file path="src\/file-0\.js">\n/,
+  );
+  assert.match(
+    result.stdout,
+    /^Review finished: 0 findings \(0 critical, 0 major, 0 minor, 0 info\) from 1 of 1 requests\.$/m,
+  );
+  assert.equal(withoutMaskCommands(result.output).includes(API_KEY), false);
+  assert.equal(result.stderr, "");
+});
+
+test("spreads a large pull request over several requests", async (t) => {
+  const big = (path) =>
+    apiFile(path, {
+      additions: 3000,
+      deletions: 0,
+      patch: ["@@ -0,0 +1,3000 @@", ...Array(3000).fill("+x")].join("\n"),
+    });
+  const api = await startApis(t, {
+    files: [big("src/a.js"), big("src/b.js"), apiFile("src/c.js")],
+  });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.equal(api.openai.requests.length, 2);
+  assert.match(
+    result.stdout,
+    /^Sending 3 files to gpt-4o-mini in 2 requests\.$/m,
+  );
+  assert.match(result.stdout, /from 2 of 2 requests\.$/m);
+  assert.equal(result.stderr, "");
+});
+
+test("ends green with a warning when one of several requests fails", async (t) => {
+  const big = (path) =>
+    apiFile(path, {
+      additions: 3000,
+      deletions: 0,
+      patch: ["@@ -0,0 +1,3000 @@", ...Array(3000).fill("+x")].join("\n"),
+    });
+  const api = await startApis(
+    t,
+    { files: [big("src/a.js"), big("src/b.js")] },
+    (request) =>
+      request.body.messages[1].content.includes('<file path="src/b.js">')
+        ? apiError(400)
+        : reviewCompletion(),
+  );
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^::warning::Requests to the model that failed: 1 of 2\. 1 files were not reviewed\. OpenAI rejected the request \(HTTP 400\)\./m,
+  );
+  assert.match(
+    result.stdout,
+    /^Not reviewed src\/b\.js: the request to the model failed\.$/m,
+  );
+  assert.doesNotMatch(result.stdout, /::error::/);
+  assert.equal(result.stderr, "");
+});
+
+test("fails the step when OpenAI rejects the key", async (t) => {
+  const api = await startApis(t, { files: apiFiles(1) }, apiError(401));
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /^::error::OpenAI rejected the API key \(HTTP 401\)\./m,
+  );
+  assert.equal(withoutMaskCommands(result.output).includes(API_KEY), false);
+  assert.equal(result.stderr, "");
+});
+
+test("fails the step when OpenAI cannot be reached", async (t) => {
+  // No stand-in for OpenAI: its requests go to an address that refuses them.
+  const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^::error::OpenAI could not be reached\./m);
   assert.equal(result.stderr, "");
 });
 
@@ -256,7 +384,7 @@ for (const [input, value] of [
 }
 
 test("skips a file whose diff cannot be read without failing the step", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [
       ...apiFiles(2),
       apiFile("src/odd.js", { patch: "@@ -1,5 +1,5 @@\n CONTENT-FROM-AUTHOR" }),
@@ -311,7 +439,7 @@ test("ends green with a notice when only a lockfile changed", async (t) => {
 });
 
 test("leaves out generated files and the patterns of the exclude input", async (t) => {
-  const api = await startGitHubApi(t, {
+  const api = await startApis(t, {
     files: [
       apiFile("src/App/Migrations/20240101120000_AddUsers.cs"),
       apiFile("src/App/Migrations/20240101120000_AddUsers.Designer.cs"),

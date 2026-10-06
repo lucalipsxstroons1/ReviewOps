@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadCases } from "../eval/lib.mjs";
 import { CATEGORIES } from "../src/ai/schema.js";
+import { buildUserPrompt } from "../src/ai/user-prompt.js";
+import { annotateDiff } from "../src/diff/annotate.js";
+import { parsePatch } from "../src/diff/parse.js";
 import { fromRoot } from "./helpers/run-action.js";
 
 const cases = loadCases(fromRoot("eval/cases"));
@@ -74,9 +77,20 @@ test("points the expected lines at the defect", () => {
   }
 });
 
-test("writes the user message as a File line and the annotated diff", () => {
+test("writes the user message the way the action builds it", () => {
   for (const testCase of cases) {
-    assert.ok(testCase.user.startsWith(`File: ${testCase.path}\n`));
+    assert.equal(
+      testCase.user,
+      buildUserPrompt({
+        files: [
+          {
+            path: testCase.path,
+            annotated: annotateDiff(parsePatch(testCase.patch).hunks),
+          },
+        ],
+      }),
+    );
+    assert.ok(testCase.user.startsWith(`<file path="${testCase.path}">\n`));
     assert.match(testCase.user, /\n +\d+ \| \+/);
   }
 });

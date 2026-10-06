@@ -18,7 +18,10 @@ jobs:
   review:
     name: AI review
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Up to four requests to the model run at once. One request can take
+    # three attempts of 120 seconds, and a pull request of the default size
+    # needs at most two rounds of them.
+    timeout-minutes: 15
     steps:
       # Needed to load the action from this repository. Third-party actions
       # are pinned to a commit, because a tag can be moved to other code.

@@ -24,3 +24,16 @@ export class AiError extends Error {
     this.status = status;
   }
 }
+
+// After these, every other request fails the same way.
+const FATAL_KINDS = new Set(["auth", "permission", "model", "quota"]);
+
+/**
+ * Whether further requests are pointless after this error.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isFatal(error) {
+  return error instanceof AiError && FATAL_KINDS.has(error.kind);
+}
