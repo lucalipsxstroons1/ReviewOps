@@ -90,9 +90,12 @@ test("merges the findings of all batches in the order of the batches", async () 
     batches: batchesOf("a", "b", "c"),
   });
 
-  assert.deepEqual(result.summaries, ["summary a", "summary b", "summary c"]);
   assert.deepEqual(
-    result.findings.map((item) => item.path),
+    result.reviews.map((review) => review.summary),
+    ["summary a", "summary b", "summary c"],
+  );
+  assert.deepEqual(
+    result.reviews.flatMap((review) => review.findings.map((f) => f.path)),
     ["a.js", "b.js", "c.js"],
   );
   assert.equal(result.succeeded, 3);
@@ -113,8 +116,31 @@ test("keeps every finding of a batch, also several and empty ones", async () => 
     concurrency: 1,
   });
 
-  assert.equal(result.findings.length, 2);
-  assert.deepEqual(result.summaries, ["two", "none"]);
+  assert.equal(result.reviews[0].findings.length, 2);
+  assert.deepEqual(result.reviews[1].findings, []);
+  assert.deepEqual(
+    result.reviews.map((review) => review.summary),
+    ["two", "none"],
+  );
+});
+
+test("keeps the files of its request with every review", async () => {
+  const batches = [
+    { files: [{ path: "a.js", commentableLines: [1] }], user: "user a" },
+    {
+      files: [
+        { path: "b.js", commentableLines: [2] },
+        { path: "c.js", commentableLines: [3] },
+      ],
+      user: "user b",
+    },
+  ];
+  const client = createFakeClient(findingPerBatch);
+
+  const result = await reviewInBatches({ client, system: "s", batches });
+
+  assert.equal(result.reviews[0].files, batches[0].files);
+  assert.equal(result.reviews[1].files, batches[1].files);
 });
 
 test("has at most four requests on their way at once", async () => {
@@ -158,7 +184,7 @@ test("keeps the other findings when one batch fails", async () => {
   });
 
   assert.deepEqual(
-    result.findings.map((item) => item.path),
+    result.reviews.flatMap((review) => review.findings.map((f) => f.path)),
     ["a.js", "c.js"],
   );
   assert.equal(result.succeeded, 2);
@@ -177,7 +203,7 @@ test("names every file of a failed batch", async () => {
 
   assert.deepEqual(result.failed[0].paths, ["a.js", "b.js"]);
   assert.equal(result.succeeded, 0);
-  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.reviews, []);
 });
 
 test("counts a cut-off, filtered or broken answer as a failed batch", async () => {
@@ -298,8 +324,7 @@ test("sends nothing for no batches", async () => {
   const result = await reviewInBatches({ client, system: "s", batches: [] });
 
   assert.deepEqual(result, {
-    summaries: [],
-    findings: [],
+    reviews: [],
     succeeded: 0,
     failed: [],
   });

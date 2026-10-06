@@ -16,20 +16,26 @@ export const MAX_PARALLEL_REQUESTS = 4;
  * request is started, and the batches that were not sent fail with it.
  *
  * Nothing in here writes to the log: the answers hold code from the pull
- * request. The findings are not checked against the diff yet.
+ * request. The findings are not checked against the diff here: every review
+ * keeps the files of its request, so `selectFindings()` can check each
+ * finding against the files the model was shown.
  *
+ * @template {{ path: string }} F
  * @param {object} options
  * @param {{ complete: ReturnType<typeof import("./ai/client.js").createAiClient>["complete"] }} options.client
  * @param {string} options.system The system prompt.
- * @param {{ files: { path: string }[], user: string }[]} options.batches
+ * @param {{ files: F[], user: string }[]} options.batches
  *   The requests, as `planBatches()` returns them.
  * @param {number} [options.concurrency] Requests at the same time.
  * @returns {Promise<{
- *   summaries: string[],
- *   findings: import("./ai/schema.js").Finding[],
+ *   reviews: {
+ *     files: F[],
+ *     summary: string,
+ *     findings: import("./ai/schema.js").Finding[],
+ *   }[],
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
- * }>} Summaries and findings in the order of the batches.
+ * }>} The reviews of the requests that worked, in the order of the batches.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -79,13 +85,16 @@ export async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { summaries: [], findings: [], succeeded: 0, failed: [] };
+  const merged = { reviews: [], succeeded: 0, failed: [] };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
-      merged.summaries.push(result.review.summary);
-      merged.findings.push(...result.review.findings);
+      merged.reviews.push({
+        files: batch.files,
+        summary: result.review.summary,
+        findings: result.review.findings,
+      });
     } else {
       merged.failed.push({
         paths: batch.files.map((file) => file.path),

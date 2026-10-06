@@ -66,3 +66,20 @@ may hold code from the pull request. The text of a refusal is not logged either.
 Whether a single finding is useful (an empty text, a file that is not in the
 request, a line outside the diff) is not decided here. The answer as a whole is
 either valid or not.
+
+## Checking each finding
+
+`selectFindings()` in `src/findings.js` checks every finding of a valid answer
+against the files of its own request:
+
+| Step | Rule | Result |
+|---|---|---|
+| 1 | `title`, `comment` or `suggestion` holds only white space or invisible characters | left out, counted as empty |
+| 2 | `path` is not exactly one of the files of the request | left out, counted as unknown path |
+| 3 | Same `path`, `line` and `title` (without case and extra white space) as another finding | only the more serious one is kept |
+| 4 | Sorted by `severity`, `critical` first; equal severities keep their order | |
+| 5 | More findings than `max-comments` (default 10) | the rest is left out and counted |
+| 6 | `line` is an added line of the file | inline comment; any other line goes into the text of the review |
+
+The log shows only the numbers of each step, never a path or a text of a
+finding.

@@ -1,8 +1,8 @@
-export const id = 654;
-export const ids = [654];
+export const id = 511;
+export const ids = [511];
 export const modules = {
 
-/***/ 8654:
+/***/ 8511:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -1652,6 +1652,126 @@ function exclude_anchor(pattern) {
   return fromRoot || glob.includes("/") ? glob : `**/${glob}`;
 }
 
+;// CONCATENATED MODULE: ./src/findings.js
+
+
+// A text made of nothing but white space and invisible format characters
+// (such as a zero-width space) cannot become a comment.
+const BLANK = /^[\s\p{Cf}]*$/u;
+const GAPS = /[\s\p{Cf}]+/gu;
+
+// "critical" first, "info" last.
+const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
+
+/**
+ * Checks the findings of the model against the diff and chooses the ones the
+ * review shows.
+ *
+ * Every finding comes from the model and is checked before it is used:
+ *
+ * 1. A finding with an empty title, comment or suggestion is dropped.
+ * 2. A finding whose path is not one of the files of its own request is
+ *    dropped: the model never saw that file. The path must match exactly.
+ * 3. Of the findings with the same path, line and title (compared without
+ *    case and extra white space) only the most serious one is kept.
+ * 4. The rest is sorted by severity, most serious first. Findings of the same
+ *    severity keep the order of the requests and of the model.
+ * 5. Only the first `maxComments` findings are shown, the others are counted.
+ * 6. A shown finding whose line is an added line of its file becomes an inline
+ *    comment (`inline`). Any other line cannot carry a comment on GitHub, so
+ *    the finding goes into the text of the review (`unplaced`).
+ *
+ * This is a pure function: it uses nothing but its arguments and does not
+ * change them. The findings are passed on as they are; their texts are still
+ * untrusted and must not reach the log.
+ *
+ * @param {object} options
+ * @param {{
+ *   files: { path: string, commentableLines: number[] }[],
+ *   findings: import("./ai/schema.js").Finding[],
+ * }[]} options.reviews The reviews of the requests, as `reviewInBatches()`
+ *   returns them.
+ * @param {number} options.maxComments How many findings the review shows.
+ * @returns {{
+ *   inline: import("./ai/schema.js").Finding[],
+ *   unplaced: import("./ai/schema.js").Finding[],
+ *   dropped: {
+ *     empty: number,
+ *     unknownPath: number,
+ *     duplicate: number,
+ *     overLimit: number,
+ *   },
+ * }} `inline` and `unplaced` together hold at most `maxComments` findings,
+ *   each list sorted by severity.
+ */
+function selectFindings({ reviews, maxComments }) {
+  const dropped = { empty: 0, unknownPath: 0, duplicate: 0, overLimit: 0 };
+  const kept = [];
+  const placeOf = new Map();
+
+  for (const { files, findings } of reviews) {
+    const linesOf = new Map(
+      files.map((file) => [file.path, new Set(file.commentableLines)]),
+    );
+
+    for (const finding of findings) {
+      if (isBlank(finding.title, finding.comment, finding.suggestion)) {
+        dropped.empty += 1;
+        continue;
+      }
+      const lines = linesOf.get(finding.path);
+      if (!lines) {
+        dropped.unknownPath += 1;
+        continue;
+      }
+
+      const key = JSON.stringify([
+        finding.path,
+        finding.line,
+        normalize(finding.title),
+      ]);
+      const place = placeOf.get(key);
+      if (place === undefined) {
+        placeOf.set(key, kept.length);
+        kept.push({ finding, commentable: lines.has(finding.line) });
+        continue;
+      }
+      // Same path and line: whether it can carry a comment stays the same.
+      dropped.duplicate += 1;
+      if (rank(finding) < rank(kept[place].finding)) {
+        kept[place] = { ...kept[place], finding };
+      }
+    }
+  }
+
+  // Array.prototype.sort is stable: equal severities keep their order.
+  kept.sort((a, b) => rank(a.finding) - rank(b.finding));
+  const shown = kept.slice(0, maxComments);
+  dropped.overLimit = kept.length - shown.length;
+
+  return {
+    inline: shown
+      .filter((item) => item.commentable)
+      .map(({ finding }) => finding),
+    unplaced: shown
+      .filter((item) => !item.commentable)
+      .map(({ finding }) => finding),
+    dropped,
+  };
+}
+
+function isBlank(...texts) {
+  return texts.some((text) => BLANK.test(text));
+}
+
+function normalize(text) {
+  return text.replace(GAPS, " ").trim().toLowerCase();
+}
+
+function rank(finding) {
+  return RANK.get(finding.severity);
+}
+
 ;// CONCATENATED MODULE: ./src/github/context.js
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
@@ -1882,6 +2002,7 @@ function isRateLimited(error) {
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
+ *   maxComments: string,
  * }} The model, the language and the limits stay text here: `parseModel()`,
  *   `parseLanguage()` and `parseLimits()` check them.
  */
@@ -1894,6 +2015,7 @@ function readInputs(core) {
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
+    maxComments: core.getInput("max-comments"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -2016,6 +2138,7 @@ function annotateDiff(hunks) {
 // The same values are written into action.yml. A test keeps them equal.
 const DEFAULT_MAX_FILES = 50;
 const DEFAULT_MAX_DIFF_CHARS = 200000;
+const DEFAULT_MAX_COMMENTS = 10;
 
 // Nine digits are far above any useful limit and stay exact as a number.
 const MAX_DIGITS = 9;
@@ -2030,15 +2153,19 @@ const OVER_LIMIT_REASONS = Object.freeze({
 });
 
 /**
- * Reads the two limits of the action. An empty value means the default: it
- * is usually a variable of the workflow that was not set.
+ * Reads the limits of the action. An empty value means the default: it is
+ * usually a variable of the workflow that was not set.
  *
- * @param {{ maxFiles?: string, maxDiffChars?: string }} inputs Values as the
- *   workflow passed them.
- * @returns {{ maxFiles: number, maxDiffChars: number }}
+ * @param {{ maxFiles?: string, maxDiffChars?: string, maxComments?: string }} inputs
+ *   Values as the workflow passed them.
+ * @returns {{ maxFiles: number, maxDiffChars: number, maxComments: number }}
  * @throws {Error} When a value is not a whole number from 1 to 999999999.
  */
-function parseLimits({ maxFiles = "", maxDiffChars = "" } = {}) {
+function parseLimits({
+  maxFiles = "",
+  maxDiffChars = "",
+  maxComments = "",
+} = {}) {
   return {
     maxFiles: parseLimit("max-files", maxFiles, DEFAULT_MAX_FILES),
     maxDiffChars: parseLimit(
@@ -2046,6 +2173,7 @@ function parseLimits({ maxFiles = "", maxDiffChars = "" } = {}) {
       maxDiffChars,
       DEFAULT_MAX_DIFF_CHARS,
     ),
+    maxComments: parseLimit("max-comments", maxComments, DEFAULT_MAX_COMMENTS),
   };
 }
 
@@ -2188,20 +2316,26 @@ const MAX_PARALLEL_REQUESTS = 4;
  * request is started, and the batches that were not sent fail with it.
  *
  * Nothing in here writes to the log: the answers hold code from the pull
- * request. The findings are not checked against the diff yet.
+ * request. The findings are not checked against the diff here: every review
+ * keeps the files of its request, so `selectFindings()` can check each
+ * finding against the files the model was shown.
  *
+ * @template {{ path: string }} F
  * @param {object} options
  * @param {{ complete: ReturnType<typeof import("./ai/client.js").createAiClient>["complete"] }} options.client
  * @param {string} options.system The system prompt.
- * @param {{ files: { path: string }[], user: string }[]} options.batches
+ * @param {{ files: F[], user: string }[]} options.batches
  *   The requests, as `planBatches()` returns them.
  * @param {number} [options.concurrency] Requests at the same time.
  * @returns {Promise<{
- *   summaries: string[],
- *   findings: import("./ai/schema.js").Finding[],
+ *   reviews: {
+ *     files: F[],
+ *     summary: string,
+ *     findings: import("./ai/schema.js").Finding[],
+ *   }[],
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
- * }>} Summaries and findings in the order of the batches.
+ * }>} The reviews of the requests that worked, in the order of the batches.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -2251,13 +2385,16 @@ async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { summaries: [], findings: [], succeeded: 0, failed: [] };
+  const merged = { reviews: [], succeeded: 0, failed: [] };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
-      merged.summaries.push(result.review.summary);
-      merged.findings.push(...result.review.findings);
+      merged.reviews.push({
+        files: batch.files,
+        summary: result.review.summary,
+        findings: result.review.findings,
+      });
     } else {
       merged.failed.push({
         paths: batch.files.map((file) => file.path),
@@ -2269,6 +2406,7 @@ async function reviewInBatches({
 }
 
 ;// CONCATENATED MODULE: ./src/main.js
+
 
 
 
@@ -2521,14 +2659,29 @@ async function run({
       }
     }
 
+    // Every finding is checked against the files of its own request: only an
+    // added line of such a file can carry an inline comment.
+    const { inline, unplaced, dropped } = selectFindings({
+      reviews: review.reviews,
+      maxComments: limits.maxComments,
+    });
+    const shown = [...inline, ...unplaced];
+    const received = review.reviews.reduce(
+      (sum, { findings }) => sum + findings.length,
+      0,
+    );
+
     // Numbers only: the findings and the summary hold code from the pull
-    // request. Checking and posting them follows in later steps.
+    // request. Posting them follows in a later step.
+    core.info(
+      `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
+    );
     const counts = SEVERITIES.map(
       (severity) =>
-        `${review.findings.filter((item) => item.severity === severity).length} ${severity}`,
+        `${shown.filter((item) => item.severity === severity).length} ${severity}`,
     ).join(", ");
     core.info(
-      `Review finished: ${review.findings.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
+      `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.

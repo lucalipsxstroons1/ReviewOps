@@ -13,6 +13,7 @@
  *   exclude: string,
  *   maxFiles: string,
  *   maxDiffChars: string,
+ *   maxComments: string,
  * }} The model, the language and the limits stay text here: `parseModel()`,
  *   `parseLanguage()` and `parseLimits()` check them.
  */
@@ -25,6 +26,7 @@ export function readInputs(core) {
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
+    maxComments: core.getInput("max-comments"),
   };
 
   for (const secret of secretsOf(inputs)) {
