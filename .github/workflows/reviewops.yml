@@ -30,5 +30,8 @@ jobs:
       # No github-token is passed: the action falls back to the token of this run.
       - name: Review the pull request
         uses: ./
+        # Only on this throwaway branch: makes the action call the model once.
+        env:
+          REVIEWOPS_PROBE: openai
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}

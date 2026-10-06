@@ -3,6 +3,7 @@ import {
   context as actionsContext,
   getOctokit as actionsGetOctokit,
 } from "@actions/github";
+import { createAiClient } from "./ai/client.js";
 import { parseModel } from "./ai/model.js";
 import {
   PatchFormatError,
@@ -64,6 +65,23 @@ export async function run({
     parseModel(inputs.openaiModel);
 
     core.info("ReviewOps started.");
+
+    // Only on this throwaway branch: one small request to the real API.
+    if (process.env.REVIEWOPS_PROBE === "openai") {
+      const ai = createAiClient({
+        apiKey: inputs.openaiApiKey,
+        model: parseModel(inputs.openaiModel),
+        core,
+      });
+      const answer = await ai.complete({
+        system: "Answer with the single word pong.",
+        user: "ping",
+      });
+      core.info(
+        `Probe: the model answered with ${answer.content.length} characters.`,
+      );
+      return;
+    }
 
     // Only checked values reach the log: the title of the pull request is
     // written by its author and stays out.
