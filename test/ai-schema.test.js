@@ -118,6 +118,29 @@ test("every property and every object carries a description for the model", () =
   })(REVIEW_SCHEMA, "$");
 });
 
+test("cannot be changed after the module is loaded", () => {
+  const finding = REVIEW_SCHEMA.properties.findings.items;
+  for (const frozen of [
+    REVIEW_SCHEMA,
+    REVIEW_SCHEMA.properties,
+    finding,
+    finding.properties.severity,
+    REVIEW_FORMAT,
+    REVIEW_FORMAT.json_schema,
+    SEVERITIES,
+    CATEGORIES,
+  ]) {
+    assert.ok(Object.isFrozen(frozen));
+  }
+  assert.throws(() => SEVERITIES.push("blocker"), TypeError);
+  assert.throws(() => {
+    finding.properties.category.enum[0] = "other";
+  }, TypeError);
+  assert.throws(() => {
+    REVIEW_FORMAT.json_schema.strict = false;
+  }, TypeError);
+});
+
 test("sends the schema as a strict Structured Output", () => {
   assert.deepEqual(REVIEW_FORMAT, {
     type: "json_schema",

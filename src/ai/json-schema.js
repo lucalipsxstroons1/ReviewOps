@@ -117,6 +117,8 @@ function matchesType(type, value) {
   }
 }
 
+const checkedSchemas = new WeakSet();
+
 const at = (path) => (path === "" ? "the answer" : path);
 const join = (path, name) => (path === "" ? name : `${path}.${name}`);
 
@@ -127,11 +129,17 @@ const join = (path, name) => (path === "" ? name : `${path}.${name}`);
  * from the model and may hold code from the pull request. The same goes for
  * the names of properties the schema does not know.
  *
- * @param {object} schema A schema that passed `assertSchema()`.
+ * @param {object} schema Checked with `assertSchema()` on first use.
  * @param {unknown} value
  * @returns {string | null} The first problem, or `null` if the value fits.
+ * @throws {Error} When the schema itself is not supported.
  */
 export function validate(schema, value) {
+  // Once per schema: a keyword that cannot be checked must not be skipped.
+  if (!checkedSchemas.has(schema)) {
+    assertSchema(schema);
+    checkedSchemas.add(schema);
+  }
   return check(schema, value, "");
 }
 

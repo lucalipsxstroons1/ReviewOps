@@ -235,3 +235,25 @@ for (const [name, schema, expected] of BAD_SCHEMAS) {
     assert.throws(() => assertSchema(schema), expected);
   });
 }
+
+test("validate() refuses a schema it cannot check instead of skipping the keyword", () => {
+  const schema = { type: "string", minLength: 5 };
+
+  assert.throws(() => validate(schema, "x"), /"minLength" is not supported/);
+  // Still an error on the second call: it is not remembered as checked.
+  assert.throws(() => validate(schema, "x"), /"minLength" is not supported/);
+});
+
+test("validate() refuses a schema that is not in the shape of the strict mode", () => {
+  const schema = {
+    type: "object",
+    properties: { a: { type: "string" } },
+    required: [],
+    additionalProperties: false,
+  };
+
+  assert.throws(
+    () => validate(schema, { a: "x" }),
+    /must be listed in "required"/,
+  );
+});

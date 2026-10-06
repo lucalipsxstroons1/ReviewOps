@@ -1115,6 +1115,27 @@ test("reports the missing Structured Outputs also after temperature was refused"
   assert.equal(api.requests.length, 2);
 });
 
+test("does not take a defect of the schema for a model without Structured Outputs", async (t) => {
+  const api = await startOpenAiApi(
+    t,
+    apiError(400, {
+      param: "response_format",
+      code: "invalid_json_schema",
+      message: "Invalid schema for response_format 'review': a reason.",
+    }),
+  );
+  const { client, core } = clientFor(api);
+
+  const error = await failure(
+    client.complete({ ...PROMPT, responseFormat: FORMAT }),
+  );
+
+  assert.equal(error.kind, "request");
+  assert.equal(error.status, 400);
+  assert.doesNotMatch(error.message, /Structured Outputs/);
+  assert.match(core.messages("debug").join("\n"), /code invalid_json_schema/);
+});
+
 test("takes any other refused parameter for a refused request", async (t) => {
   const api = await startOpenAiApi(
     t,

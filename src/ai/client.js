@@ -300,8 +300,15 @@ function byStatus(error, model) {
     );
   }
   // The model cannot produce Structured Outputs. There is no fallback to a
-  // weaker format on purpose: the review needs the schema.
-  if (status === 400 && error.param === "response_format") {
+  // weaker format on purpose: the review needs the schema. OpenAI names the
+  // same parameter when it dislikes the schema itself (`invalid_json_schema`).
+  // That is a defect of this action, not a setting, so it stays a plain
+  // refused request.
+  if (
+    status === 400 &&
+    error.param === "response_format" &&
+    error.code !== "invalid_json_schema"
+  ) {
     return new AiError(
       "model",
       `The model "${model}" does not support Structured Outputs (${http}), which the review format needs. Set the input \`openai-model\` to a model that does, such as "gpt-4o-mini" or "gpt-4.1".`,

@@ -9,12 +9,21 @@ import { validate } from "./json-schema.js";
 export const SEVERITIES = ["critical", "major", "minor", "info"];
 export const CATEGORIES = ["code-quality", "react", "efcore", "security"];
 
+// The schema is shared by the request and the check. Nothing may change it.
+function deepFreeze(value) {
+  if (typeof value === "object" && value !== null) {
+    Object.values(value).forEach(deepFreeze);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 // About 30 findings fit in this. It also keeps one attempt below the timeout
 // of the client.
 export const MAX_OUTPUT_TOKENS = 4096;
 
 /** The schema of the answer. Strict mode: every property is required. */
-export const REVIEW_SCHEMA = {
+export const REVIEW_SCHEMA = deepFreeze({
   type: "object",
   description: "The review of one pull request.",
   properties: {
@@ -78,13 +87,13 @@ export const REVIEW_SCHEMA = {
   },
   required: ["summary", "findings"],
   additionalProperties: false,
-};
+});
 
 /** The `response_format` of the request: a Structured Output in strict mode. */
-export const REVIEW_FORMAT = {
+export const REVIEW_FORMAT = deepFreeze({
   type: "json_schema",
   json_schema: { name: "review", strict: true, schema: REVIEW_SCHEMA },
-};
+});
 
 /**
  * @typedef {object} Finding
