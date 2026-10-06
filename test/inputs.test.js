@@ -130,7 +130,9 @@ for (const [name, key] of [
 test("accepts the characters of real keys", () => {
   for (const key of [
     "sk-proj-AbC123_dEf-456",
-    "sk-svcacct-0123456789abcdefABCDEF_-",
+    // Same characters as a real key, but too short to look like one: a value
+    // that matches the pattern of a key would be reported by secret scanning.
+    "sk-svcacct-AbC_dEf-123",
     "placeholder-until-issue-11",
     "key-value",
   ]) {
