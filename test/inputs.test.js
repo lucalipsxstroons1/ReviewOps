@@ -8,13 +8,30 @@ test("reads all inputs", () => {
     "github-token": "token-value",
     "openai-api-key": "key-value",
     exclude: "docs/**\n*.txt",
+    "max-files": "10",
+    "max-diff-chars": "5000",
   });
 
   assert.deepEqual(readInputs(core), {
     githubToken: "token-value",
     openaiApiKey: "key-value",
     exclude: "docs/**\n*.txt",
+    maxFiles: "10",
+    maxDiffChars: "5000",
   });
+});
+
+test("reads the limits as text and leaves checking them to parseLimits", () => {
+  const core = createFakeCore({
+    "github-token": "token-value",
+    "openai-api-key": "key-value",
+    "max-files": "not a number",
+  });
+
+  const inputs = readInputs(core);
+
+  assert.equal(inputs.maxFiles, "not a number");
+  assert.equal(inputs.maxDiffChars, "");
 });
 
 test("reads a missing exclude input as empty text", () => {
@@ -26,11 +43,13 @@ test("reads a missing exclude input as empty text", () => {
   assert.equal(readInputs(core).exclude, "");
 });
 
-test("masks the credentials, but not the exclude patterns", () => {
+test("masks the credentials, but not the exclude patterns or the limits", () => {
   const core = createFakeCore({
     "github-token": "token-value",
     "openai-api-key": "key-value",
     exclude: "documentation/**",
+    "max-files": "1000000",
+    "max-diff-chars": "1000000",
   });
 
   const inputs = readInputs(core);

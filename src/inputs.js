@@ -5,13 +5,21 @@
  * any check can fail and produce a message.
  *
  * @param {typeof import("@actions/core")} core
- * @returns {{ githubToken: string, openaiApiKey: string, exclude: string }}
+ * @returns {{
+ *   githubToken: string,
+ *   openaiApiKey: string,
+ *   exclude: string,
+ *   maxFiles: string,
+ *   maxDiffChars: string,
+ * }} The limits stay text here: `parseLimits()` checks them.
  */
 export function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     exclude: core.getInput("exclude"),
+    maxFiles: core.getInput("max-files"),
+    maxDiffChars: core.getInput("max-diff-chars"),
   };
 
   for (const secret of secretsOf(inputs)) {

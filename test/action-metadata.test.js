@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { DEFAULT_MAX_DIFF_CHARS, DEFAULT_MAX_FILES } from "../src/limits.js";
 
 const source = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
 const action = parse(source);
@@ -39,6 +40,26 @@ test("exclude is optional and empty by default", () => {
 
   assert.equal(input.required, false);
   assert.equal(input.default, "");
+});
+
+test("the limits are optional and default to the values in the code", () => {
+  // The defaults are written down twice: here for the workflow, in
+  // src/limits.js for the code. They must not drift apart.
+  const files = action.inputs["max-files"];
+  const chars = action.inputs["max-diff-chars"];
+
+  assert.equal(files.required, false);
+  assert.equal(chars.required, false);
+  assert.equal(files.default, String(DEFAULT_MAX_FILES));
+  assert.equal(chars.default, String(DEFAULT_MAX_DIFF_CHARS));
+});
+
+test("the descriptions of the limits name their default", () => {
+  assert.match(action.inputs["max-files"].description, /default is 50\./);
+  assert.match(
+    action.inputs["max-diff-chars"].description,
+    /default is 200000,/,
+  );
 });
 
 test("the action declares exactly the inputs the code reads", () => {

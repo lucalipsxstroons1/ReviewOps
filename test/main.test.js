@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { annotateDiff } from "../src/diff/annotate.js";
+import { parsePatch } from "../src/diff/parse.js";
 import { SKIP_REASONS } from "../src/github/files.js";
 import { run } from "../src/main.js";
 import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
@@ -30,6 +32,21 @@ function runWith(
     tokens,
     client,
   }));
+}
+
+// The patch of an ordinary file from `apiFile()`.
+const DEFAULT_PATCH = apiFile("x").patch;
+
+/** A patch that adds `lines` lines to a new file. */
+const addedPatch = (lines) =>
+  [`@@ -0,0 +1,${lines} @@`, ...Array(lines).fill("+x")].join("\n");
+
+/** The log line about the size of the selected diffs, worked out from the patches. */
+function diffSizeLine(patches, maxDiffChars = 200000) {
+  const used = patches
+    .map((patch) => annotateDiff(parsePatch(patch).hunks).length)
+    .reduce((sum, size) => sum + size, 0);
+  return `Diff size: ${used} of ${maxDiffChars} characters.`;
 }
 
 /** A core whose first log call fails, to simulate an unexpected error. */
@@ -111,6 +128,7 @@ test("logs how many files it found and why it skipped some", async () => {
     `Skipped docs/old.md: ${SKIP_REASONS.removed}.`,
     `Skipped assets/logo.png: ${SKIP_REASONS.noPatch}.`,
     "Parsed the diffs of 2 files: 2 added lines can receive comments.",
+    diffSizeLine([DEFAULT_PATCH, DEFAULT_PATCH]),
   ]);
   assert.deepEqual(core.messages("warning"), []);
 });
@@ -141,6 +159,11 @@ test("counts the added lines of all files as comment targets", async () => {
   assert.deepEqual(core.messages("info").slice(2), [
     "Found 3 changed files: 3 to review, 0 skipped.",
     "Parsed the diffs of 3 files: 4 added lines can receive comments.",
+    diffSizeLine([
+      "@@ -0,0 +1,3 @@\n+a\n+b\n+c",
+      "@@ -4,4 +4,3 @@\n a\n-b\n-c\n+d\n e",
+      "@@ -7,3 +7,2 @@\n a\n-b\n c",
+    ]),
   ]);
 });
 
@@ -160,6 +183,7 @@ test("skips a file whose diff cannot be read and reviews the others", async () =
     "Skipped src/odd.js: the diff could not be read.",
     "Skipped src/odder.js: the diff could not be read.",
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+    diffSizeLine([DEFAULT_PATCH]),
   ]);
   assert.deepEqual(core.messages("warning"), [
     "Diffs that could not be read: 2. These files are not reviewed.",
@@ -325,6 +349,7 @@ test("reviews an EF Core migration without its generated files", async () => {
     'Skipped src/App/Migrations/20240101120000_AddUsers.Designer.cs: matches the default exclude pattern "*.Designer.cs".',
     'Skipped src/App/Migrations/AppDbContextModelSnapshot.cs: matches the default exclude pattern "*ModelSnapshot.cs".',
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+    diffSizeLine([DEFAULT_PATCH]),
   ]);
   assert.deepEqual(core.messages("notice"), []);
 });
@@ -350,6 +375,7 @@ test("adds the patterns of the exclude input to the default list", async () => {
     'Skipped notes/todo.txt: matches the exclude pattern "*.txt".',
     'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
     "Parsed the diffs of 2 files: 2 added lines can receive comments.",
+    diffSizeLine([DEFAULT_PATCH, DEFAULT_PATCH]),
   ]);
 });
 
@@ -367,6 +393,7 @@ test("does not parse a file that is left out", async () => {
     "Found 2 changed files: 1 to review, 1 skipped.",
     'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+    diffSizeLine([DEFAULT_PATCH]),
   ]);
 });
 
@@ -448,12 +475,235 @@ test("never logs the content of a patch", async () => {
 });
 
 test("warns when GitHub's limit of 3000 files was reached", async () => {
-  const core = createFakeCore(VALID_INPUTS);
+  // The limits are raised, so that only the limit of GitHub applies.
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "5000" });
 
   await runWith(core, { octokit: createFakeOctokit(apiFiles(3000)) });
 
   assert.equal(core.messages("warning").length, 1);
   assert.match(core.messages("warning")[0], /at most 3000 files/);
+});
+
+// --- Limits for large pull requests ------------------------------------------
+
+const FILE_LIMIT_REASON = "over the limit of 50 files (max-files)";
+
+test("reviews the first 50 files and names the others", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { octokit: createFakeOctokit(apiFiles(60)) });
+
+  const lines = core.messages("info").slice(2);
+  assert.equal(lines[0], "Found 60 changed files: 50 to review, 10 skipped.");
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith("Skipped ")),
+    Array.from(
+      { length: 10 },
+      (_, index) => `Skipped src/file-${index + 50}.js: ${FILE_LIMIT_REASON}.`,
+    ),
+  );
+  assert.ok(
+    lines.includes(
+      "Parsed the diffs of 50 files: 50 added lines can receive comments.",
+    ),
+  );
+  assert.deepEqual(core.messages("warning"), [
+    "Files left out because of the limits: 10. They are not reviewed. The limits are max-files: 50 and max-diff-chars: 200000.",
+  ]);
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("takes exactly 50 files without a warning", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { octokit: createFakeOctokit(apiFiles(50)) });
+
+  assert.ok(
+    core
+      .messages("info")
+      .includes("Found 50 changed files: 50 to review, 0 skipped."),
+  );
+  assert.deepEqual(core.messages("warning"), []);
+});
+
+test("uses the limits from the inputs", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "2" });
+
+  await runWith(core, { octokit: createFakeOctokit(apiFiles(4)) });
+
+  const lines = core.messages("info").slice(2);
+  assert.equal(lines[0], "Found 4 changed files: 2 to review, 2 skipped.");
+  assert.equal(
+    lines[1],
+    "Skipped src/file-2.js: over the limit of 2 files (max-files).",
+  );
+  assert.deepEqual(core.messages("warning"), [
+    "Files left out because of the limits: 2. They are not reviewed. The limits are max-files: 2 and max-diff-chars: 200000.",
+  ]);
+});
+
+test("leaves out a file that does not fit the budget and takes later ones", async () => {
+  const small = (path) => apiFile(path, { patch: addedPatch(1) });
+  const octokit = createFakeOctokit([
+    small("a.js"),
+    apiFile("big.js", { status: "added", patch: addedPatch(500) }),
+    small("c.js"),
+    small("d.js"),
+  ]);
+  const budget = annotateDiff(parsePatch(addedPatch(1)).hunks).length * 3;
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    "max-diff-chars": String(budget),
+  });
+
+  await runWith(core, { octokit });
+
+  const lines = core.messages("info").slice(2);
+  assert.equal(lines[0], "Found 4 changed files: 3 to review, 1 skipped.");
+  assert.equal(
+    lines[1],
+    `Skipped big.js: does not fit into the budget of ${budget} characters (max-diff-chars).`,
+  );
+  assert.equal(lines.at(-1), `Diff size: ${budget} of ${budget} characters.`);
+});
+
+test("lists files left out by a limit before excluded and other skipped ones", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "1" });
+  const octokit = createFakeOctokit([
+    apiFile("docs/old.md", { status: "removed" }),
+    apiFile("yarn.lock"),
+    apiFile("src/a.js"),
+    apiFile("src/b.js"),
+    apiFile("src/odd.js", { patch: "not a diff" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(
+    core
+      .messages("info")
+      .filter((line) => line.startsWith("Skipped "))
+      .map((line) => line.split(":")[0]),
+    [
+      "Skipped src/odd.js",
+      "Skipped src/b.js",
+      "Skipped yarn.lock",
+      "Skipped docs/old.md",
+    ],
+  );
+});
+
+test("ends green with a notice when no file fits the budget", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-diff-chars": "10" });
+
+  await runWith(core, { octokit: createFakeOctokit(apiFiles(2)) });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("notice"), [NOTHING_TO_REVIEW]);
+  assert.equal(core.messages("warning").length, 1);
+  assert.match(
+    core.messages("warning")[0],
+    /^Files left out because of the limits: 2\./,
+  );
+  assert.doesNotMatch(
+    core.messages("info").join("\n"),
+    /Parsed the diffs|Diff size/,
+  );
+  // The run stops at the notice, before anything that costs money.
+  assert.equal(core.calls.at(-1).method, "notice");
+});
+
+test("does not fail on a very large pull request", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    ...apiFiles(2999),
+    apiFile("src/huge.js", { status: "added", patch: addedPatch(300000) }),
+  ]);
+
+  const started = performance.now();
+  await runWith(core, { octokit });
+  const elapsed = performance.now() - started;
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.equal(core.messages("warning").length, 2);
+  assert.ok(
+    core
+      .messages("info")
+      .includes("Found 3000 changed files: 50 to review, 2950 skipped."),
+  );
+  assert.equal(
+    core.messages("info").filter((line) => line.startsWith("Skipped ")).length,
+    50,
+  );
+  assert.ok(elapsed < 5000, `the run took ${Math.round(elapsed)} ms`);
+});
+
+test("never logs the diff that is selected for the model", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/a.js", { patch: "@@ -1 +1 @@\n-old\n+SELECTED-CONTENT" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.doesNotMatch(JSON.stringify(core.calls), /SELECTED-CONTENT/);
+});
+
+const INVALID_LIMITS = [
+  ["max-files", "0"],
+  ["max-files", "-3"],
+  ["max-files", "ten"],
+  ["max-files", "2.5"],
+  ["max-diff-chars", "0"],
+  ["max-diff-chars", "-1"],
+  ["max-diff-chars", "lots"],
+  ["max-diff-chars", "1e6"],
+];
+
+for (const [input, value] of INVALID_LIMITS) {
+  test(`fails before any request when ${input} is "${value}"`, async () => {
+    const core = createFakeCore({ ...VALID_INPUTS, [input]: value });
+
+    const { tokens } = await runWith(core);
+
+    assert.deepEqual(core.messages("setFailed"), [
+      `Input \`${input}\` must be a whole number from 1 to 999999999, but is "${value}".`,
+    ]);
+    assert.deepEqual(core.messages("info"), []);
+    assert.deepEqual(tokens, [], "no API client may be created");
+  });
+}
+
+test("fails with the same message for a limit that is a secret-looking value", async () => {
+  // A limit is a setting. A value that equals a credential is still shown
+  // as the redactor of the run knows it.
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    "max-files": "key-value",
+  });
+
+  await runWith(core);
+
+  assert.deepEqual(core.messages("setFailed"), [
+    'Input `max-files` must be a whole number from 1 to 999999999, but is "***".',
+  ]);
+});
+
+test("falls back to the defaults when a limit is empty", async () => {
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    "max-files": "",
+    "max-diff-chars": "",
+  });
+
+  await runWith(core, { octokit: createFakeOctokit(apiFiles(60)) });
+
+  assert.ok(
+    core
+      .messages("info")
+      .includes("Found 60 changed files: 50 to review, 10 skipped."),
+  );
+  assert.deepEqual(core.messages("setFailed"), []);
 });
 
 test("fails with status and hint when the API rejects the request", async () => {

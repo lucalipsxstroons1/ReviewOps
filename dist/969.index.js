@@ -1,8 +1,8 @@
-export const id = 370;
-export const ids = [370];
+export const id = 969;
+export const ids = [969];
 export const modules = {
 
-/***/ 1370:
+/***/ 7969:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -590,13 +590,21 @@ function isRateLimited(error) {
  * any check can fail and produce a message.
  *
  * @param {typeof import("@actions/core")} core
- * @returns {{ githubToken: string, openaiApiKey: string, exclude: string }}
+ * @returns {{
+ *   githubToken: string,
+ *   openaiApiKey: string,
+ *   exclude: string,
+ *   maxFiles: string,
+ *   maxDiffChars: string,
+ * }} The limits stay text here: `parseLimits()` checks them.
  */
 function readInputs(core) {
   const inputs = {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     exclude: core.getInput("exclude"),
+    maxFiles: core.getInput("max-files"),
+    maxDiffChars: core.getInput("max-diff-chars"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -635,6 +643,167 @@ function assertInputs(inputs) {
   }
 }
 
+;// CONCATENATED MODULE: ./src/diff/annotate.js
+const MARKERS = { added: "+", removed: "-", context: " " };
+
+// The number column is at least this wide, so short files look the same.
+const MIN_NUMBER_WIDTH = 4;
+
+/**
+ * Renders the hunks of one file as text for the model.
+ *
+ * Only added lines carry a line number: every number the model can see is a
+ * line it may comment on. Context and removed lines are there to understand
+ * the change. The numbers of the hunk header are left out, so there is
+ * nothing to calculate with.
+ *
+ * ```
+ * @@ function total(items) {
+ *      |    const tax = 0.19;
+ *      | -  return items.length;
+ *   12 | +  const sum = items.reduce(add, 0);
+ *      |  }
+ * ```
+ *
+ * The result contains code written by the author of the pull request. It is
+ * meant for the prompt and must not be logged.
+ *
+ * @param {{
+ *   section: string,
+ *   lines: { type: "added" | "removed" | "context", line: number | null, content: string }[],
+ * }[]} hunks The hunks of one file, as `parsePatch()` returns them.
+ * @returns {string}
+ */
+function annotateDiff(hunks) {
+  let highest = 0;
+  for (const hunk of hunks) {
+    for (const { type, line } of hunk.lines) {
+      if (type === "added" && line > highest) highest = line;
+    }
+  }
+  const width = Math.max(MIN_NUMBER_WIDTH, String(highest).length);
+
+  const rows = [];
+  for (const hunk of hunks) {
+    rows.push(hunk.section ? `@@ ${hunk.section}` : "@@");
+    for (const { type, line, content } of hunk.lines) {
+      const number = type === "added" ? String(line) : "";
+      // Files with Windows line endings carry a carriage return on each line.
+      const code = content.endsWith("\r") ? content.slice(0, -1) : content;
+      rows.push(`${number.padStart(width)} | ${MARKERS[type]}${code}`);
+    }
+  }
+  return rows.join("\n");
+}
+
+;// CONCATENATED MODULE: ./src/limits.js
+
+
+
+// The same values are written into action.yml. A test keeps them equal.
+const DEFAULT_MAX_FILES = 50;
+const DEFAULT_MAX_DIFF_CHARS = 200000;
+
+// Nine digits are far above any useful limit and stay exact as a number.
+const MAX_DIGITS = 9;
+const MAX_VALUE = 10 ** MAX_DIGITS - 1;
+
+const OVER_LIMIT_REASONS = Object.freeze({
+  files: (maxFiles) => `over the limit of ${maxFiles} files (max-files)`,
+  chars: (maxDiffChars) =>
+    `does not fit into the budget of ${maxDiffChars} characters (max-diff-chars)`,
+});
+
+/**
+ * Reads the two limits of the action. An empty value means the default: it
+ * is usually a variable of the workflow that was not set.
+ *
+ * @param {{ maxFiles?: string, maxDiffChars?: string }} inputs Values as the
+ *   workflow passed them.
+ * @returns {{ maxFiles: number, maxDiffChars: number }}
+ * @throws {Error} When a value is not a whole number from 1 to 999999999.
+ */
+function parseLimits({ maxFiles = "", maxDiffChars = "" } = {}) {
+  return {
+    maxFiles: parseLimit("max-files", maxFiles, DEFAULT_MAX_FILES),
+    maxDiffChars: parseLimit(
+      "max-diff-chars",
+      maxDiffChars,
+      DEFAULT_MAX_DIFF_CHARS,
+    ),
+  };
+}
+
+function parseLimit(name, value, fallback) {
+  const text = String(value).trim();
+  if (text === "") return fallback;
+
+  // Only digits: "1e3", "2.5", "-1" and "0x10" are not whole numbers a
+  // person meant to write.
+  const valid = /^\d+$/.test(text) && text.length <= MAX_DIGITS;
+  const number = valid ? Number(text) : 0;
+  if (number < 1) {
+    // The value is a setting of the workflow, which a pull request can change.
+    throw new Error(
+      `Input \`${name}\` must be a whole number from 1 to ${MAX_VALUE}, but is "${printable(text)}".`,
+    );
+  }
+  return number;
+}
+
+/**
+ * Chooses the files that go into the review, in the order GitHub lists them.
+ *
+ * A file that no longer fits into the remaining budget is left out, but later
+ * and smaller files can still follow: one huge file must not keep the rest
+ * from being reviewed. Once `maxFiles` files are chosen, all others are left
+ * out without being looked at.
+ *
+ * The size is the length of the annotated diff, the text that is later sent
+ * to the model. It is created here once and kept as `annotated`.
+ *
+ * This is a pure function: it uses nothing but its arguments and does not
+ * change them.
+ *
+ * @template {{ path: string, hunks: Parameters<typeof annotateDiff>[0] }} T
+ * @param {T[]} diffs Parsed files, as `parsePatch()` returns them plus `path`.
+ * @param {{ maxFiles: number, maxDiffChars: number }} limits
+ * @returns {{
+ *   selected: (T & { annotated: string })[],
+ *   overLimit: { path: string, reason: string }[],
+ *   usedChars: number,
+ * }}
+ */
+function applyLimits(diffs, { maxFiles, maxDiffChars }) {
+  const selected = [];
+  const overLimit = [];
+  let usedChars = 0;
+
+  for (const diff of diffs) {
+    if (selected.length >= maxFiles) {
+      overLimit.push({
+        path: diff.path,
+        reason: OVER_LIMIT_REASONS.files(maxFiles),
+      });
+      continue;
+    }
+
+    const annotated = annotateDiff(diff.hunks);
+    if (usedChars + annotated.length > maxDiffChars) {
+      overLimit.push({
+        path: diff.path,
+        reason: OVER_LIMIT_REASONS.chars(maxDiffChars),
+      });
+      continue;
+    }
+
+    usedChars += annotated.length;
+    selected.push({ ...diff, annotated });
+  }
+
+  return { selected, overLimit, usedChars };
+}
+
 ;// CONCATENATED MODULE: ./src/redact.js
 const PLACEHOLDER = "***";
 
@@ -669,6 +838,7 @@ function createRedactor(secrets) {
 }
 
 ;// CONCATENATED MODULE: ./src/main.js
+
 
 
 
@@ -720,8 +890,10 @@ async function run({
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
     assertInputs(inputs);
-    // A pattern that cannot be used fails the run here, before any request.
+    // A pattern or a limit that cannot be used fails the run here, before
+    // any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
+    const limits = parseLimits(inputs);
 
     core.info("ReviewOps started.");
 
@@ -746,16 +918,22 @@ async function run({
 
     // Line numbers are calculated here and never taken from the model.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
-    // The list below is cut off, so the order matters: unreadable diffs are
-    // the files someone has to look at, excluded files are a decision of
-    // this action, the rest could not be reviewed anyway.
+
+    // Large pull requests are cut to the limits, in the order of GitHub.
+    const { selected, overLimit, usedChars } = applyLimits(diffs, limits);
+
+    // The list below is cut off, so the order matters: unreadable diffs and
+    // files that the limits left out are the ones someone has to look at,
+    // excluded files are a decision of this action, the rest could not be
+    // reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...overLimit,
       ...excluded,
       ...listing.skipped,
     ];
     core.info(
-      `Found ${diffs.length + skipped.length} changed files: ${diffs.length} to review, ${skipped.length} skipped.`,
+      `Found ${selected.length + skipped.length} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
     // File names are chosen by the author of the pull request.
     for (const { path, reason } of skipped.slice(0, MAX_SKIPPED_LINES)) {
@@ -774,6 +952,11 @@ async function run({
         core.debug(`${printable(path)}: ${detail}`);
       }
     }
+    if (overLimit.length > 0) {
+      core.warning(
+        `Files left out because of the limits: ${overLimit.length}. They are not reviewed. The limits are max-files: ${limits.maxFiles} and max-diff-chars: ${limits.maxDiffChars}.`,
+      );
+    }
     if (listing.truncated) {
       core.warning(
         "GitHub lists at most 3000 files per pull request. Files beyond that were not loaded.",
@@ -782,20 +965,21 @@ async function run({
 
     // Everything that costs money or posts something comes after this
     // point: a pull request without reviewable files ends here.
-    if (diffs.length === 0) {
+    if (selected.length === 0) {
       core.notice(
         "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
       );
       return;
     }
 
-    const addedLines = diffs.reduce(
+    const addedLines = selected.reduce(
       (sum, diff) => sum + diff.commentableLines.length,
       0,
     );
     core.info(
-      `Parsed the diffs of ${diffs.length} files: ${addedLines} added lines can receive comments.`,
+      `Parsed the diffs of ${selected.length} files: ${addedLines} added lines can receive comments.`,
     );
+    core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));

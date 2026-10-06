@@ -62,7 +62,10 @@ test("names the pull request and lists its files", async (t) => {
 test("loads a pull request with more than 100 files completely", async (t) => {
   const api = await startGitHubApi(t, { files: apiFiles(120) });
 
-  const result = await runAction(pullRequestRun(api));
+  // The limit is raised: this test is about loading, not about the limit.
+  const result = await runAction(
+    pullRequestRun(api, { "INPUT_MAX-FILES": "500" }),
+  );
 
   assert.equal(result.status, 0);
   assert.match(
@@ -71,6 +74,107 @@ test("loads a pull request with more than 100 files completely", async (t) => {
   );
   assert.equal(api.requests.length, 2);
 });
+
+test("leaves out the files over the limit and names them", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(120) });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 120 changed files: 50 to review, 70 skipped\.$/m,
+  );
+  assert.match(
+    result.stdout,
+    /^Skipped src\/file-50\.js: over the limit of 50 files \(max-files\)\.$/m,
+  );
+  // The log names the first 50 skipped files and counts the other 20.
+  assert.match(result.stdout, /^20 more skipped files are not listed\.$/m);
+  assert.match(
+    result.stdout,
+    /^::warning::Files left out because of the limits: 70\. They are not reviewed\. The limits are max-files: 50 and max-diff-chars: 200000\.$/m,
+  );
+  assert.match(result.stdout, /^Diff size: \d+ of 200000 characters\.$/m);
+  assert.doesNotMatch(result.stdout, /::error::/);
+  assert.equal(result.stderr, "");
+});
+
+test("uses the limits from the inputs and tells how the budget is used", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(5) });
+
+  const result = await runAction(
+    pullRequestRun(api, {
+      "INPUT_MAX-FILES": "3",
+      "INPUT_MAX-DIFF-CHARS": "1000",
+    }),
+  );
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped src\/file-3\.js: over the limit of 3 files \(max-files\)\.$/m,
+  );
+  assert.match(result.stdout, /^Diff size: \d+ of 1000 characters\.$/m);
+  assert.match(
+    result.stdout,
+    /The limits are max-files: 3 and max-diff-chars: 1000\./,
+  );
+});
+
+test("ends green with a notice when no file fits the budget", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(2) });
+
+  const result = await runAction(
+    pullRequestRun(api, { "INPUT_MAX-DIFF-CHARS": "10" }),
+  );
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Skipped src\/file-0\.js: does not fit into the budget of 10 characters \(max-diff-chars\)\.$/m,
+  );
+  assert.match(result.stdout, /^::notice::ReviewOps found no files to review/m);
+  assert.doesNotMatch(result.stdout, /::error::/);
+  assert.equal(result.stderr, "");
+});
+
+test("does not fail on a pull request with 3000 files", async (t) => {
+  const api = await startGitHubApi(t, { files: apiFiles(3000) });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stdout,
+    /^Found 3000 changed files: 50 to review, 2950 skipped\.$/m,
+  );
+  assert.match(result.stdout, /^::warning::GitHub lists at most 3000 files/m);
+  assert.doesNotMatch(result.stdout, /::error::/);
+});
+
+for (const [input, value] of [
+  ["INPUT_MAX-FILES", "0"],
+  ["INPUT_MAX-FILES", "many"],
+  ["INPUT_MAX-DIFF-CHARS", "-5"],
+]) {
+  test(`fails the step before any request when ${input} is "${value}"`, async (t) => {
+    const api = await startGitHubApi(t, { files: apiFiles(1) });
+
+    const result = await runAction(pullRequestRun(api, { [input]: value }));
+
+    const name = input.slice("INPUT_".length).toLowerCase();
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.stdout.includes(
+        `::error::Input \`${name}\` must be a whole number from 1 to 999999999, but is "${value}".`,
+      ),
+    );
+    assert.doesNotMatch(result.stdout, /ReviewOps started\./);
+    assert.deepEqual(api.requests, []);
+    assert.equal(result.stderr, "");
+  });
+}
 
 test("skips a file whose diff cannot be read without failing the step", async (t) => {
   const api = await startGitHubApi(t, {
