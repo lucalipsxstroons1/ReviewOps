@@ -185,7 +185,7 @@ test("names an unreadable file even when many other files are skipped", async ()
   assert.equal(lines[0], "Found 61 changed files: 0 to review, 61 skipped.");
   assert.equal(lines[1], "Skipped src/odd.js: the diff could not be read.");
   assert.equal(lines.filter((line) => line.startsWith("Skipped ")).length, 50);
-  assert.equal(lines.at(-2), "11 more skipped files are not listed.");
+  assert.equal(lines.at(-1), "11 more skipped files are not listed.");
 });
 
 test("fails the step when the parser breaks for another reason", async () => {
@@ -255,7 +255,172 @@ test("lists at most 50 skipped files and counts the rest", async () => {
   const lines = core.messages("info").slice(2);
   assert.equal(lines[0], "Found 60 changed files: 0 to review, 60 skipped.");
   assert.equal(lines.filter((line) => line.startsWith("Skipped ")).length, 50);
-  assert.equal(lines.at(-2), "10 more skipped files are not listed.");
+  assert.equal(lines.at(-1), "10 more skipped files are not listed.");
+});
+
+// --- Files that are left out -------------------------------------------------
+
+const NOTHING_TO_REVIEW =
+  "ReviewOps found no files to review in this pull request. The log lists the skipped files.";
+
+test("ends green with a notice when only a lockfile changed", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const parsed = [];
+  const parsePatch = (patch) => {
+    parsed.push(patch);
+    return { hunks: [], commentableLines: [] };
+  };
+
+  await runWith(core, {
+    octokit: createFakeOctokit([apiFile("package-lock.json")]),
+    parsePatch,
+  });
+
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 1 changed files: 0 to review, 1 skipped.",
+    'Skipped package-lock.json: matches the default exclude pattern "package-lock.json".',
+  ]);
+  assert.deepEqual(core.messages("notice"), [NOTHING_TO_REVIEW]);
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("warning"), []);
+  // The run stops at the notice. Nothing was parsed, and nothing that a
+  // later step adds, such as a request to the model, can run after it.
+  assert.equal(core.calls.at(-1).method, "notice");
+  assert.deepEqual(parsed, []);
+});
+
+test("ends with the same notice when every file was skipped for another reason", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { octokit: createFakeOctokit(removedFiles(3)) });
+
+  assert.deepEqual(core.messages("notice"), [NOTHING_TO_REVIEW]);
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.doesNotMatch(core.messages("info").join("\n"), /Parsed the diffs/);
+});
+
+test("ends with the notice when the pull request has no files at all", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { octokit: createFakeOctokit([]) });
+
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 0 changed files: 0 to review, 0 skipped.",
+  ]);
+  assert.deepEqual(core.messages("notice"), [NOTHING_TO_REVIEW]);
+});
+
+test("reviews an EF Core migration without its generated files", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/App/Migrations/20240101120000_AddUsers.cs"),
+    apiFile("src/App/Migrations/20240101120000_AddUsers.Designer.cs"),
+    apiFile("src/App/Migrations/AppDbContextModelSnapshot.cs"),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 3 changed files: 1 to review, 2 skipped.",
+    'Skipped src/App/Migrations/20240101120000_AddUsers.Designer.cs: matches the default exclude pattern "*.Designer.cs".',
+    'Skipped src/App/Migrations/AppDbContextModelSnapshot.cs: matches the default exclude pattern "*ModelSnapshot.cs".',
+    "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+  ]);
+  assert.deepEqual(core.messages("notice"), []);
+});
+
+test("adds the patterns of the exclude input to the default list", async () => {
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    exclude: "# generated\ndocs/**\n\n*.txt",
+  });
+  const octokit = createFakeOctokit([
+    apiFile("src/main.js"),
+    apiFile("docs/guide/intro.md"),
+    apiFile("notes/todo.txt"),
+    apiFile("dist/index.js"),
+    apiFile("src/docs/kept.md"),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 5 changed files: 2 to review, 3 skipped.",
+    'Skipped docs/guide/intro.md: matches the exclude pattern "docs/**".',
+    'Skipped notes/todo.txt: matches the exclude pattern "*.txt".',
+    'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
+    "Parsed the diffs of 2 files: 2 added lines can receive comments.",
+  ]);
+});
+
+test("does not parse a file that is left out", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/main.js"),
+    apiFile("dist/index.js", { patch: "not a diff" }),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("warning"), []);
+  assert.deepEqual(core.messages("info").slice(2), [
+    "Found 2 changed files: 1 to review, 1 skipped.",
+    'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
+    "Parsed the diffs of 1 files: 1 added lines can receive comments.",
+  ]);
+});
+
+test("lists unreadable files first, then excluded ones, then the rest", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("docs/old.md", { status: "removed" }),
+    apiFile("yarn.lock"),
+    apiFile("src/odd.js", { patch: "not a diff" }),
+    apiFile("src/main.js"),
+  ]);
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(
+    core
+      .messages("info")
+      .filter((line) => line.startsWith("Skipped "))
+      .map((line) => line.split(":")[0]),
+    ["Skipped src/odd.js", "Skipped yarn.lock", "Skipped docs/old.md"],
+  );
+});
+
+test("fails before any request when an exclude pattern cannot be used", async () => {
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    exclude: "docs/**\n!documentation/**",
+  });
+
+  const { tokens } = await runWith(core);
+
+  // The pattern is shown as it is: it is a setting, not a credential.
+  assert.deepEqual(core.messages("setFailed"), [
+    'Input `exclude`, line 2: the pattern "!documentation/**" cannot be used. Negation with "!" is not supported. List only the files to leave out.',
+  ]);
+  assert.deepEqual(core.messages("info"), []);
+  assert.deepEqual(tokens, [], "no API client may be created");
+});
+
+test("does not treat the exclude input as a credential", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, exclude: "documentation/**" });
+
+  await runWith(core, {
+    octokit: createFakeOctokit([apiFile("documentation/a.md")]),
+  });
+
+  assert.deepEqual(core.messages("setSecret"), ["token-value", "key-value"]);
+  assert.ok(
+    core
+      .messages("info")
+      .includes(
+        'Skipped documentation/a.md: matches the exclude pattern "documentation/**".',
+      ),
+  );
 });
 
 test("lists exactly 50 skipped files without a remainder line", async () => {

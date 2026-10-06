@@ -34,6 +34,24 @@ test("openai-api-key is required and has no default", () => {
   assert.equal("default" in input, false);
 });
 
+test("exclude is optional and empty by default", () => {
+  const input = action.inputs.exclude;
+
+  assert.equal(input.required, false);
+  assert.equal(input.default, "");
+});
+
+test("the action declares exactly the inputs the code reads", () => {
+  const read = [
+    ...readFileSync(
+      new URL("../src/inputs.js", import.meta.url),
+      "utf8",
+    ).matchAll(/getInput\("([^"]+)"\)/g),
+  ].map((match) => match[1]);
+
+  assert.deepEqual(Object.keys(action.inputs).sort(), read.sort());
+});
+
 test("every input has a description", () => {
   for (const [name, input] of Object.entries(action.inputs)) {
     assert.equal(typeof input.description, "string", `${name} lacks one`);
