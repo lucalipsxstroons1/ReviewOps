@@ -37,6 +37,7 @@ jobs:
         uses: ./
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          openai-model: gpt-4.1
 
       # Shows that later steps can use the outputs. The values reach the shell
       # through the environment, never as an expression inside the command.
