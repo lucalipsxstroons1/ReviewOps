@@ -53,6 +53,42 @@ export function readPullRequest(context) {
   };
 }
 
+// The login of the account that GitHub gives to runs started by Dependabot.
+const DEPENDABOT = "dependabot[bot]";
+
+/**
+ * Says why the repository secrets are not available in this run, if the
+ * event itself explains it. GitHub does not pass secrets to workflows of pull
+ * requests from forks, and it gives runs started by Dependabot only the
+ * Dependabot secrets. In both cases an empty API key is not a mistake of the
+ * workflow, and ReviewOps ends with a notice instead of an error.
+ *
+ * A pull request that is not a fork and not started by Dependabot never
+ * gets an explanation: there, an empty key stays an error.
+ *
+ * Nothing in the text comes from the event.
+ *
+ * @param {{ actor?: string, repo: object, payload: object }} context
+ * @returns {string | null} A notice, or `null` if there is no explanation.
+ */
+export function explainMissingSecret(context) {
+  let isFork = false;
+  try {
+    isFork = readPullRequest(context).isFork;
+  } catch {
+    // A payload that cannot be read is no explanation. The run fails later
+    // with the message that says what is wrong with it.
+  }
+
+  if (isFork) {
+    return "ReviewOps did not review this pull request: it comes from a fork, and GitHub does not pass secrets to workflows of such pull requests, so the OpenAI API key is not available. A green run does not mean that this pull request was reviewed.";
+  }
+  if (context.actor === DEPENDABOT) {
+    return "ReviewOps did not review this pull request: the run was started by Dependabot, and GitHub gives runs of Dependabot only the Dependabot secrets, not the repository secrets. To have these pull requests reviewed, store the key as a Dependabot secret named `OPENAI_API_KEY` as well. A green run does not mean that this pull request was reviewed.";
+  }
+  return null;
+}
+
 function readRepository(context) {
   const { owner, repo } = context.repo ?? {};
   if (!isRepositoryPart(owner) || !isRepositoryPart(repo)) {

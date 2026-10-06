@@ -19,7 +19,7 @@ import {
   isSensitiveFile,
 } from "./exclude.js";
 import { selectFindings } from "./findings.js";
-import { readPullRequest } from "./github/context.js";
+import { explainMissingSecret, readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
 import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
@@ -73,6 +73,17 @@ export async function run({
 
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
+    // Without the key, a pull request from a fork or a run of Dependabot ends
+    // here with a notice, before any request: GitHub gives them no secrets,
+    // so there is nothing the workflow could fix. Anywhere else, a missing
+    // key stays an error.
+    if (!inputs.openaiApiKey) {
+      const notice = explainMissingSecret(context);
+      if (notice) {
+        core.notice(notice);
+        return;
+      }
+    }
     assertInputs(inputs);
     // A pattern, a limit, a model name or a language that cannot be used
     // fails the run here, before any request.
@@ -260,6 +271,13 @@ export async function run({
           `${notReviewed.length - MAX_SKIPPED_LINES} more files that were not reviewed are not listed.`,
         );
       }
+    }
+
+    // A number only: the texts themselves hold code from the pull request.
+    if (review.shortened > 0) {
+      core.info(
+        `Texts of the model that were longer than allowed and were cut: ${review.shortened}.`,
+      );
     }
 
     // Every finding is checked against the files of its own request: only an

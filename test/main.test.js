@@ -1325,6 +1325,31 @@ test("never logs the summary, the findings or the prompt", async () => {
   assert.doesNotMatch(log, /<file path=|pull_request_title|experienced/);
 });
 
+test("logs how many texts of the model were cut, never the texts", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const long = `LONG-TEXT-FROM-THE-MODEL-${"x".repeat(2000)}`;
+  const ai = createFakeAi(() => modelAnswer([], long));
+
+  await runWith(core, { ai });
+
+  assert.ok(
+    core
+      .messages("info")
+      .includes(
+        "Texts of the model that were longer than allowed and were cut: 1.",
+      ),
+  );
+  assert.doesNotMatch(JSON.stringify(core.calls), /LONG-TEXT-FROM-THE-MODEL/);
+});
+
+test("says nothing about cut texts when every text fits", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core);
+
+  assert.doesNotMatch(core.messages("info").join("\n"), /were cut/);
+});
+
 test("fails with the same message for a limit that is a secret-looking value", async () => {
   // A limit is a setting. A value that equals a credential is still shown
   // as the redactor of the run knows it.

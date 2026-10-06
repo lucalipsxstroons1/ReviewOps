@@ -1,3 +1,4 @@
+import { boundReview } from "./ai/answer-limits.js";
 import { AiError, isFatal } from "./ai/error.js";
 import { MAX_OUTPUT_TOKENS, REVIEW_FORMAT, parseReview } from "./ai/schema.js";
 
@@ -35,7 +36,10 @@ export const MAX_PARALLEL_REQUESTS = 4;
  *   }[],
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
+ *   shortened: number,
  * }>} The reviews of the requests that worked, in the order of the batches.
+ *   Their texts are bounded and cleaned (`boundReview()`); `shortened`
+ *   counts the texts that were cut, over all requests.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -65,7 +69,10 @@ export async function reviewInBatches({
           responseFormat: REVIEW_FORMAT,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
         });
-        results[index] = { review: parseReview(answer) };
+        // The texts are bounded and cleaned right here: nothing after this
+        // point sees a text of the model that is not.
+        const { review, shortened } = boundReview(parseReview(answer));
+        results[index] = { review, shortened };
       } catch (error) {
         if (!(error instanceof AiError)) {
           defect ??= { error };
@@ -85,11 +92,12 @@ export async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { reviews: [], succeeded: 0, failed: [] };
+  const merged = { reviews: [], succeeded: 0, failed: [], shortened: 0 };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
+      merged.shortened += result.shortened;
       merged.reviews.push({
         files: batch.files,
         summary: result.review.summary,
