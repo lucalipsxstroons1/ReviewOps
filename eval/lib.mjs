@@ -5,7 +5,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AiError, isFatal } from "../src/ai/error.js";
-import { buildSystemPrompt } from "../src/ai/prompt.js";
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGES,
+  buildSystemPrompt,
+  parseLanguage,
+} from "../src/ai/prompt.js";
 import { buildUserPrompt } from "../src/ai/user-prompt.js";
 import {
   CATEGORIES,
@@ -53,6 +58,20 @@ export const REFERENCE_MODEL = "gpt-4.1";
 export function evalModelName(env) {
   const requested = (env.EVAL_MODEL ?? "").trim();
   return requested === "" ? REFERENCE_MODEL : requested;
+}
+
+/**
+ * The language of the feedback in the evaluation: `EVAL_LANGUAGE`, checked
+ * like the input `language` of the action. Empty means English, the default
+ * of the action. The thresholds are the same in every language: severity,
+ * category, path and line stay in English.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {keyof typeof LANGUAGES}
+ * @throws {Error} When the value is not one of the language codes.
+ */
+export function evalLanguage(env) {
+  return parseLanguage(env.EVAL_LANGUAGE ?? "");
 }
 
 // "info" is the lowest, "critical" the highest of the schema.
@@ -226,9 +245,15 @@ export function verdict(rows) {
 }
 
 /** The result as a Markdown table, for the log and for the job summary. */
-export function renderTable({ model, promptVersion, rows, result }) {
+export function renderTable({
+  model,
+  promptVersion,
+  language = DEFAULT_LANGUAGE,
+  rows,
+  result,
+}) {
   const lines = [
-    `## Prompt evaluation (prompt version ${promptVersion}, model ${model})`,
+    `## Prompt evaluation (prompt version ${promptVersion}, model ${model}, language ${LANGUAGES[language]})`,
     "",
     "| Case | Expectation | Passed | Needed | Invalid findings | Errors |",
     "|---|---|---|---|---|---|",
@@ -274,7 +299,7 @@ async function completeWithPatience(ai, wait, request) {
 
 /**
  * Sends every case to the model and judges the answers: `RUNS_PER_CASE` runs
- * in English.
+ * in the language of the feedback.
  *
  * A run that fails is recorded as an error and never counts as a pass, so an
  * outage cannot look like "no findings". After an error that repeats for
@@ -284,6 +309,8 @@ async function completeWithPatience(ai, wait, request) {
  * @param {object} options
  * @param {ReturnType<typeof loadCases>} options.cases
  * @param {{ complete: (request: object) => Promise<{ content: string, finishReason: string | null }> }} options.ai
+ * @param {keyof typeof LANGUAGES} [options.language] A code that
+ *   `evalLanguage()` returned.
  * @param {number} [options.concurrency] Requests at the same time.
  * @param {(milliseconds: number) => Promise<void>} [options.wait] Waits
  *   before a request that hit the rate limit is sent again. Tests replace it.
@@ -296,10 +323,11 @@ async function completeWithPatience(ai, wait, request) {
 export async function runEvaluation({
   cases,
   ai,
+  language = DEFAULT_LANGUAGE,
   concurrency = MAX_PARALLEL_EVAL_REQUESTS,
   wait = sleep,
 }) {
-  const system = buildSystemPrompt({ language: "en" });
+  const system = buildSystemPrompt({ language });
 
   const jobs = [];
   for (const testCase of cases) {

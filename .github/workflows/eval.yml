@@ -13,6 +13,10 @@ on:
         description: OpenAI model to evaluate. Empty means the reference model of the evaluation (gpt-4.1), not the default model of the action.
         required: false
         default: ""
+      language:
+        description: Language of the feedback, one of the codes of the input language of the action (en, de, fr, ...). Empty means English. The thresholds are the same in every language.
+        required: false
+        default: ""
 
 # The evaluation only reads the code. It writes nothing back to GitHub.
 permissions:
@@ -46,10 +50,11 @@ jobs:
       # The key reaches this step only. It is the repository secret
       # OPENAI_API_KEY, the same one that reviewops.yml uses. A pull request
       # from a fork gets no secrets, and the evaluation then ends with a
-      # notice; a run by hand without the key fails. The model name goes
-      # through the environment, never into the command.
+      # notice; a run by hand without the key fails. The model name and the
+      # language go through the environment, never into the command.
       - name: Evaluate the prompt against the OpenAI API
         run: npm run eval
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           EVAL_MODEL: ${{ inputs.model }}
+          EVAL_LANGUAGE: ${{ inputs.language }}

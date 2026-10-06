@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   REFERENCE_MODEL,
   RUNS_PER_CASE,
+  evalLanguage,
   evalModelName,
   failureLines,
   judgeRun,
@@ -248,7 +249,7 @@ test("renders the result as a table with the version, the model and the runs nee
 
   assert.match(
     table,
-    /^## Prompt evaluation \(prompt version 7, model gpt-4o-mini\)/,
+    /^## Prompt evaluation \(prompt version 7, model gpt-4o-mini, language English\)/,
   );
   assert.match(
     table,
@@ -261,6 +262,23 @@ test("renders the result as a table with the version, the model and the runs nee
   assert.doesNotMatch(table, /German/);
   assert.match(table, /Result: thresholds missed\./);
   assert.match(table, /- b: clean in 1 of 3 runs \(needs 2\)/);
+});
+
+test("names the language of the feedback in the table", () => {
+  const rows = [row({ name: "a" })];
+
+  const table = renderTable({
+    model: "gpt-4.1",
+    promptVersion: 8,
+    language: "de",
+    rows,
+    result: verdict(rows),
+  });
+
+  assert.match(
+    table,
+    /^## Prompt evaluation \(prompt version 8, model gpt-4\.1, language German\)/,
+  );
 });
 
 // --- runEvaluation() ---------------------------------------------------------
@@ -319,6 +337,24 @@ test("sends the schema, the output limit and the English prompt", async () => {
   for (const call of calls) {
     assert.match(call.system, /the suggestion in English\./);
   }
+});
+
+test("asks for the feedback in the language it is given", async () => {
+  const calls = [];
+
+  const { rows } = await runEvaluation({
+    cases,
+    ai: goodModel(calls),
+    language: "de",
+  });
+
+  assert.equal(calls.length, cases.length * RUNS_PER_CASE);
+  for (const call of calls) {
+    assert.match(call.system, /the suggestion in German\./);
+  }
+  // The cases are judged by severity, category, path and line, which stay
+  // in English: the thresholds are the same.
+  assert.equal(verdict(rows).ok, true);
 });
 
 test("never takes an error as a pass, also not on a clean diff", async () => {
@@ -738,4 +774,27 @@ test("writes the lines of a missed run so that a path or a title from the model 
 
 test("lists nothing when no run missed its expectation", () => {
   assert.deepEqual(failureLines([]), []);
+});
+
+// --- evalLanguage() ----------------------------------------------------------
+
+test("evaluates in English unless another language is asked for", () => {
+  for (const env of [{}, { EVAL_LANGUAGE: "" }, { EVAL_LANGUAGE: "  \n" }]) {
+    assert.equal(evalLanguage(env), "en", JSON.stringify(env));
+  }
+});
+
+test("takes the language of EVAL_LANGUAGE like the input of the action", () => {
+  assert.equal(evalLanguage({ EVAL_LANGUAGE: "de" }), "de");
+  assert.equal(evalLanguage({ EVAL_LANGUAGE: " DE\n" }), "de");
+});
+
+test("refuses a language that is not one of the codes", () => {
+  for (const value of ["german", "xx", "de-DE", "en\nde"]) {
+    assert.throws(
+      () => evalLanguage({ EVAL_LANGUAGE: value }),
+      /^Error: Input `language` must be one of en, de,/,
+      JSON.stringify(value),
+    );
+  }
 });
