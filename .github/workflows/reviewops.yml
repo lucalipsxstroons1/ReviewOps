@@ -32,3 +32,6 @@ jobs:
         uses: ./
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # Only on this throwaway branch: small limits prove that they arrive.
+          max-files: 6
+          max-diff-chars: 2000

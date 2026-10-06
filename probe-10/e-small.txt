@@ -1,0 +1,3 @@
+echo line 001
+echo line 002
+echo line 003
