@@ -28,7 +28,7 @@ const MAX_PATH_CHARS = 200;
 export const MAX_TITLE_CHARS = 200;
 export const MAX_TEXT_CHARS = 4000;
 
-const SEVERITY_LABELS = Object.freeze({
+export const SEVERITY_LABELS = Object.freeze({
   critical: "🔴 Critical",
   major: "🟠 Major",
   minor: "🟡 Minor",
@@ -60,11 +60,18 @@ export function aiLabel(model) {
  * second line of an inline comment, right below the marker. `readHistory()`
  * reads it back with a strict pattern.
  *
+ * An inline comment adds the severity of its finding, so a later run can
+ * count the findings that are still open without reading the text of the
+ * model. Only one of `SEVERITIES` is written.
+ *
  * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
+ * @param {string | null} [severity] The severity of the finding.
  * @returns {string}
  */
-export const fingerprintLine = (fingerprint) =>
-  `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+export const fingerprintLine = (fingerprint, severity = null) =>
+  SEVERITIES.includes(severity)
+    ? `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity} -->`
+    : `<!-- reviewops-fingerprint: ${fingerprint} -->`;
 
 /**
  * The line that marks a review as not complete: files were left out or a
@@ -86,7 +93,7 @@ function reviewHead({ incomplete, fingerprints }) {
   return [
     REVIEW_MARKER,
     ...(incomplete ? [INCOMPLETE_LINE] : []),
-    ...fingerprints.filter(Boolean).map(fingerprintLine),
+    ...fingerprints.filter(Boolean).map((print) => fingerprintLine(print)),
   ].join("\n");
 }
 
@@ -99,7 +106,10 @@ function reviewHead({ incomplete, fingerprints }) {
  * @returns {string}
  */
 export function commentBody(finding, model, fingerprint = null) {
-  const head = reviewHead({ incomplete: false, fingerprints: [fingerprint] });
+  const head = [
+    REVIEW_MARKER,
+    ...(fingerprint ? [fingerprintLine(fingerprint, finding.severity)] : []),
+  ].join("\n");
   return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
 

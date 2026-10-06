@@ -1,8 +1,8 @@
-export const id = 271;
-export const ids = [271];
+export const id = 979;
+export const ids = [979];
 export const modules = {
 
-/***/ 7271:
+/***/ 3979:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -1775,10 +1775,13 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  *     known: number,
  *     overLimit: number,
  *   },
+ *   counts: Record<string, number>,
  * }} `inline` and `unplaced` together hold at most `maxComments` findings,
  *   each list sorted by severity. A fingerprint belongs to the finding at the
  *   same place of its list and is `null` when the diff does not show the
- *   line.
+ *   line. `counts` holds the findings of every severity after step 5 and
+ *   before the limit of step 7, so the limit for the review never hides a
+ *   finding from the count.
  */
 function selectFindings({
   reviews,
@@ -1854,6 +1857,13 @@ function selectFindings({
     return true;
   });
 
+  const counts = Object.fromEntries(
+    SEVERITIES.map((severity) => [
+      severity,
+      fresh.filter((item) => item.finding.severity === severity).length,
+    ]),
+  );
+
   // Array.prototype.sort is stable: equal severities keep their order.
   fresh.sort((a, b) => rank(a.finding) - rank(b.finding));
   const shown = fresh.slice(0, maxComments);
@@ -1867,6 +1877,7 @@ function selectFindings({
     unplaced: listed.map(({ finding }) => finding),
     unplacedFingerprints: listed.map(({ fingerprint }) => fingerprint),
     dropped,
+    counts,
   };
 }
 
@@ -1892,6 +1903,57 @@ function findings_normalize(text) {
 
 function rank(finding) {
   return RANK.get(finding.severity);
+}
+
+;// CONCATENATED MODULE: ./src/fail-on.js
+
+
+
+// The same value is written into action.yml. A test keeps them equal.
+const DEFAULT_FAIL_ON = "none";
+
+/**
+ * The values of the input `fail-on` and the severities each one fails on.
+ * A threshold includes every more serious severity.
+ */
+const FAIL_ON = Object.freeze({
+  none: Object.freeze([]),
+  critical: Object.freeze(["critical"]),
+  major: Object.freeze(["critical", "major"]),
+});
+
+/**
+ * Reads the input `fail-on`. An empty value means the default: it is usually
+ * a variable of the workflow that was not set.
+ *
+ * @param {string} [value] The value as the workflow passed it.
+ * @returns {keyof typeof FAIL_ON}
+ * @throws {Error} When the value is not one of {@link FAIL_ON}.
+ */
+function parseFailOn(value = "") {
+  const text = String(value).trim().toLowerCase();
+  if (text === "") return DEFAULT_FAIL_ON;
+
+  if (!Object.hasOwn(FAIL_ON, text)) {
+    // The value is a setting of the workflow, which a pull request can change.
+    throw new Error(
+      `Input \`fail-on\` must be one of ${Object.keys(FAIL_ON).join(", ")}, but is "${printable(String(value).trim())}".`,
+    );
+  }
+  return text;
+}
+
+/**
+ * How many open findings reach the threshold.
+ *
+ * @param {Record<string, number>} bySeverity Open findings by severity.
+ * @param {keyof typeof FAIL_ON} failOn
+ * @returns {number}
+ */
+function findingsAtThreshold(bySeverity, failOn) {
+  return FAIL_ON[failOn]
+    .filter((severity) => SEVERITIES.includes(severity))
+    .reduce((sum, severity) => sum + (bySeverity[severity] ?? 0), 0);
 }
 
 ;// CONCATENATED MODULE: ./src/github/context.js
@@ -2445,11 +2507,18 @@ function aiLabel(model) {
  * second line of an inline comment, right below the marker. `readHistory()`
  * reads it back with a strict pattern.
  *
+ * An inline comment adds the severity of its finding, so a later run can
+ * count the findings that are still open without reading the text of the
+ * model. Only one of `SEVERITIES` is written.
+ *
  * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
+ * @param {string | null} [severity] The severity of the finding.
  * @returns {string}
  */
-const fingerprintLine = (fingerprint) =>
-  `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+const fingerprintLine = (fingerprint, severity = null) =>
+  SEVERITIES.includes(severity)
+    ? `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity} -->`
+    : `<!-- reviewops-fingerprint: ${fingerprint} -->`;
 
 /**
  * The line that marks a review as not complete: files were left out or a
@@ -2471,7 +2540,7 @@ function reviewHead({ incomplete, fingerprints }) {
   return [
     REVIEW_MARKER,
     ...(incomplete ? [INCOMPLETE_LINE] : []),
-    ...fingerprints.filter(Boolean).map(fingerprintLine),
+    ...fingerprints.filter(Boolean).map((print) => fingerprintLine(print)),
   ].join("\n");
 }
 
@@ -2484,7 +2553,10 @@ function reviewHead({ incomplete, fingerprints }) {
  * @returns {string}
  */
 function commentBody(finding, model, fingerprint = null) {
-  const head = reviewHead({ incomplete: false, fingerprints: [fingerprint] });
+  const head = [
+    REVIEW_MARKER,
+    ...(fingerprint ? [fingerprintLine(fingerprint, finding.severity)] : []),
+  ].join("\n");
   return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
 
@@ -2842,12 +2914,14 @@ function capLength(text) {
 
 
 
+
 const history_COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
-// is read; anything else in a comment is ignored.
+// is read; anything else in a comment is ignored. An inline comment adds the
+// severity of its finding; the line in the text of a review has none.
 const FINGERPRINT_LINE = new RegExp(
-  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}}) -->$`,
+  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")}))? -->$`,
 );
 
 // A comparison lists at most this many files, 100 per request.
@@ -2927,7 +3001,9 @@ const isOwn = (item) =>
  *   fingerprints: Set<string>,
  *   ownReviews: number,
  *   ownComments: number,
- * }>} In `incremental` mode, `since` is the last reviewed commit and
+ *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
+ * }>} `earlierFindings` are the own inline comments that name the severity
+ *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
  *   `newLines` holds the added lines of the comparison by path. `null` as
  *   the value of a path stands for every line of that file. A path that is
  *   missing has no new line. In `full` mode, `newLines` is `null` and
@@ -2961,8 +3037,19 @@ async function readHistory(octokit, pullRequest) {
   const ownComments = comments.filter(isOwn);
   const fingerprints = new Set();
   for (const item of [...ownComments, ...ownReviews]) {
-    for (const fingerprint of readHead(item.body).fingerprints) {
+    for (const { fingerprint } of readHead(item.body).fingerprints) {
       fingerprints.add(fingerprint);
+    }
+  }
+
+  // The findings of earlier inline comments, for the count of the findings
+  // that are still open. An inline comment has one fingerprint line; a
+  // comment from before the severity was written there is left out.
+  const earlierFindings = [];
+  for (const comment of ownComments) {
+    const [head] = readHead(comment.body).fingerprints;
+    if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
+      earlierFindings.push({ id: comment.id, ...head });
     }
   }
 
@@ -2970,6 +3057,7 @@ async function readHistory(octokit, pullRequest) {
     fingerprints,
     ownReviews: ownReviews.length,
     ownComments: ownComments.length,
+    earlierFindings,
   };
   const full = (reason) => ({
     ...base,
@@ -3044,14 +3132,21 @@ function scopeDiffs(diffs, newLines) {
  * edit.
  *
  * @param {string} body
- * @returns {{ fingerprints: string[], incomplete: boolean }}
+ * @returns {{
+ *   fingerprints: { fingerprint: string, severity: string | null }[],
+ *   incomplete: boolean,
+ * }}
  */
 function readHead(body) {
   const result = { fingerprints: [], incomplete: false };
   for (const line of body.split(/\r?\n/, 40).slice(1)) {
     const match = FINGERPRINT_LINE.exec(line);
-    if (match) result.fingerprints.push(match[1]);
-    else if (line === INCOMPLETE_LINE) result.incomplete = true;
+    if (match) {
+      result.fingerprints.push({
+        fingerprint: match[1],
+        severity: match[2] ?? null,
+      });
+    } else if (line === INCOMPLETE_LINE) result.incomplete = true;
     else break;
   }
   return result;
@@ -3149,6 +3244,122 @@ function addedLinesOfComparison(file) {
   return unchanged ? new Set() : null;
 }
 
+;// CONCATENATED MODULE: ./src/github/threads.js
+
+
+// GitHub returns at most 100 threads per page. A pull request with more than
+// 3000 threads is not read to the end: the threads after that count as not
+// resolved, so in doubt more findings stay open, never fewer.
+const PAGE_SIZE = 100;
+const MAX_PAGES = 30;
+
+// A cursor is an opaque token of GitHub. Anything that does not look like one
+// ends the reading instead of being sent back.
+const CURSOR = /^[A-Za-z0-9+/=:_-]{1,200}$/;
+
+// Only GraphQL can say whether a thread is resolved. The first comment of a
+// thread is the comment that opened it; this action only ever opens threads.
+const QUERY = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: ${PAGE_SIZE}, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { isResolved comments(first: 1) { nodes { databaseId } } }
+      }
+    }
+  }
+}`;
+
+/**
+ * GitHub did not answer the query for the review threads. Only an answer of
+ * the API (or a missing one) becomes this error; anything else is a defect
+ * and is passed on as it is. `run()` can go on without the threads when no
+ * `fail-on` depends on them.
+ */
+class ThreadsUnavailableError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "ThreadsUnavailableError";
+  }
+}
+
+const THREAD_HINTS = Object.freeze({
+  403: "The token may not read the review threads of this pull request. The workflow needs the `pull-requests` permission.",
+});
+
+/**
+ * Reads which review threads of a pull request are resolved and returns the
+ * ids of the comments that opened them. REST does not know whether a thread
+ * is resolved, so this is a GraphQL query.
+ *
+ * Everything in the answer is untrusted: a thread counts as resolved only if
+ * `isResolved` is exactly `true` and the id is a positive whole number. An
+ * answer of another shape ends the reading, and the threads it did not name
+ * count as not resolved.
+ *
+ * Nothing in here writes to the log.
+ *
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
+ * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
+ * @returns {Promise<Set<number>>}
+ * @throws {ThreadsUnavailableError} When GitHub does not answer the query,
+ *   with a message that says what to do.
+ */
+async function readResolvedComments(
+  octokit,
+  { owner, repo, pullNumber },
+) {
+  const resolved = new Set();
+  let cursor = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    let data;
+    try {
+      data = await octokit.graphql(QUERY, {
+        owner,
+        repo,
+        number: pullNumber,
+        cursor,
+      });
+    } catch (error) {
+      throw describeThreadError(error);
+    }
+
+    const threads = data?.repository?.pullRequest?.reviewThreads;
+    if (!Array.isArray(threads?.nodes)) break;
+    for (const thread of threads.nodes) {
+      const id = thread?.comments?.nodes?.[0]?.databaseId;
+      if (thread?.isResolved === true && Number.isSafeInteger(id) && id > 0) {
+        resolved.add(id);
+      }
+    }
+
+    const next = threads.pageInfo;
+    const usable =
+      typeof next?.endCursor === "string" && CURSOR.test(next.endCursor);
+    if (next?.hasNextPage !== true || !usable) break;
+    cursor = next.endCursor;
+  }
+  return resolved;
+}
+
+/**
+ * An error of the query. GitHub can answer a GraphQL query with status 200
+ * and a list of errors; their text is not taken over, it may repeat parts of
+ * the query.
+ */
+function describeThreadError(error) {
+  if (Number.isInteger(error?.status)) {
+    const described = describeApiError(error, THREAD_HINTS);
+    return new ThreadsUnavailableError(described.message, { cause: error });
+  }
+  if (Array.isArray(error?.errors)) {
+    return new ThreadsUnavailableError(
+      "GitHub did not answer the query for the review threads of this pull request. Run the workflow again later.",
+    );
+  }
+  return error;
+}
+
 ;// CONCATENATED MODULE: ./src/inputs.js
 /**
  * Reads the action inputs and masks the credentials right away.
@@ -3166,8 +3377,10 @@ function addedLinesOfComparison(file) {
  *   maxFiles: string,
  *   maxDiffChars: string,
  *   maxComments: string,
- * }} The model, the language and the limits stay text here: `parseModel()`,
- *   `parseLanguage()` and `parseLimits()` check them.
+ *   failOn: string,
+ * }} The model, the language, the limits and `fail-on` stay text here:
+ *   `parseModel()`, `parseLanguage()`, `parseLimits()` and `parseFailOn()`
+ *   check them.
  */
 function readInputs(core) {
   const inputs = {
@@ -3179,6 +3392,7 @@ function readInputs(core) {
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
     maxComments: core.getInput("max-comments"),
+    failOn: core.getInput("fail-on"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -3427,6 +3641,111 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
   return { selected, overLimit, tooLarge, usedChars };
 }
 
+;// CONCATENATED MODULE: ./src/open-findings.js
+
+
+
+// "critical" first, "info" last.
+const open_findings_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
+
+/**
+ * The earlier findings of this action whose line is still an added line of
+ * the pull request: the code it commented on has not changed since. Each one
+ * stays in the list with its comment, so `countOpenFindings()` can leave out
+ * resolved threads.
+ *
+ * This is a pure function.
+ *
+ * @template {{ fingerprint: string }} E
+ * @param {E[]} earlierFindings `earlierFindings` of `readHistory()`.
+ * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} diffs
+ *   The parsed and masked files of the pull request.
+ * @returns {E[]}
+ */
+function currentEarlierFindings(earlierFindings, diffs) {
+  const current = new Set();
+  for (const diff of diffs) {
+    const prints = lineFingerprintsOf(diff);
+    for (const line of diff.commentableLines) {
+      const print = prints.get(line);
+      if (print) current.add(print);
+    }
+  }
+  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
+}
+
+/**
+ * Counts the findings that are open on the pull request, by severity: the
+ * new findings of this run and the earlier ones that are still current.
+ *
+ * - An earlier finding counts once per fingerprint, even if two comments
+ *   carry it, with the most serious severity of the comments that count.
+ * - A comment whose thread is resolved does not count: a person decided
+ *   that it needs nothing more.
+ * - A new finding never has the fingerprint of an earlier comment:
+ *   `selectFindings()` drops those as known. So nothing counts twice.
+ *
+ * This is a pure function.
+ *
+ * @param {object} options
+ * @param {Record<string, number>} options.newCounts `counts` of
+ *   `selectFindings()`.
+ * @param {{ id: number, fingerprint: string, severity: string }[]} options.earlier
+ *   What `currentEarlierFindings()` returned.
+ * @param {Set<number>} options.resolved Ids of the comments that opened a
+ *   resolved thread.
+ * @returns {{
+ *   total: number,
+ *   bySeverity: Record<string, number>,
+ *   earlier: number,
+ *   resolved: number,
+ * }} `earlier` counts the earlier findings in `total`, `resolved` the
+ *   current earlier findings that a resolved thread leaves out.
+ */
+function countOpenFindings({ newCounts, earlier, resolved }) {
+  const open = new Map();
+  const dismissed = new Set();
+  for (const { id, fingerprint, severity } of earlier) {
+    if (resolved.has(id)) {
+      dismissed.add(fingerprint);
+      continue;
+    }
+    const known = open.get(fingerprint);
+    if (known === undefined || open_findings_RANK.get(severity) < open_findings_RANK.get(known)) {
+      open.set(fingerprint, severity);
+    }
+  }
+
+  const bySeverity = Object.fromEntries(
+    SEVERITIES.map((severity) => [severity, newCounts[severity] ?? 0]),
+  );
+  for (const severity of open.values()) bySeverity[severity] += 1;
+
+  return {
+    total: SEVERITIES.reduce((sum, severity) => sum + bySeverity[severity], 0),
+    bySeverity,
+    earlier: open.size,
+    resolved: [...dismissed].filter((print) => !open.has(print)).length,
+  };
+}
+
+;// CONCATENATED MODULE: ./src/outputs.js
+/**
+ * Sets the outputs of the step. The names are declared in action.yml; a test
+ * keeps both equal.
+ *
+ * Only numbers and the address of the review are set: the address is built
+ * from checked values only (`reviewUrl()`).
+ *
+ * @param {Pick<typeof import("@actions/core"), "setOutput">} core
+ * @param {{ findingsCount: number, criticalCount: number, reviewUrl: string | null }} result
+ */
+function setOutputs(core, { findingsCount, criticalCount, reviewUrl }) {
+  core.setOutput("findings-count", String(findingsCount));
+  core.setOutput("critical-count", String(criticalCount));
+  core.setOutput("review-url", reviewUrl ?? "");
+}
+
 ;// CONCATENATED MODULE: ./src/redact.js
 const PLACEHOLDER = "***";
 
@@ -3604,9 +3923,17 @@ const MAX_PARALLEL_REQUESTS = 4;
  *   succeeded: number,
  *   failed: { paths: string[], error: AiError }[],
  *   shortened: number,
+ *   usage: {
+ *     inputTokens: number,
+ *     outputTokens: number,
+ *     totalTokens: number,
+ *     withoutCount: number,
+ *   },
  * }>} The reviews of the requests that worked, in the order of the batches.
  *   Their texts are bounded and cleaned (`boundReview()`); `shortened`
- *   counts the texts that were cut, over all requests.
+ *   counts the texts that were cut, over all requests. `usage` adds up the
+ *   tokens of the requests that worked; `withoutCount` counts the ones whose
+ *   answer had no token count.
  * @throws Anything that is not an `AiError`: that is a defect, not an
  *   answer of the API.
  */
@@ -3639,7 +3966,7 @@ async function reviewInBatches({
         // The texts are bounded and cleaned right here: nothing after this
         // point sees a text of the model that is not.
         const { review, shortened } = boundReview(parseReview(answer));
-        results[index] = { review, shortened };
+        results[index] = { review, shortened, usage: answer.usage ?? null };
       } catch (error) {
         if (!(error instanceof AiError)) {
           defect ??= { error };
@@ -3659,12 +3986,27 @@ async function reviewInBatches({
   );
   if (defect) throw defect.error;
 
-  const merged = { reviews: [], succeeded: 0, failed: [], shortened: 0 };
+  const merged = {
+    reviews: [],
+    succeeded: 0,
+    failed: [],
+    shortened: 0,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, withoutCount: 0 },
+  };
   batches.forEach((batch, index) => {
     const result = results[index];
     if (result.review) {
       merged.succeeded += 1;
       merged.shortened += result.shortened;
+      // The client hands on a token count only if all three numbers are
+      // whole numbers of at least 0.
+      if (result.usage) {
+        merged.usage.inputTokens += result.usage.inputTokens;
+        merged.usage.outputTokens += result.usage.outputTokens;
+        merged.usage.totalTokens += result.usage.totalTokens;
+      } else {
+        merged.usage.withoutCount += 1;
+      }
       merged.reviews.push({
         files: batch.files,
         summary: result.review.summary,
@@ -3680,7 +4022,215 @@ async function reviewInBatches({
   return merged;
 }
 
+;// CONCATENATED MODULE: ./src/summary.js
+
+
+
+
+/** File names listed in the summary; the rest is counted. */
+const MAX_SUMMARY_FILES = 50;
+
+// A longer path is cut. GitHub allows much longer paths, and the list is
+// meant to be read.
+const summary_MAX_PATH_CHARS = 200;
+
+// The summary of one step may hold 1 MiB. The texts here stay far below.
+const MAX_SUMMARY_CHARS = 60000;
+
+/** What the summary says when nothing is open. */
+const NO_FINDINGS = "No findings.";
+
+/**
+ * The text of the job summary: what the run did, in numbers.
+ *
+ * Nothing in here comes from the model. File names come from the pull
+ * request and stand as inline code, reasons and messages go through
+ * `plainText()`, so the summary shows text, code, tables and the one link to
+ * the review, nothing else.
+ *
+ * @param {object} report What `run()` collected.
+ * @param {string} report.status One sentence on how the run ended.
+ * @param {string | null} [report.error] The message of the error the run
+ *   failed with, already redacted.
+ * @param {{
+ *   reviewed: number,
+ *   skipped: { path: string, reason: string }[],
+ *   alreadyReviewed: number,
+ * } | null} [report.files]
+ * @param {string | null} [report.since] The commit of the earlier review
+ *   when only the new lines were reviewed, 40 hex characters.
+ * @param {{
+ *   bySeverity: Record<string, number>,
+ *   total: number,
+ *   earlier: number,
+ *   resolved: number,
+ *   overLimit: number,
+ *   known: number,
+ * } | null} [report.findings] Open findings, as `countOpenFindings()`
+ *   returned them, and the counts of `selectFindings()`.
+ * @param {{
+ *   inputTokens: number,
+ *   outputTokens: number,
+ *   totalTokens: number,
+ *   withoutCount: number,
+ *   requests: number,
+ *   failed?: number,
+ * } | null} [report.usage] `requests` counts every request that was sent,
+ *   `failed` the ones without an answer; the tokens are those of the
+ *   answered requests.
+ * @param {string | null} [report.reviewUrl] Built from checked values.
+ * @param {{ failOn: string, reached: number } | null} [report.threshold]
+ * @returns {string}
+ */
+function buildSummary({
+  status,
+  error = null,
+  files = null,
+  since = null,
+  findings = null,
+  usage = null,
+  reviewUrl = null,
+  threshold = null,
+}) {
+  const blocks = ["## ReviewOps", plainText(status)];
+  if (error) blocks.push(`**Error:** ${plainText(error)}`);
+  if (reviewUrl) blocks.push(`[Open the review](${reviewUrl})`);
+
+  if (findings) blocks.push(...findingBlocks(findings));
+  if (threshold && threshold.failOn !== "none") {
+    blocks.push(
+      threshold.reached > 0
+        ? `**fail-on: ${threshold.failOn}** — ${threshold.reached} open findings reach the threshold, so the step fails.`
+        : `**fail-on: ${threshold.failOn}** — no open finding reaches the threshold.`,
+    );
+  }
+  if (files) blocks.push(...fileBlocks(files, since));
+  if (usage) blocks.push(...usageBlocks(usage));
+
+  const text = `${blocks.join("\n\n")}\n`;
+  return text.length > MAX_SUMMARY_CHARS
+    ? `${text.slice(0, MAX_SUMMARY_CHARS - 2)}…\n`
+    : text;
+}
+
+function findingBlocks({
+  bySeverity,
+  total,
+  earlier,
+  resolved,
+  overLimit,
+  known,
+}) {
+  const blocks = ["### Findings"];
+  if (total === 0) {
+    blocks.push(NO_FINDINGS);
+  } else {
+    blocks.push(
+      [
+        "| Severity | Open |",
+        "|---|---:|",
+        ...SEVERITIES.map(
+          (severity) =>
+            `| ${SEVERITY_LABELS[severity]} | ${bySeverity[severity]} |`,
+        ),
+        `| **Total** | **${total}** |`,
+      ].join("\n"),
+    );
+    blocks.push(
+      `${total - earlier} found in this run, ${earlier} from earlier comments whose line has not changed.`,
+    );
+  }
+
+  const notes = [];
+  if (resolved > 0) {
+    notes.push(
+      `${resolved} earlier findings are left out: their thread is resolved.`,
+    );
+  }
+  if (known > 0) {
+    notes.push(
+      `${known} findings of this run were commented before and are not posted again.`,
+    );
+  }
+  if (overLimit > 0) {
+    notes.push(
+      `${overLimit} findings are counted, but not shown in the review (\`max-comments\`).`,
+    );
+  }
+  if (notes.length > 0) blocks.push(notes.join(" "));
+  return blocks;
+}
+
+function fileBlocks({ reviewed, skipped, alreadyReviewed }, since) {
+  const rows = [
+    "| Files | Count |",
+    "|---|---:|",
+    `| Reviewed | ${reviewed} |`,
+    `| Skipped | ${skipped.length} |`,
+  ];
+  if (since !== null) {
+    rows.push(
+      `| No new line since ${inlineCode(since.slice(0, 7))} | ${alreadyReviewed} |`,
+    );
+  }
+  const blocks = ["### Files", rows.join("\n")];
+
+  if (skipped.length > 0) {
+    const lines = skipped
+      .slice(0, MAX_SUMMARY_FILES)
+      .map(({ path, reason }) => `- ${summary_pathCode(path)}: ${plainText(reason)}`);
+    if (skipped.length > MAX_SUMMARY_FILES) {
+      lines.push(`- and ${skipped.length - MAX_SUMMARY_FILES} more files`);
+    }
+    blocks.push("#### Skipped files", lines.join("\n"));
+  }
+  return blocks;
+}
+
+function usageBlocks({
+  inputTokens,
+  outputTokens,
+  totalTokens,
+  withoutCount,
+  requests,
+  failed = 0,
+}) {
+  const blocks = [
+    "### Tokens",
+    [
+      "| Input | Output | Total | Requests sent |",
+      "|---:|---:|---:|---:|",
+      `| ${inputTokens} | ${outputTokens} | ${totalTokens} | ${requests} |`,
+    ].join("\n"),
+  ];
+  const notes = [];
+  if (failed > 0) {
+    notes.push(
+      `${failed} requests failed; the tokens they used are not part of the numbers above.`,
+    );
+  }
+  if (withoutCount > 0) {
+    notes.push(
+      `${withoutCount} requests answered without a token count; they are not part of the numbers above.`,
+    );
+  }
+  if (notes.length > 0) blocks.push(notes.join(" "));
+  return blocks;
+}
+
+/** A file name as inline code. File names come from the pull request. */
+function summary_pathCode(path) {
+  return inlineCode(
+    path.length > summary_MAX_PATH_CHARS ? `${path.slice(0, summary_MAX_PATH_CHARS)}…` : path,
+  );
+}
+
 ;// CONCATENATED MODULE: ./src/main.js
+
+
+
+
+
 
 
 
@@ -3715,6 +4265,18 @@ const UNREADABLE_DIFF = "the diff could not be read";
 
 const NOT_REVIEWED = "the request to the model failed";
 
+// The outputs of a run that ended before it looked at the pull request.
+const NOTHING_OPEN = Object.freeze({
+  findingsCount: 0,
+  criticalCount: 0,
+  reviewUrl: null,
+});
+
+// Counts for a run that did not ask the model.
+const NO_NEW_FINDINGS = Object.freeze(
+  Object.fromEntries(SEVERITIES.map((severity) => [severity, 0])),
+);
+
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
  *
@@ -3736,12 +4298,17 @@ async function run({
   createAiClient = client_createAiClient,
 } = {}) {
   let redact = String;
+  // What the job summary shows and what the outputs say. Both are filled
+  // while the run goes on and written at the end, however it ends. The
+  // outputs stay unset when the run fails with an error.
+  const report = { status: "ReviewOps stopped before it reviewed anything." };
+  let outputs = null;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
-      core.notice(
-        `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${context.eventName ?? "unknown"}" and was skipped.`,
-      );
+      report.status = `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${context.eventName ?? "unknown"}" and was skipped.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
       return;
     }
 
@@ -3755,6 +4322,8 @@ async function run({
       const notice = explainMissingSecret(context);
       if (notice) {
         core.notice(notice);
+        report.status = notice;
+        outputs = NOTHING_OPEN;
         return;
       }
     }
@@ -3765,6 +4334,7 @@ async function run({
     const limits = parseLimits(inputs);
     const model = parseModel(inputs.openaiModel);
     const language = parseLanguage(inputs.language);
+    const failOn = parseFailOn(inputs.failOn);
 
     core.info("ReviewOps started.");
 
@@ -3833,6 +4403,65 @@ async function run({
       ({ diffs: scoped, newLines } = scopeDiffs(diffs, history.newLines));
     }
     const alreadyReviewed = diffs.length - scoped.length;
+    if (history.mode === "incremental") report.since = history.since;
+
+    // Earlier findings whose line is still an added line of the pull request
+    // stay open until the code changes or a person resolves their thread.
+    // Only GraphQL knows the resolved threads, and it is only asked when an
+    // earlier finding is still current. Both happen before anything costs
+    // money.
+    const earlier = currentEarlierFindings(history.earlierFindings, diffs);
+    let resolved = new Set();
+    if (earlier.length > 0) {
+      try {
+        resolved = await readResolvedComments(octokit, pullRequest);
+      } catch (error) {
+        // The threads matter for the count only. Without `fail-on` the
+        // review goes on, and every earlier finding counts as open: in
+        // doubt more, never fewer. With `fail-on` the count decides about
+        // the step, so it must be right.
+        if (!(error instanceof ThreadsUnavailableError) || failOn !== "none") {
+          throw error;
+        }
+        core.warning(
+          redact(
+            `${error.message} Every earlier finding of ReviewOps counts as open.`,
+          ),
+        );
+      }
+    }
+
+    // Every regular end of the run counts the open findings, sets the
+    // outputs and applies `fail-on`, also when nothing was sent to the
+    // model: a run that has nothing new must not turn a red check green.
+    const conclude = ({ newCounts, known = 0, overLimit = 0, url = null }) => {
+      const open = countOpenFindings({ newCounts, earlier, resolved });
+      report.findings = { ...open, known, overLimit };
+      report.reviewUrl = url;
+      outputs = {
+        findingsCount: open.total,
+        criticalCount: open.bySeverity.critical,
+        reviewUrl: url,
+      };
+      // Numbers only. Without earlier findings the open ones are the ones
+      // of this run, which the log names already.
+      if (open.earlier > 0 || open.resolved > 0) {
+        core.info(
+          `Open findings: ${open.total} (${SEVERITIES.map((severity) => `${open.bySeverity[severity]} ${severity}`).join(", ")}), ${open.earlier} of them from earlier comments; ${open.resolved} earlier findings are left out because their thread is resolved.`,
+        );
+      }
+
+      const reached = findingsAtThreshold(open.bySeverity, failOn);
+      report.threshold = { failOn, reached };
+      if (reached > 0) {
+        const where =
+          url ??
+          `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
+        core.setFailed(
+          `ReviewOps found ${reached} open findings at or above the severity "${failOn}" (fail-on: ${failOn}): ${where}. Fix them, or resolve the thread of a finding that needs no change.`,
+        );
+      }
+    };
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
@@ -3857,6 +4486,7 @@ async function run({
       ...excluded,
       ...listing.skipped,
     ];
+    report.files = { reviewed: 0, skipped, alreadyReviewed };
     core.info(
       `Found ${selected.length + skipped.length + alreadyReviewed} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
@@ -3922,11 +4552,12 @@ async function run({
     // Everything that costs money or posts something comes after this
     // point: a pull request without reviewable files ends here.
     if (selected.length === 0) {
-      core.notice(
+      report.status =
         scoped.length === 0 && alreadyReviewed > 0
           ? `ReviewOps found no new lines to review since commit ${history.since}. A green run does not mean that new changes were reviewed.`
-          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
-      );
+          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.";
+      core.notice(report.status);
+      conclude({ newCounts: NO_NEW_FINDINGS });
       return;
     }
 
@@ -3959,6 +4590,19 @@ async function run({
     if (review.succeeded === 0) throw review.failed[0].error;
 
     const notReviewed = review.failed.flatMap(({ paths }) => paths);
+    report.usage = {
+      ...review.usage,
+      requests: batches.length,
+      failed: review.failed.length,
+    };
+    report.files = {
+      reviewed: selected.length - notReviewed.length,
+      skipped: [
+        ...skipped,
+        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
+      ],
+      alreadyReviewed,
+    };
     if (review.failed.length > 0) {
       // The messages of the client are its own texts, without anything from
       // the answer of the API.
@@ -3989,13 +4633,19 @@ async function run({
 
     // Every finding is checked against the files of its own request: only an
     // added line of such a file can carry an inline comment.
-    const { inline, fingerprints, unplaced, unplacedFingerprints, dropped } =
-      selectFindings({
-        reviews: review.reviews,
-        maxComments: limits.maxComments,
-        newLines,
-        known: history.fingerprints,
-      });
+    const {
+      inline,
+      fingerprints,
+      unplaced,
+      unplacedFingerprints,
+      dropped,
+      counts: newCounts,
+    } = selectFindings({
+      reviews: review.reviews,
+      maxComments: limits.maxComments,
+      newLines,
+      known: history.fingerprints,
+    });
     const shown = [...inline, ...unplaced];
     // A later run does not start at a review whose gaps a new run can fill: a
     // request that failed, and findings over max-comments (the ones posted
@@ -4024,7 +4674,9 @@ async function run({
     // An empty review would only notify people. Files that were not
     // reviewed are named in the log above.
     if (shown.length === 0) {
-      core.info("No findings, so no review was posted.");
+      report.status = "No findings, so no review was posted.";
+      core.info(report.status);
+      conclude({ newCounts, known: dropped.known });
       return;
     }
 
@@ -4045,10 +4697,7 @@ async function run({
       maxComments: limits.maxComments,
       incomplete,
       since: history.since,
-      skipped: [
-        ...skipped,
-        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
-      ],
+      skipped: report.files.skipped,
     });
     const where =
       posted.reviewId === null
@@ -4059,17 +4708,24 @@ async function run({
             posted.reviewId,
           );
     if (posted.fallback) {
-      core.warning(
-        `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review: ${where}`,
-      );
+      report.status = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review.`;
+      core.warning(`${report.status.slice(0, -1)}: ${where}`);
     } else {
-      core.info(
-        `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text: ${where}`,
-      );
+      report.status = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text.`;
+      core.info(`${report.status.slice(0, -1)}: ${where}`);
     }
+    conclude({
+      newCounts,
+      known: dropped.known,
+      overLimit: dropped.overLimit,
+      url: posted.reviewId === null ? null : where,
+    });
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
-    core.setFailed(redact(main_describe(error)));
+    const message = redact(main_describe(error));
+    core.setFailed(message);
+    report.status = "ReviewOps failed.";
+    report.error = message;
 
     try {
       if (error instanceof Error && error.stack) {
@@ -4081,6 +4737,26 @@ async function run({
     } catch {
       // A broken debug log must not hide the failure reported above.
     }
+  } finally {
+    await finish(core, report, outputs);
+  }
+}
+
+/**
+ * Sets the outputs and writes the job summary. Neither may fail the run: the
+ * review is posted already, and a runner without a summary file is no
+ * reason for a red step. The warnings name no path and no message.
+ */
+async function finish(core, report, outputs) {
+  try {
+    if (outputs) setOutputs(core, outputs);
+  } catch {
+    core.warning("The outputs of the step could not be set.");
+  }
+  try {
+    await core.summary.addRaw(buildSummary(report), true).write();
+  } catch {
+    core.warning("The job summary could not be written.");
   }
 }
 

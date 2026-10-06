@@ -35,6 +35,8 @@ const NOTHING_DROPPED = {
   overLimit: 0,
 };
 
+const NO_COUNTS = { critical: 0, major: 0, minor: 0, info: 0 };
+
 // --- Empty answers -----------------------------------------------------------
 
 test("returns nothing for an empty list of findings", () => {
@@ -44,6 +46,7 @@ test("returns nothing for an empty list of findings", () => {
     unplaced: [],
     unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
+    counts: NO_COUNTS,
   });
 });
 
@@ -54,6 +57,7 @@ test("returns nothing when no request worked", () => {
     unplaced: [],
     unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
+    counts: NO_COUNTS,
   });
 });
 
@@ -604,4 +608,90 @@ test("drops a finding at a context line of a file without a new line", () => {
 
   assert.deepEqual(result.unplaced, []);
   assert.equal(result.dropped.notNew, 1);
+});
+
+// --- Counts by severity ------------------------------------------------------
+
+test("counts the kept findings by severity", () => {
+  const result = select([
+    reviewOf(
+      ["a.js"],
+      [
+        finding("a.js", 1, "critical"),
+        finding("a.js", 2, "major"),
+        finding("a.js", 3, "major"),
+        finding("a.js", 9, "info"),
+      ],
+    ),
+  ]);
+  assert.deepEqual(result.counts, {
+    critical: 1,
+    major: 2,
+    minor: 0,
+    info: 1,
+  });
+});
+
+test("counts the findings over max-comments as well", () => {
+  const findings = Array.from({ length: 5 }, (_, index) =>
+    finding("a.js", index + 1, "critical"),
+  );
+  const result = select([reviewOf(["a.js"], findings)], 2);
+
+  assert.equal(result.inline.length, 2);
+  assert.equal(result.dropped.overLimit, 3);
+  assert.equal(result.counts.critical, 5);
+});
+
+test("does not count dropped findings", () => {
+  const known = lineFingerprint("a.js", "known", "");
+  const file = {
+    path: "a.js",
+    commentableLines: [1, 2],
+    hunks: [
+      {
+        lines: [
+          { type: "add", line: 1, content: "known" },
+          { type: "add", line: 2, content: "fresh" },
+        ],
+      },
+    ],
+  };
+  const result = selectFindings({
+    reviews: [
+      {
+        files: [file],
+        summary: "",
+        findings: [
+          // Empty, unknown path, duplicate, known.
+          { ...finding("a.js", 2, "critical"), title: " " },
+          finding("b.js", 2, "critical"),
+          finding("a.js", 2, "minor", "Same"),
+          finding("a.js", 2, "minor", "same"),
+          finding("a.js", 1, "critical"),
+        ],
+      },
+    ],
+    maxComments: 10,
+    known: new Set([known]),
+  });
+  assert.equal(result.dropped.empty, 1);
+  assert.equal(result.dropped.unknownPath, 1);
+  assert.equal(result.dropped.duplicate, 1);
+  assert.equal(result.dropped.known, 1);
+  assert.deepEqual(result.counts, { ...NO_COUNTS, minor: 1 });
+});
+
+test("does not count findings outside of the new lines", () => {
+  const result = selectFindings({
+    reviews: [
+      reviewOf(
+        ["a.js"],
+        [finding("a.js", 1, "critical"), finding("a.js", 2, "major")],
+      ),
+    ],
+    maxComments: 10,
+    newLines: new Map([["a.js", new Set([2])]]),
+  });
+  assert.deepEqual(result.counts, { ...NO_COUNTS, major: 1 });
 });

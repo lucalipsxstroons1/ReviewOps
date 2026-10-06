@@ -18,6 +18,42 @@ export function apiFile(filename, fields = {}) {
   return { changes: entry.additions + entry.deletions, ...entry };
 }
 
+/**
+ * One review thread in the shape of GitHub's GraphQL answer.
+ *
+ * @param {number} id The id of the comment that opened the thread.
+ * @param {boolean} [isResolved]
+ */
+export const apiThread = (id, isResolved = false) => ({
+  isResolved,
+  comments: { nodes: [{ databaseId: id }] },
+});
+
+// Threads per page of the GraphQL answer, like GitHub.
+const THREAD_PAGE_SIZE = 100;
+
+/**
+ * The answer to the query for the review threads: one page of `threads`,
+ * starting at the cursor, which is the index of the first thread as text.
+ */
+export function threadPage(threads, cursor) {
+  const start = cursor ? Number(cursor.replace("cursor-", "")) : 0;
+  const end = start + THREAD_PAGE_SIZE;
+  return {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          pageInfo: {
+            hasNextPage: end < threads.length,
+            endCursor: end < threads.length ? `cursor-${end}` : null,
+          },
+          nodes: threads.slice(start, end),
+        },
+      },
+    },
+  };
+}
+
 /** `count` ordinary modified files with distinct names. */
 export const apiFiles = (count) =>
   Array.from({ length: count }, (_, index) => apiFile(`src/file-${index}.js`));
@@ -38,14 +74,24 @@ export const apiFiles = (count) =>
  * @param {(parameters: object) => { status: string, files?: object[] } | Error} [options.compare]
  *   Answers a comparison of two commits. Without it, every comparison fails
  *   with 404. The files are served in pages like GitHub does.
+ * @param {object[] | ((variables: object) => object | Error)} [options.threads]
+ *   The review threads (`apiThread()`), served in pages, or a function that
+ *   answers the GraphQL query. Without it, the pull request has no threads.
  */
 export function createFakeOctokit(
   entries = [],
-  { createReview, existingReviews = [], existingComments = [], compare } = {},
+  {
+    createReview,
+    existingReviews = [],
+    existingComments = [],
+    compare,
+    threads = [],
+  } = {},
 ) {
   const calls = [];
   const reviews = [];
   const comparisons = [];
+  const queries = [];
   const endpointCalled = () => {
     throw new Error("the endpoint must be passed to paginate, not called");
   };
@@ -57,6 +103,16 @@ export function createFakeOctokit(
     calls,
     reviews,
     comparisons,
+    queries,
+    graphql: async (query, variables) => {
+      queries.push({ query, variables });
+      const answer =
+        typeof threads === "function"
+          ? threads(variables)
+          : threadPage(threads, variables.cursor);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
     rest: {
       repos: {
         compareCommitsWithBasehead: async (parameters) => {
@@ -130,6 +186,9 @@ export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
  *   Answers a comparison of two commits, given as "base...head". Without it,
  *   every comparison fails with 404. The files of the body are split into
  *   pages.
+ * @param {object[] | ((variables: object) => { status: number, body: object })} [answer.threads]
+ *   The review threads (`apiThread()`) for the GraphQL query, served in pages,
+ *   or a function that answers the query. Without it, there are no threads.
  * @returns {Promise<{
  *   url: string,
  *   requests: { method: string, path: string, authorization: string | undefined, body: any }[],
@@ -147,6 +206,7 @@ export async function startGitHubApi(
     existingReviews = [],
     existingComments = [],
     compare,
+    threads = [],
   } = {},
 ) {
   const requests = [];
@@ -195,6 +255,19 @@ export async function startGitHubApi(
         ? reviews(recorded, index)
         : { status: 200, body: { id: 1000 + index } };
       json(chosen.status, chosen.body ?? { message: "Validation Failed" });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/graphql") {
+      const variables = body?.variables ?? {};
+      const chosen =
+        typeof threads === "function"
+          ? threads(variables)
+          : {
+              status: 200,
+              body: { data: threadPage(threads, variables.cursor) },
+            };
+      json(chosen.status, chosen.body);
       return;
     }
 

@@ -19,16 +19,24 @@ import {
   isSensitiveFile,
 } from "./exclude.js";
 import { selectFindings } from "./findings.js";
+import { findingsAtThreshold, parseFailOn } from "./fail-on.js";
 import { explainMissingSecret, readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
 import { readHistory, scopeDiffs } from "./github/history.js";
 import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
+import {
+  ThreadsUnavailableError,
+  readResolvedComments,
+} from "./github/threads.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { applyLimits, parseLimits } from "./limits.js";
+import { countOpenFindings, currentEarlierFindings } from "./open-findings.js";
+import { setOutputs } from "./outputs.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
 import { reviewInBatches } from "./review.js";
 import { maskSecrets } from "./secrets.js";
+import { buildSummary } from "./summary.js";
 
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
@@ -41,6 +49,18 @@ const MAX_SKIPPED_LINES = 50;
 const UNREADABLE_DIFF = "the diff could not be read";
 
 const NOT_REVIEWED = "the request to the model failed";
+
+// The outputs of a run that ended before it looked at the pull request.
+const NOTHING_OPEN = Object.freeze({
+  findingsCount: 0,
+  criticalCount: 0,
+  reviewUrl: null,
+});
+
+// Counts for a run that did not ask the model.
+const NO_NEW_FINDINGS = Object.freeze(
+  Object.fromEntries(SEVERITIES.map((severity) => [severity, 0])),
+);
 
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
@@ -63,12 +83,17 @@ export async function run({
   createAiClient = aiCreateClient,
 } = {}) {
   let redact = String;
+  // What the job summary shows and what the outputs say. Both are filled
+  // while the run goes on and written at the end, however it ends. The
+  // outputs stay unset when the run fails with an error.
+  const report = { status: "ReviewOps stopped before it reviewed anything." };
+  let outputs = null;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
-      core.notice(
-        `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${context.eventName ?? "unknown"}" and was skipped.`,
-      );
+      report.status = `ReviewOps runs only on the "${SUPPORTED_EVENT}" event. This run was triggered by "${context.eventName ?? "unknown"}" and was skipped.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
       return;
     }
 
@@ -82,6 +107,8 @@ export async function run({
       const notice = explainMissingSecret(context);
       if (notice) {
         core.notice(notice);
+        report.status = notice;
+        outputs = NOTHING_OPEN;
         return;
       }
     }
@@ -92,6 +119,7 @@ export async function run({
     const limits = parseLimits(inputs);
     const model = parseModel(inputs.openaiModel);
     const language = parseLanguage(inputs.language);
+    const failOn = parseFailOn(inputs.failOn);
 
     core.info("ReviewOps started.");
 
@@ -160,6 +188,65 @@ export async function run({
       ({ diffs: scoped, newLines } = scopeDiffs(diffs, history.newLines));
     }
     const alreadyReviewed = diffs.length - scoped.length;
+    if (history.mode === "incremental") report.since = history.since;
+
+    // Earlier findings whose line is still an added line of the pull request
+    // stay open until the code changes or a person resolves their thread.
+    // Only GraphQL knows the resolved threads, and it is only asked when an
+    // earlier finding is still current. Both happen before anything costs
+    // money.
+    const earlier = currentEarlierFindings(history.earlierFindings, diffs);
+    let resolved = new Set();
+    if (earlier.length > 0) {
+      try {
+        resolved = await readResolvedComments(octokit, pullRequest);
+      } catch (error) {
+        // The threads matter for the count only. Without `fail-on` the
+        // review goes on, and every earlier finding counts as open: in
+        // doubt more, never fewer. With `fail-on` the count decides about
+        // the step, so it must be right.
+        if (!(error instanceof ThreadsUnavailableError) || failOn !== "none") {
+          throw error;
+        }
+        core.warning(
+          redact(
+            `${error.message} Every earlier finding of ReviewOps counts as open.`,
+          ),
+        );
+      }
+    }
+
+    // Every regular end of the run counts the open findings, sets the
+    // outputs and applies `fail-on`, also when nothing was sent to the
+    // model: a run that has nothing new must not turn a red check green.
+    const conclude = ({ newCounts, known = 0, overLimit = 0, url = null }) => {
+      const open = countOpenFindings({ newCounts, earlier, resolved });
+      report.findings = { ...open, known, overLimit };
+      report.reviewUrl = url;
+      outputs = {
+        findingsCount: open.total,
+        criticalCount: open.bySeverity.critical,
+        reviewUrl: url,
+      };
+      // Numbers only. Without earlier findings the open ones are the ones
+      // of this run, which the log names already.
+      if (open.earlier > 0 || open.resolved > 0) {
+        core.info(
+          `Open findings: ${open.total} (${SEVERITIES.map((severity) => `${open.bySeverity[severity]} ${severity}`).join(", ")}), ${open.earlier} of them from earlier comments; ${open.resolved} earlier findings are left out because their thread is resolved.`,
+        );
+      }
+
+      const reached = findingsAtThreshold(open.bySeverity, failOn);
+      report.threshold = { failOn, reached };
+      if (reached > 0) {
+        const where =
+          url ??
+          `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
+        core.setFailed(
+          `ReviewOps found ${reached} open findings at or above the severity "${failOn}" (fail-on: ${failOn}): ${where}. Fix them, or resolve the thread of a finding that needs no change.`,
+        );
+      }
+    };
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
@@ -184,6 +271,7 @@ export async function run({
       ...excluded,
       ...listing.skipped,
     ];
+    report.files = { reviewed: 0, skipped, alreadyReviewed };
     core.info(
       `Found ${selected.length + skipped.length + alreadyReviewed} changed files: ${selected.length} to review, ${skipped.length} skipped.`,
     );
@@ -249,11 +337,12 @@ export async function run({
     // Everything that costs money or posts something comes after this
     // point: a pull request without reviewable files ends here.
     if (selected.length === 0) {
-      core.notice(
+      report.status =
         scoped.length === 0 && alreadyReviewed > 0
           ? `ReviewOps found no new lines to review since commit ${history.since}. A green run does not mean that new changes were reviewed.`
-          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.",
-      );
+          : "ReviewOps found no files to review in this pull request. The log lists the skipped files.";
+      core.notice(report.status);
+      conclude({ newCounts: NO_NEW_FINDINGS });
       return;
     }
 
@@ -286,6 +375,19 @@ export async function run({
     if (review.succeeded === 0) throw review.failed[0].error;
 
     const notReviewed = review.failed.flatMap(({ paths }) => paths);
+    report.usage = {
+      ...review.usage,
+      requests: batches.length,
+      failed: review.failed.length,
+    };
+    report.files = {
+      reviewed: selected.length - notReviewed.length,
+      skipped: [
+        ...skipped,
+        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
+      ],
+      alreadyReviewed,
+    };
     if (review.failed.length > 0) {
       // The messages of the client are its own texts, without anything from
       // the answer of the API.
@@ -316,13 +418,19 @@ export async function run({
 
     // Every finding is checked against the files of its own request: only an
     // added line of such a file can carry an inline comment.
-    const { inline, fingerprints, unplaced, unplacedFingerprints, dropped } =
-      selectFindings({
-        reviews: review.reviews,
-        maxComments: limits.maxComments,
-        newLines,
-        known: history.fingerprints,
-      });
+    const {
+      inline,
+      fingerprints,
+      unplaced,
+      unplacedFingerprints,
+      dropped,
+      counts: newCounts,
+    } = selectFindings({
+      reviews: review.reviews,
+      maxComments: limits.maxComments,
+      newLines,
+      known: history.fingerprints,
+    });
     const shown = [...inline, ...unplaced];
     // A later run does not start at a review whose gaps a new run can fill: a
     // request that failed, and findings over max-comments (the ones posted
@@ -351,7 +459,9 @@ export async function run({
     // An empty review would only notify people. Files that were not
     // reviewed are named in the log above.
     if (shown.length === 0) {
-      core.info("No findings, so no review was posted.");
+      report.status = "No findings, so no review was posted.";
+      core.info(report.status);
+      conclude({ newCounts, known: dropped.known });
       return;
     }
 
@@ -372,10 +482,7 @@ export async function run({
       maxComments: limits.maxComments,
       incomplete,
       since: history.since,
-      skipped: [
-        ...skipped,
-        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
-      ],
+      skipped: report.files.skipped,
     });
     const where =
       posted.reviewId === null
@@ -386,17 +493,24 @@ export async function run({
             posted.reviewId,
           );
     if (posted.fallback) {
-      core.warning(
-        `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review: ${where}`,
-      );
+      report.status = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review.`;
+      core.warning(`${report.status.slice(0, -1)}: ${where}`);
     } else {
-      core.info(
-        `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text: ${where}`,
-      );
+      report.status = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text.`;
+      core.info(`${report.status.slice(0, -1)}: ${where}`);
     }
+    conclude({
+      newCounts,
+      known: dropped.known,
+      overLimit: dropped.overLimit,
+      url: posted.reviewId === null ? null : where,
+    });
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
-    core.setFailed(redact(describe(error)));
+    const message = redact(describe(error));
+    core.setFailed(message);
+    report.status = "ReviewOps failed.";
+    report.error = message;
 
     try {
       if (error instanceof Error && error.stack) {
@@ -408,6 +522,26 @@ export async function run({
     } catch {
       // A broken debug log must not hide the failure reported above.
     }
+  } finally {
+    await finish(core, report, outputs);
+  }
+}
+
+/**
+ * Sets the outputs and writes the job summary. Neither may fail the run: the
+ * review is posted already, and a runner without a summary file is no
+ * reason for a red step. The warnings name no path and no message.
+ */
+async function finish(core, report, outputs) {
+  try {
+    if (outputs) setOutputs(core, outputs);
+  } catch {
+    core.warning("The outputs of the step could not be set.");
+  }
+  try {
+    await core.summary.addRaw(buildSummary(report), true).write();
+  } catch {
+    core.warning("The job summary could not be written.");
   }
 }
 

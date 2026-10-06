@@ -13,6 +13,7 @@ test("reads all inputs", () => {
     "max-files": "10",
     "max-diff-chars": "5000",
     "max-comments": "20",
+    "fail-on": "critical",
   });
 
   assert.deepEqual(readInputs(core), {
@@ -24,6 +25,7 @@ test("reads all inputs", () => {
     maxFiles: "10",
     maxDiffChars: "5000",
     maxComments: "20",
+    failOn: "critical",
   });
 });
 

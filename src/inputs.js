@@ -14,8 +14,10 @@
  *   maxFiles: string,
  *   maxDiffChars: string,
  *   maxComments: string,
- * }} The model, the language and the limits stay text here: `parseModel()`,
- *   `parseLanguage()` and `parseLimits()` check them.
+ *   failOn: string,
+ * }} The model, the language, the limits and `fail-on` stay text here:
+ *   `parseModel()`, `parseLanguage()`, `parseLimits()` and `parseFailOn()`
+ *   check them.
  */
 export function readInputs(core) {
   const inputs = {
@@ -27,6 +29,7 @@ export function readInputs(core) {
     maxFiles: core.getInput("max-files"),
     maxDiffChars: core.getInput("max-diff-chars"),
     maxComments: core.getInput("max-comments"),
+    failOn: core.getInput("fail-on"),
   };
 
   for (const secret of secretsOf(inputs)) {

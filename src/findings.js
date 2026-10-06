@@ -62,10 +62,13 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  *     known: number,
  *     overLimit: number,
  *   },
+ *   counts: Record<string, number>,
  * }} `inline` and `unplaced` together hold at most `maxComments` findings,
  *   each list sorted by severity. A fingerprint belongs to the finding at the
  *   same place of its list and is `null` when the diff does not show the
- *   line.
+ *   line. `counts` holds the findings of every severity after step 5 and
+ *   before the limit of step 7, so the limit for the review never hides a
+ *   finding from the count.
  */
 export function selectFindings({
   reviews,
@@ -141,6 +144,13 @@ export function selectFindings({
     return true;
   });
 
+  const counts = Object.fromEntries(
+    SEVERITIES.map((severity) => [
+      severity,
+      fresh.filter((item) => item.finding.severity === severity).length,
+    ]),
+  );
+
   // Array.prototype.sort is stable: equal severities keep their order.
   fresh.sort((a, b) => rank(a.finding) - rank(b.finding));
   const shown = fresh.slice(0, maxComments);
@@ -154,6 +164,7 @@ export function selectFindings({
     unplaced: listed.map(({ finding }) => finding),
     unplacedFingerprints: listed.map(({ fingerprint }) => fingerprint),
     dropped,
+    counts,
   };
 }
 

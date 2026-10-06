@@ -43,14 +43,14 @@ The workflow that runs the action grants these permissions and no others:
 - `contents: read`
 - `pull-requests: write`
 
-The action reads the changed files, the reviews and the review comments of the pull request and compares commits through the GitHub API. It does not read the working tree of the runner. With `pull-requests: write` it posts one review of the type `COMMENT` per run, with its inline comments at added lines of the diff, and only when there are findings. Without that right the step fails with a message that points at `permissions`.
+The action reads the changed files, the reviews and the review comments of the pull request and compares commits through the GitHub API. When an earlier finding is still open, it also asks the GraphQL API which review threads are resolved; REST does not say that. It does not read the working tree of the runner. With `pull-requests: write` it posts one review of the type `COMMENT` per run, with its inline comments at added lines of the diff, and only when there are findings. Without that right the step fails with a message that points at `permissions`.
 
 ## Repeated runs on one pull request
 
 Every push to a pull request starts a new run. Without a countermeasure, the same comments would appear again and again. ReviewOps avoids that in two ways, and it reads from GitHub to do so:
 
 - **Only what is new.** The action lists the reviews and the review comments of the pull request. A review or a comment counts as its own only if its text starts with `<!-- reviewops -->` **and** GitHub shows a bot as its author. The `commit_id` of its newest review is the last commit it reviewed. The action compares that commit with the head, and a file that has no new line since then is not sent to the model again. A line is new if it is added in the comparison and in the diff of the pull request, so lines that only came with a merge of the base branch do not count.
-- **Fingerprints.** The second line of every inline comment is `<!-- reviewops-fingerprint: … -->` with the first 16 hex characters of a SHA-256 hash over the path and the text of the commented line (white space reduced to one space). The text comes from the masked diff, so the hash never depends on a secret. The text of the line before it is part of the hash, so equal lines such as a closing brace get different fingerprints as long as their surroundings differ. A finding at a line with a known fingerprint is not posted again, also when the thread was resolved. Findings that stand in the text of a review (a line outside of the added lines) carry their fingerprint in the head of that review text, right below the marker. Only the lines directly below the marker are read, never the text further down, which comes from the model.
+- **Fingerprints.** The second line of every inline comment is `<!-- reviewops-fingerprint: … -->` with the first 16 hex characters of a SHA-256 hash over the path and the text of the commented line (white space reduced to one space). The text comes from the masked diff, so the hash never depends on a secret. The text of the line before it is part of the hash, so equal lines such as a closing brace get different fingerprints as long as their surroundings differ. An inline comment adds the severity of its finding to that line (`severity: critical`), so a later run can count the open findings without reading the text of the model. A finding at a line with a known fingerprint is not posted again, also when the thread was resolved. Findings that stand in the text of a review (a line outside of the added lines) carry their fingerprint in the head of that review text, right below the marker. Only the lines directly below the marker are read, never the text further down, which comes from the model.
 
 When something does not fit, the action checks more, never less: with no earlier review, after a force-push or a rebase (the comparison fails or is not a plain continuation) and when GitHub does not list every file of the comparison, the whole pull request is reviewed again. Comments with a known fingerprint are still not repeated.
 
@@ -62,6 +62,19 @@ Limits you should know:
 - If the workflow uses a personal access token instead of `GITHUB_TOKEN`, GitHub shows the author as a user, not as a bot. The action does not recognise its own reviews and comments then. It reviews the whole pull request on every run, and its comments repeat.
 - A finding for a line that the diff does not show has no fingerprint. A run that reviews only new lines drops it; a run that reviews the whole pull request can report it again.
 - The action needs `contents: read` to compare commits, which the workflow already grants.
+
+## Job summary, outputs and fail-on
+
+Every run writes a job summary on the page of the workflow run. It shows how the run ended, the reviewed and the skipped files, the open findings by severity, the tokens of the requests and a link to the review. It holds no text of the model: no summary, no title, no comment. File names come from the pull request and stand as code; reasons and messages are escaped like the texts of a review, so the summary shows no link except the one to the review and no HTML. A failed run names its error, after the same redaction as the log. If the summary cannot be written, the step ends with a warning, not with an error.
+
+The step sets three outputs: `findings-count`, `critical-count` and `review-url`. They are numbers and the address of the review, built from checked values. A run that fails with an error sets none of them.
+
+**Open findings** are the findings of this run and the earlier inline comments of ReviewOps whose line is still an added line of the pull request, unchanged (same fingerprint). The counts are taken before `max-comments` cuts the review, so the limit for the review never hides a finding from them. With `fail-on: critical` or `fail-on: major`, the step fails when open findings reach that severity, and only after the review is posted. A run that has nothing new, such as a second run on the same commit, counts the earlier findings as well and stays red. The default is `none`: no finding fails the workflow.
+
+- If GitHub does not answer the query for the resolved threads, a run without `fail-on` goes on with a warning and counts every earlier finding as open. With `fail-on` the count decides about the step, so the run fails before any request to the model.
+- A person who resolves the thread of an earlier comment takes its finding out of the count. Everyone who may resolve threads can do that, including the author of the pull request. The resolved thread stays visible in the pull request. The finding is still not posted again.
+- Findings in the text of a review (a line outside of the added lines, or all findings after GitHub rejected the inline comments) have no thread and are counted only in the run that found them.
+- Comments from before the severity was written, and comments posted with a personal access token, are not counted later.
 
 ## Events, forks and Dependabot
 
@@ -84,4 +97,4 @@ The answer is untrusted input. It comes from a model that reads text written by 
 
 ## What is not in the log
 
-The log never contains the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.
+The log and the job summary never contain the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.

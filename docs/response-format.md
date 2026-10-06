@@ -103,7 +103,9 @@ changed.
   the comparison answers 404, `diverged` or `behind` (force-push, rebase), or
   when GitHub did not list every file of the comparison.
 - The second line of every inline comment is
-  `<!-- reviewops-fingerprint: <16 hex characters> -->`. The fingerprint is the
+  `<!-- reviewops-fingerprint: <16 hex characters> severity: <severity> -->`.
+  The severity lets a later run count the findings that are still open (see
+  below); a line in the head of a review text has none. The fingerprint is the
   start of the SHA-256 hash over the path, the text of the line and the text of
   the line before it in the hunk (white space reduced to one space), taken from the masked diff. It stays the same when the
   line moves and changes when the text changes. A line with a known fingerprint
@@ -117,3 +119,16 @@ the text of the review carries its fingerprint in the head of the review
 
 The log shows only the numbers of each step, never a path or a text of a
 finding.
+
+### Open findings
+
+The outputs `findings-count` and `critical-count`, the job summary and
+`fail-on` count the open findings:
+
+- the findings of this run after step 5, before the limit of step 7;
+- the earlier inline comments of ReviewOps whose fingerprint is still the one
+  of an added line of the pull request, once per fingerprint, with the most
+  serious severity, unless the thread of the comment is resolved.
+
+A finding of this run that step 5 drops counts through its earlier comment,
+so nothing counts twice.

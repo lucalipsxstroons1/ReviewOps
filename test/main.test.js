@@ -22,6 +22,7 @@ import {
   createFakeOctokit,
 } from "./helpers/github-api.js";
 import { lineFingerprint } from "../src/fingerprint.js";
+import { fingerprintLine } from "../src/github/review.js";
 import { REVIEWING_LINE } from "./helpers/run-action.js";
 
 const VALID_INPUTS = {
@@ -390,7 +391,10 @@ test("ends green with a notice when only a lockfile changed", async () => {
   assert.deepEqual(core.messages("warning"), []);
   // The run stops at the notice. Nothing was parsed, and nothing that a
   // later step adds, such as a request to the model, can run after it.
-  assert.equal(core.calls.at(-1).method, "notice");
+  assert.equal(
+    core.calls.filter(({ method }) => method !== "setOutput").at(-1).method,
+    "notice",
+  );
   assert.deepEqual(parsed, []);
 });
 
@@ -691,7 +695,10 @@ test("ends green with a notice when no file fits the budget", async () => {
     /Parsed the diffs|Diff size/,
   );
   // The run stops at the notice, before anything that costs money.
-  assert.equal(core.calls.at(-1).method, "notice");
+  assert.equal(
+    core.calls.filter(({ method }) => method !== "setOutput").at(-1).method,
+    "notice",
+  );
 });
 
 test("does not fail on a very large pull request", async () => {
@@ -1901,4 +1908,420 @@ test("does not mark a review as incomplete when files are left out by a limit", 
 
   assert.equal(octokit.reviews.length, 1);
   assert.ok(!octokit.reviews[0].body.includes("reviewops-incomplete"));
+});
+
+// --- Job summary, outputs and fail-on (#19) ----------------------------------
+
+/** One file with two added lines; the second one carries the findings. */
+const APP_FILE = apiFile("src/app.js", {
+  patch: "@@ -0,0 +1,2 @@\n+let a = 1;\n+let b = 2;",
+});
+const APP_LINE_2 = lineFingerprint("src/app.js", "let b = 2;", "let a = 1;");
+
+/** An inline comment of an earlier run at line 2 of APP_FILE. */
+const earlierComment = (id, severity, fingerprint = APP_LINE_2) => ({
+  id,
+  body: `<!-- reviewops -->\n${fingerprintLine(fingerprint, severity)}\n\ntext`,
+  user: { type: "Bot" },
+});
+
+/** The answer of the model with one finding at line 2 of APP_FILE. */
+const findingAtLine2 = (severity) => () =>
+  modelAnswer([modelFinding("src/app.js", severity, "x", 2)]);
+
+/** An Octokit stand-in that records a posted review among the core calls. */
+function recordingOctokit(core, files, options = {}) {
+  return createFakeOctokit(files, {
+    ...options,
+    createReview: (parameters, index) => {
+      core.calls.push({ method: "createReview", args: [] });
+      return { status: 200, data: { id: 1000 + index } };
+    },
+  });
+}
+
+const REVIEW_ADDRESS =
+  "https://github.com/octo-org/demo/pull/42#pullrequestreview-1000";
+
+/** The written summary without the backslashes that escape punctuation. */
+const shownSummary = (core, index = 0) =>
+  core.summaries[index].replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
+test("writes the job summary and sets the outputs after posting a review", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE]);
+  const ai = createFakeAi(() => ({
+    ...findingAtLine2("critical")(),
+    usage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 },
+  }));
+
+  await runWith(core, { octokit, ai });
+
+  assert.deepEqual(core.outputs, {
+    "findings-count": "1",
+    "critical-count": "1",
+    "review-url": REVIEW_ADDRESS,
+  });
+  assert.equal(core.summaries.length, 1);
+  const [summary] = core.summaries;
+  assert.match(summary, /^## ReviewOps$/m);
+  assert.match(shownSummary(core), /Posted a review with 1 inline comments/);
+  assert.match(summary, /\| Reviewed \| 1 \|/);
+  assert.match(summary, /\| 🔴 Critical \| 1 \|/);
+  assert.match(summary, /\| 900 \| 100 \| 1000 \| 1 \|/);
+  assert.ok(summary.includes(`[Open the review](${REVIEW_ADDRESS})`));
+  // Nothing of the model's text.
+  assert.doesNotMatch(summary, /Nothing stands out/);
+});
+
+test("says No findings in the summary and sets zero outputs without findings", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { octokit: createFakeOctokit([APP_FILE]) });
+
+  assert.deepEqual(core.outputs, {
+    "findings-count": "0",
+    "critical-count": "0",
+    "review-url": "",
+  });
+  assert.match(core.summaries[0], /^No findings\.$/m);
+  assert.match(shownSummary(core), /No findings, so no review was posted/);
+});
+
+test("lets no finding fail the workflow by default", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE]);
+
+  await runWith(core, {
+    octokit,
+    ai: createFakeAi(findingAtLine2("critical")),
+  });
+
+  assert.equal(octokit.reviews.length, 1);
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.equal(core.outputs["critical-count"], "1");
+});
+
+test("fails with fail-on critical after the review is posted", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = recordingOctokit(core, [APP_FILE]);
+
+  await runWith(core, {
+    octokit,
+    ai: createFakeAi(findingAtLine2("critical")),
+  });
+
+  const methods = core.calls.map(({ method }) => method);
+  assert.ok(methods.indexOf("createReview") < methods.indexOf("setFailed"));
+  const [message] = core.messages("setFailed");
+  assert.match(message, /1 open findings at or above the severity "critical"/);
+  assert.ok(message.includes(REVIEW_ADDRESS));
+  // The outputs are set although the step fails.
+  assert.equal(core.outputs["critical-count"], "1");
+  assert.match(core.summaries[0], /fail-on: critical\*\* — 1 open findings/);
+});
+
+test("does not fail with fail-on critical on a major finding", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+
+  await runWith(core, {
+    octokit: createFakeOctokit([APP_FILE]),
+    ai: createFakeAi(findingAtLine2("major")),
+  });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.equal(core.outputs["findings-count"], "1");
+});
+
+test("fails with fail-on major on a major finding", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "major" });
+
+  await runWith(core, {
+    octokit: createFakeOctokit([APP_FILE]),
+    ai: createFakeAi(findingAtLine2("major")),
+  });
+
+  assert.match(core.messages("setFailed")[0], /fail-on: major/);
+});
+
+test("fails with fail-on after GitHub rejected the inline comments", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    createReview: (parameters, index) =>
+      index === 0 ? apiFailure(422) : { status: 200, data: { id: 1001 } },
+  });
+
+  await runWith(core, {
+    octokit,
+    ai: createFakeAi(findingAtLine2("critical")),
+  });
+
+  assert.equal(octokit.reviews.length, 2);
+  assert.equal(core.messages("warning").length, 1);
+  assert.match(core.messages("setFailed")[0], /fail-on: critical/);
+  assert.equal(
+    core.outputs["review-url"],
+    "https://github.com/octo-org/demo/pull/42#pullrequestreview-1001",
+  );
+});
+
+test("counts a finding over max-comments for fail-on", async () => {
+  const core = createFakeCore({
+    ...VALID_INPUTS,
+    "fail-on": "critical",
+    "max-comments": "1",
+  });
+  const ai = createFakeAi(() =>
+    modelAnswer([
+      modelFinding("src/app.js", "critical", "a", 1),
+      modelFinding("src/app.js", "critical", "b", 2),
+    ]),
+  );
+
+  await runWith(core, { octokit: createFakeOctokit([APP_FILE]), ai });
+
+  assert.equal(core.outputs["critical-count"], "2");
+  assert.match(core.messages("setFailed")[0], /2 open findings/);
+});
+
+test("keeps an earlier critical finding open when nothing is new", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingReviews: [earlierReview(REVIEWED_HEAD)],
+    existingComments: [earlierComment(77, "critical")],
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.equal(octokit.queries.length, 1);
+  assert.deepEqual(core.outputs, {
+    "findings-count": "1",
+    "critical-count": "1",
+    "review-url": "",
+  });
+  assert.match(core.messages("setFailed")[0], /fail-on: critical/);
+  assert.match(
+    core.messages("info").join("\n"),
+    /Open findings: 1 \(1 critical, 0 major, 0 minor, 0 info\), 1 of them from earlier comments; 0 earlier findings are left out/,
+  );
+  assert.match(
+    core.summaries[0],
+    /0 found in this run, 1 from earlier comments/,
+  );
+});
+
+test("leaves out an earlier finding whose thread is resolved", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingReviews: [earlierReview(REVIEWED_HEAD)],
+    existingComments: [earlierComment(77, "critical")],
+    threads: [{ isResolved: true, comments: { nodes: [{ databaseId: 77 }] } }],
+  });
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.equal(core.outputs["critical-count"], "0");
+  assert.match(core.summaries[0], /^No findings\.$/m);
+  assert.match(
+    core.summaries[0],
+    /1 earlier findings are left out: their thread is resolved/,
+  );
+});
+
+test("does not count an earlier finding whose line changed, and asks no GraphQL", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [
+      earlierComment(77, "critical", lineFingerprint("src/app.js", "old", "")),
+    ],
+  });
+
+  await runWith(core, { octokit });
+
+  assert.equal(octokit.queries.length, 0);
+  assert.equal(core.outputs["critical-count"], "0");
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("counts a repeated finding once through its earlier comment", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [earlierComment(77, "major")],
+  });
+
+  await runWith(core, {
+    octokit,
+    ai: createFakeAi(findingAtLine2("critical")),
+  });
+
+  // The new finding at the same line is known and not posted again; the
+  // earlier comment counts with its own severity.
+  assert.deepEqual(octokit.reviews, []);
+  assert.deepEqual(core.outputs, {
+    "findings-count": "1",
+    "critical-count": "0",
+    "review-url": "",
+  });
+  assert.match(
+    core.summaries[0],
+    /1 findings of this run were commented before/,
+  );
+});
+
+test("fails before any request when fail-on is set and the resolved threads cannot be read", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [earlierComment(77, "critical")],
+    threads: () => apiFailure(403),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.match(core.messages("setFailed")[0], /`pull-requests` permission/);
+  assert.deepEqual(core.outputs, {});
+});
+
+test("goes on with a warning without fail-on when the resolved threads cannot be read", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [earlierComment(77, "critical")],
+    threads: () => apiFailure(403),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 1);
+  assert.deepEqual(core.messages("setFailed"), []);
+  const [warning] = core.messages("warning");
+  assert.match(warning, /`pull-requests` permission/);
+  assert.match(warning, /Every earlier finding of ReviewOps counts as open\.$/);
+  // The earlier finding counts as open, in doubt more, never fewer.
+  assert.equal(core.outputs["critical-count"], "1");
+});
+
+test("still fails on a defect while it reads the resolved threads", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [earlierComment(77, "critical")],
+    threads: () => new TypeError("broken"),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.equal(core.messages("setFailed")[0], "broken");
+});
+
+test("fails before any request on an unknown value of fail-on", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "minor" });
+  const octokit = createFakeOctokit([APP_FILE]);
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.deepEqual(octokit.calls, []);
+  assert.equal(ai.requests.length, 0);
+  assert.equal(
+    core.messages("setFailed")[0],
+    'Input `fail-on` must be one of none, critical, major, but is "minor".',
+  );
+  assert.deepEqual(core.outputs, {});
+  assert.match(shownSummary(core), /ReviewOps failed\./);
+  assert.match(
+    shownSummary(core),
+    /\*\*Error:\*\* Input `fail-on` must be one of/,
+  );
+});
+
+test("sets zero outputs and a summary when the event is skipped", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core, { context: createFakeContext({ eventName: "push" }) });
+
+  assert.deepEqual(core.outputs, {
+    "findings-count": "0",
+    "critical-count": "0",
+    "review-url": "",
+  });
+  assert.match(shownSummary(core), /This run was triggered by "push"/);
+});
+
+test("sets zero outputs and a summary when a fork has no secret", async () => {
+  const core = createFakeCore({ "github-token": "token-value" });
+  const payload = loadEvent();
+  // The head lies in another repository.
+  payload.pull_request.head.repo = { full_name: "someone/demo" };
+  const octokit = createFakeOctokit([APP_FILE]);
+
+  await runWith(core, { context: createFakeContext({ payload }), octokit });
+
+  assert.equal(core.messages("notice").length, 1);
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(octokit.calls, []);
+  assert.deepEqual(core.outputs, {
+    "findings-count": "0",
+    "critical-count": "0",
+    "review-url": "",
+  });
+  assert.match(shownSummary(core), /it comes from a fork/);
+});
+
+test("ends green with a warning when the job summary cannot be written", async () => {
+  const core = createFakeCore(VALID_INPUTS, {
+    summaryError: new Error(
+      "Unable to find environment variable for $GITHUB_STEP_SUMMARY",
+    ),
+  });
+
+  await runWith(core, { octokit: createFakeOctokit([APP_FILE]) });
+
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("warning"), [
+    "The job summary could not be written.",
+  ]);
+  assert.equal(core.outputs["findings-count"], "0");
+});
+
+test("names a failed request in the tokens of the summary", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    bigFile("src/a.js", 3000),
+    bigFile("src/b.js", 3000),
+  ]);
+  const ai = createFakeAi((request, index) =>
+    index === 0
+      ? {
+          ...modelAnswer(),
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        }
+      : new AiError("server", "OpenAI could not answer (HTTP 500)."),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 2);
+  assert.match(core.summaries[0], /\| 10 \| 2 \| 12 \| 2 \|/);
+  assert.match(core.summaries[0], /1 requests failed/);
+});
+
+test("writes a summary with the error when the run fails", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE]);
+  const ai = createFakeAi(
+    () => new AiError("auth", "OpenAI rejected the API key (HTTP 401)."),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.match(core.messages("setFailed")[0], /HTTP 401/);
+  assert.deepEqual(core.outputs, {});
+  assert.match(shownSummary(core), /ReviewOps failed\./);
+  assert.match(shownSummary(core), /OpenAI rejected the API key/);
 });

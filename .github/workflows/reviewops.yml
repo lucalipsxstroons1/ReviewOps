@@ -31,7 +31,19 @@ jobs:
           persist-credentials: false
 
       # No github-token is passed: the action falls back to the token of this run.
+      # fail-on stays at its default "none": no finding fails this workflow.
       - name: Review the pull request
+        id: review
         uses: ./
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+      # Shows that later steps can use the outputs. The values reach the shell
+      # through the environment, never as an expression inside the command.
+      - name: Show the result
+        env:
+          FINDINGS_COUNT: ${{ steps.review.outputs.findings-count }}
+          CRITICAL_COUNT: ${{ steps.review.outputs.critical-count }}
+          REVIEW_URL: ${{ steps.review.outputs.review-url }}
+        run: |
+          echo "Open findings: $FINDINGS_COUNT, critical: $CRITICAL_COUNT, review: ${REVIEW_URL:-none}"

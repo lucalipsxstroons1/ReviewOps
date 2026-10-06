@@ -1,3 +1,4 @@
+import { SEVERITIES } from "../ai/schema.js";
 import { PatchFormatError, parsePatch } from "../diff/parse.js";
 import { FINGERPRINT_LENGTH } from "../fingerprint.js";
 import { describeApiError } from "./api-error.js";
@@ -6,9 +7,10 @@ import { INCOMPLETE_LINE, REVIEW_MARKER } from "./review.js";
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
-// is read; anything else in a comment is ignored.
+// is read; anything else in a comment is ignored. An inline comment adds the
+// severity of its finding; the line in the text of a review has none.
 const FINGERPRINT_LINE = new RegExp(
-  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}}) -->$`,
+  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")}))? -->$`,
 );
 
 // A comparison lists at most this many files, 100 per request.
@@ -88,7 +90,9 @@ const isOwn = (item) =>
  *   fingerprints: Set<string>,
  *   ownReviews: number,
  *   ownComments: number,
- * }>} In `incremental` mode, `since` is the last reviewed commit and
+ *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
+ * }>} `earlierFindings` are the own inline comments that name the severity
+ *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
  *   `newLines` holds the added lines of the comparison by path. `null` as
  *   the value of a path stands for every line of that file. A path that is
  *   missing has no new line. In `full` mode, `newLines` is `null` and
@@ -122,8 +126,19 @@ export async function readHistory(octokit, pullRequest) {
   const ownComments = comments.filter(isOwn);
   const fingerprints = new Set();
   for (const item of [...ownComments, ...ownReviews]) {
-    for (const fingerprint of readHead(item.body).fingerprints) {
+    for (const { fingerprint } of readHead(item.body).fingerprints) {
       fingerprints.add(fingerprint);
+    }
+  }
+
+  // The findings of earlier inline comments, for the count of the findings
+  // that are still open. An inline comment has one fingerprint line; a
+  // comment from before the severity was written there is left out.
+  const earlierFindings = [];
+  for (const comment of ownComments) {
+    const [head] = readHead(comment.body).fingerprints;
+    if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
+      earlierFindings.push({ id: comment.id, ...head });
     }
   }
 
@@ -131,6 +146,7 @@ export async function readHistory(octokit, pullRequest) {
     fingerprints,
     ownReviews: ownReviews.length,
     ownComments: ownComments.length,
+    earlierFindings,
   };
   const full = (reason) => ({
     ...base,
@@ -205,14 +221,21 @@ export function scopeDiffs(diffs, newLines) {
  * edit.
  *
  * @param {string} body
- * @returns {{ fingerprints: string[], incomplete: boolean }}
+ * @returns {{
+ *   fingerprints: { fingerprint: string, severity: string | null }[],
+ *   incomplete: boolean,
+ * }}
  */
 function readHead(body) {
   const result = { fingerprints: [], incomplete: false };
   for (const line of body.split(/\r?\n/, 40).slice(1)) {
     const match = FINGERPRINT_LINE.exec(line);
-    if (match) result.fingerprints.push(match[1]);
-    else if (line === INCOMPLETE_LINE) result.incomplete = true;
+    if (match) {
+      result.fingerprints.push({
+        fingerprint: match[1],
+        severity: match[2] ?? null,
+      });
+    } else if (line === INCOMPLETE_LINE) result.incomplete = true;
     else break;
   }
   return result;

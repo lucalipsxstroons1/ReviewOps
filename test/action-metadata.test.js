@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { parse } from "yaml";
 import { DEFAULT_MODEL } from "../src/ai/model.js";
 import { DEFAULT_LANGUAGE, LANGUAGES } from "../src/ai/prompt.js";
+import { DEFAULT_FAIL_ON, FAIL_ON } from "../src/fail-on.js";
 import {
   DEFAULT_MAX_COMMENTS,
   DEFAULT_MAX_DIFF_CHARS,
@@ -94,6 +95,43 @@ test("the descriptions of the limits name their default", () => {
     /default is 200000,/,
   );
   assert.match(action.inputs["max-comments"].description, /default is 10\./);
+});
+
+test("fail-on is optional and defaults to the value in the code", () => {
+  const input = action.inputs["fail-on"];
+
+  assert.equal(input.required, false);
+  assert.equal(input.default, DEFAULT_FAIL_ON);
+  assert.match(input.description, /default is none,/);
+});
+
+test("the description of fail-on names every value", () => {
+  const listed = /as one of ([^.]+)\./.exec(
+    action.inputs["fail-on"].description,
+  )?.[1];
+
+  assert.ok(listed, "the values are not listed");
+  assert.deepEqual(listed.split(/, | and /), Object.keys(FAIL_ON));
+});
+
+test("the action declares exactly the outputs the code sets", () => {
+  const set = [
+    ...readFileSync(
+      new URL("../src/outputs.js", import.meta.url),
+      "utf8",
+    ).matchAll(/setOutput\("([^"]+)"/g),
+  ].map((match) => match[1]);
+
+  assert.deepEqual(
+    Object.keys(action.outputs).sort(),
+    [...new Set(set)].sort(),
+  );
+  for (const [name, output] of Object.entries(action.outputs)) {
+    assert.ok(
+      output.description.trim().length > 0,
+      `${name} has no description`,
+    );
+  }
 });
 
 test("the action declares exactly the inputs the code reads", () => {

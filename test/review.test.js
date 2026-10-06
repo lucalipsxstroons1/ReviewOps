@@ -328,6 +328,7 @@ test("sends nothing for no batches", async () => {
     succeeded: 0,
     failed: [],
     shortened: 0,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, withoutCount: 0 },
   });
   assert.equal(client.requests.length, 0);
 });
@@ -413,4 +414,74 @@ test("reports no cut text when everything fits", async () => {
   });
 
   assert.equal(result.shortened, 0);
+});
+
+// --- Token usage -------------------------------------------------------------
+
+const withUsage = (inputTokens, outputTokens) => ({
+  ...answer("summary"),
+  usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+});
+
+test("adds up the tokens of the requests that worked", async () => {
+  const client = createFakeClient(
+    (request, index) =>
+      [withUsage(100, 10), withUsage(200, 20), withUsage(300, 30)][index],
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b", "c"),
+    concurrency: 1,
+  });
+
+  assert.deepEqual(result.usage, {
+    inputTokens: 600,
+    outputTokens: 60,
+    totalTokens: 660,
+    withoutCount: 0,
+  });
+});
+
+test("counts the requests that answered without a token count", async () => {
+  const client = createFakeClient((request, index) =>
+    index === 0 ? withUsage(100, 10) : answer("summary"),
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b"),
+    concurrency: 1,
+  });
+
+  assert.deepEqual(result.usage, {
+    inputTokens: 100,
+    outputTokens: 10,
+    totalTokens: 110,
+    withoutCount: 1,
+  });
+});
+
+test("does not count the tokens or the missing count of a failed request", async () => {
+  const client = createFakeClient((request, index) =>
+    index === 0
+      ? withUsage(100, 10)
+      : new AiError("server", "OpenAI could not answer (HTTP 500)."),
+  );
+
+  const result = await reviewInBatches({
+    client,
+    system: "s",
+    batches: batchesOf("a", "b"),
+    concurrency: 1,
+  });
+
+  assert.deepEqual(result.usage, {
+    inputTokens: 100,
+    outputTokens: 10,
+    totalTokens: 110,
+    withoutCount: 0,
+  });
 });
