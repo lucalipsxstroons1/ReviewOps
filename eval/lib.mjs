@@ -59,7 +59,7 @@ export const SEVERITY_RANK = Object.fromEntries(
   SEVERITIES.map((severity, index) => [severity, SEVERITIES.length - index]),
 );
 
-const KEYS = ["description", "title", "path", "patch"];
+const KEYS = ["description", "path", "patch"];
 
 /**
  * Loads the reference diffs from a directory, in the order of their names.
@@ -68,7 +68,6 @@ const KEYS = ["description", "title", "path", "patch"];
  * @returns {{
  *   name: string,
  *   description: string,
- *   title: string,
  *   path: string,
  *   patch: string,
  *   clean: boolean,
@@ -126,7 +125,6 @@ function toCase(name, data) {
   return {
     name,
     description: data.description,
-    title: data.title,
     path: data.path,
     patch: data.patch,
     clean,
@@ -135,7 +133,6 @@ function toCase(name, data) {
     // Built by the action's own builder, so the evaluation measures exactly
     // the message the action sends.
     user: buildUserPrompt({
-      title: data.title,
       files: [{ path: data.path, annotated: annotateDiff(hunks) }],
     }),
   };

@@ -3,7 +3,7 @@ import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-export const PROMPT_VERSION = 6;
+export const PROMPT_VERSION = 7;
 
 // The same value is written into action.yml. A test keeps them equal.
 export const DEFAULT_LANGUAGE = "en";
@@ -143,7 +143,7 @@ export function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
     "",
     "## The input",
     "",
-    'The user message holds the changes of one pull request, or a part of them: other files of the same pull request may come in other messages. If the pull request has a title, the message starts with it between `<pull_request_title>` and `</pull_request_title>`. The title only tells you what the author meant to do. Then each changed file follows between `<file path="<path>">` and `</file>`, with the diff of that file inside. A diff line looks like this:',
+    'The user message holds the changes of one pull request, or a part of them: other files of the same pull request may come in other messages. Each changed file comes between `<file path="<path>">` and `</file>`, with the diff of that file inside. A diff line looks like this:',
     "",
     "```",
     "  12 | +  const sum = items.reduce(add, 0);",

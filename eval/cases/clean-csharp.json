@@ -1,6 +1,5 @@
 {
   "description": "An authorized endpoint that reads only the orders of the caller, with AsNoTracking, a projection and a cancellation token. Nothing to report.",
-  "title": "Add an endpoint for the orders of the current user",
   "path": "src/Orders/OrdersController.cs",
   "patch": "@@ -0,0 +1,28 @@\n+using System.Security.Claims;\n+using Microsoft.AspNetCore.Authorization;\n+using Microsoft.AspNetCore.Mvc;\n+using Microsoft.EntityFrameworkCore;\n+\n+[Authorize]\n+[ApiController]\n+[Route(\"api/orders\")]\n+public class OrdersController : ControllerBase\n+{\n+    private readonly ShopContext _db;\n+\n+    public OrdersController(ShopContext db) => _db = db;\n+\n+    [HttpGet(\"{id:int}\")]\n+    public async Task<ActionResult<OrderDto>> GetAsync(int id, CancellationToken cancellationToken)\n+    {\n+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);\n+\n+        var order = await _db.Orders\n+            .AsNoTracking()\n+            .Where(o => o.Id == id && o.OwnerId == userId)\n+            .Select(o => new OrderDto(o.Id, o.Total))\n+            .FirstOrDefaultAsync(cancellationToken);\n+\n+        return order is null ? NotFound() : Ok(order);\n+    }\n+}",
   "clean": true

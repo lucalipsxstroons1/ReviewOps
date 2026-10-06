@@ -221,9 +221,7 @@ test("describes an N+1 query as an awaited query inside a loop", () => {
 test("describes the user message the way buildUserPrompt() and annotateDiff() write it", () => {
   const prompt = buildSystemPrompt();
 
-  assert.ok(
-    prompt.includes("`<pull_request_title>` and `</pull_request_title>`"),
-  );
+  assert.doesNotMatch(prompt, /pull_request_title/);
   assert.ok(prompt.includes('`<file path="<path>">` and `</file>`'));
   assert.ok(prompt.includes("the `path` attribute of `<file>`"));
   assert.doesNotMatch(prompt, /File:/);
@@ -293,6 +291,7 @@ const PROMPT_HASHES = {
   4: "5caa68dd6e7a08ec2b95d4bbadfa21ef5e57e059aee2193b945b45b7dc8cfca8",
   5: "cef023c40cb7d0a8c195be64f8892d389e533fe6fe33c6fd02298b8365a91b04",
   6: "0ac1ee2bae229652a5ddb004e6dcabb52b966536a8392b32c8edb42e83cb7cb9",
+  7: "6f2c536387791ed4a61ec371a5f27bfaa4d3531aeae0316e46bc58a837d132c7",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {

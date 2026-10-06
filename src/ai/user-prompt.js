@@ -1,33 +1,26 @@
 // The user message of a review request. The system prompt in prompt.js
 // describes this shape: change one, and the other has to follow.
 //
-// <pull_request_title>
-// Add profile page
-// </pull_request_title>
-//
 // <file path="src/Profile.jsx">
 // @@ function Profile() {
 //    9 | +  useEffect(() => {
 // </file>
 //
+// The title of the pull request is not part of it on purpose: with the title
+// in the message, the model raised a false alarm on a clean reference diff in
+// every run (#14).
+//
 // Every line of an annotated diff, split at line feeds, starts with the
 // number column, so no such line of code can start with a tag. A carriage
 // return or a Unicode line separator inside a line can still make code look
-// like a new line to the model; #15 defuses those. The title and the path are
-// the only values that stand on their own, and both are checked here.
-
-// Long enough for any real title. It only tells the model what the change
-// is meant to do.
-export const MAX_TITLE_LENGTH = 200;
-
-// Control characters, invisible format characters and the Unicode line and
-// paragraph separators. They could break the title into several lines or
-// hide text from a reader.
-const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+// like a new line to the model; #15 defuses those. The path is the only
+// value that stands on its own, and it is checked here.
 
 // A path goes into an attribute in double quotes. Escaping is no way out:
 // the model would have to undo it, and a path it returns changed can no
-// longer be matched to a file of the pull request.
+// longer be matched to a file of the pull request. The control characters,
+// invisible format characters and Unicode line and paragraph separators
+// could break the tag or hide text from a reader.
 const UNUSABLE_PATH = /["<>\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
 export const UNUSABLE_PATH_REASON =
@@ -35,29 +28,6 @@ export const UNUSABLE_PATH_REASON =
 
 // Between two blocks of the message.
 export const SEPARATOR = "\n\n";
-
-const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
-
-/**
- * Turns the title of the pull request into one line for the prompt.
- *
- * The title is written by the author of the pull request. It is cut to
- * {@link MAX_TITLE_LENGTH} characters, kept on one line, and cannot close
- * its tag.
- *
- * @param {unknown} title
- * @returns {string} An empty text if nothing is left.
- */
-export function promptTitle(title) {
-  const line = String(title ?? "")
-    .replace(UNSAFE, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  // Cut by code points, so that no character is split in half, and before
-  // escaping, so that no escape is cut in half.
-  const short = Array.from(line).slice(0, MAX_TITLE_LENGTH).join("").trimEnd();
-  return short.replace(/[&<>]/g, (character) => ESCAPES[character]);
-}
 
 /**
  * Whether a path can be put into the prompt as it is.
@@ -67,14 +37,6 @@ export function promptTitle(title) {
  */
 export function isUsablePath(path) {
   return typeof path === "string" && path !== "" && !UNUSABLE_PATH.test(path);
-}
-
-/** The block of the title, or an empty text when there is no title. */
-export function titleBlock(title) {
-  const text = promptTitle(title);
-  return text === ""
-    ? ""
-    : `<pull_request_title>\n${text}\n</pull_request_title>`;
 }
 
 /**
@@ -99,29 +61,10 @@ export function fileBlock({ path, annotated }) {
  * and must not be logged.
  *
  * @param {object} options
- * @param {string} [options.title] The title of the pull request.
  * @param {{ path: string, annotated: string }[]} options.files The files of
  *   this request, with the annotated diff `applyLimits()` created.
  * @returns {string}
  */
-export function buildUserPrompt({ title = "", files }) {
-  return joinBlocks(titleBlock(title), files.map(fileBlock));
-}
-
-/**
- * Length of the message made of these blocks, without building it.
- *
- * @param {string} title The block of the title, may be empty.
- * @param {number[]} fileLengths The lengths of the file blocks.
- * @returns {number}
- */
-export function messageLength(title, fileLengths) {
-  const lengths = title === "" ? fileLengths : [title.length, ...fileLengths];
-  if (lengths.length === 0) return 0;
-  const content = lengths.reduce((sum, length) => sum + length, 0);
-  return content + SEPARATOR.length * (lengths.length - 1);
-}
-
-function joinBlocks(title, blocks) {
-  return (title === "" ? blocks : [title, ...blocks]).join(SEPARATOR);
+export function buildUserPrompt({ files }) {
+  return files.map(fileBlock).join(SEPARATOR);
 }

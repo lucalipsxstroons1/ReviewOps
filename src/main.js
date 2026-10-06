@@ -109,7 +109,7 @@ export async function run({
       limits,
       {
         maxChars: MAX_REQUEST_CHARS,
-        sizeOf: (file) => requestSize(pullRequest.title, file),
+        sizeOf: requestSize,
       },
     );
 
@@ -151,7 +151,7 @@ export async function run({
     }
     if (tooLarge.length > 0) {
       core.warning(
-        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters, the diff and the title included.`,
+        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters.`,
       );
     }
     if (overLimit.length > 0) {
@@ -183,8 +183,7 @@ export async function run({
     );
     core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
 
-    // The title of the pull request goes into the prompt, never into the log.
-    const batches = planBatches({ title: pullRequest.title, files: selected });
+    const batches = planBatches({ files: selected });
     core.info(
       `Sending ${selected.length} files to ${model} in ${batches.length} requests.`,
     );

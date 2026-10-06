@@ -1,6 +1,5 @@
 {
   "description": "A loop that runs one step too far and reads items[items.length], which is undefined.",
-  "title": "Add a helper for price totals",
   "path": "src/utils/prices.js",
   "patch": "@@ -1,5 +1,14 @@\n import { formatCents } from \"./format.js\";\n \n+// Sum of the prices of all items of an order, in cents.\n+export function sumPrices(items) {\n+  let total = 0;\n+  for (let i = 0; i <= items.length; i++) {\n+    total += items[i].price;\n+  }\n+  return total;\n+}\n+\n export function formatTotal(order) {\n   return formatCents(order.total);\n }",
   "expect": {

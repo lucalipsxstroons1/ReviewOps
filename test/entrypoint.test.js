@@ -269,7 +269,10 @@ test("sends the key only to the stand-in for OpenAI and reports the review", asy
   const [request] = api.openai.requests;
   assert.equal(request.path, "/v1/chat/completions");
   assert.equal(request.authorization, `Bearer ${API_KEY}`);
-  assert.match(request.body.messages[1].content, /^<pull_request_title>\n/);
+  assert.match(
+    request.body.messages[1].content,
+    /^<file path="src\/file-0\.js">\n/,
+  );
   assert.match(
     result.stdout,
     /^Review finished: 0 findings \(0 critical, 0 major, 0 minor, 0 info\) from 1 of 1 requests\.$/m,

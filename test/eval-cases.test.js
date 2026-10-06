@@ -82,7 +82,6 @@ test("writes the user message the way the action builds it", () => {
     assert.equal(
       testCase.user,
       buildUserPrompt({
-        title: testCase.title,
         files: [
           {
             path: testCase.path,
@@ -91,23 +90,8 @@ test("writes the user message the way the action builds it", () => {
         ],
       }),
     );
-    assert.ok(
-      testCase.user.startsWith(
-        `<pull_request_title>\n${testCase.title}\n</pull_request_title>\n\n<file path="${testCase.path}">\n`,
-      ),
-    );
+    assert.ok(testCase.user.startsWith(`<file path="${testCase.path}">\n`));
     assert.match(testCase.user, /\n +\d+ \| \+/);
-  }
-});
-
-test("gives every case a title that does not give the defect away", () => {
-  for (const testCase of cases) {
-    assert.ok(testCase.title.length > 0, testCase.name);
-    assert.doesNotMatch(
-      testCase.title,
-      /fix|bug|n\+1|injection|dependency|off.by.one|security|clean/i,
-      testCase.name,
-    );
   }
 });
 
@@ -123,7 +107,6 @@ test("holds no text that looks like a credential", () => {
 
 const VALID = {
   description: "d",
-  title: "t",
   path: "a.js",
   patch: "@@ -0,0 +1,2 @@\n+one\n+two",
   expect: { category: "security", lines: [2], minSeverity: "major" },
@@ -159,18 +142,13 @@ for (const [name, data, message] of [
     /"path" must be a non-empty text/,
   ],
   [
-    "a missing title",
-    { ...VALID, title: undefined },
-    /"title" must be a non-empty text/,
-  ],
-  [
     "a missing patch",
     { ...VALID, patch: "" },
     /"patch" must be a non-empty text/,
   ],
   [
     "neither clean nor expect",
-    { description: "d", title: "t", path: "a.js", patch: VALID.patch },
+    { description: "d", path: "a.js", patch: VALID.patch },
     /exactly one of/,
   ],
   ["both clean and expect", { ...VALID, clean: true }, /exactly one of/],

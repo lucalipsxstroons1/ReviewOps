@@ -26,13 +26,10 @@ test("the budget of one request is 50000 characters", () => {
 test("sends a small pull request in one request", () => {
   const files = [fileOf("a.js", 100), fileOf("b.js", 200)];
 
-  const batches = planBatches({ title: "Add a and b", files });
+  const batches = planBatches({ files });
 
   assert.deepEqual(paths(batches), [["a.js", "b.js"]]);
-  assert.equal(
-    batches[0].user,
-    buildUserPrompt({ title: "Add a and b", files }),
-  );
+  assert.equal(batches[0].user, buildUserPrompt({ files }));
 });
 
 test("spreads a pull request over the budget across several requests", () => {
@@ -42,29 +39,27 @@ test("spreads a pull request over the budget across several requests", () => {
     fileOf("c.js", 10000),
   ];
 
-  const batches = planBatches({ title: "Large", files });
+  const batches = planBatches({ files });
 
   assert.deepEqual(paths(batches), [["a.js"], ["b.js", "c.js"]]);
   for (const batch of batches) {
     assert.ok(batch.user.length <= MAX_REQUEST_CHARS);
-    assert.match(batch.user, /^<pull_request_title>\nLarge\n/);
+    assert.match(batch.user, /^<file path="/);
   }
 });
 
 test("fills a request up to the last character and starts the next after it", () => {
-  const title = "T";
   const a = fileOf("a.js", 100);
   const b = fileOf("b.js", 100);
-  const exact = buildUserPrompt({ title, files: [a, b] }).length;
+  const exact = buildUserPrompt({ files: [a, b] }).length;
 
-  assert.deepEqual(
-    paths(planBatches({ title, files: [a, b], maxChars: exact })),
-    [["a.js", "b.js"]],
-  );
-  assert.deepEqual(
-    paths(planBatches({ title, files: [a, b], maxChars: exact - 1 })),
-    [["a.js"], ["b.js"]],
-  );
+  assert.deepEqual(paths(planBatches({ files: [a, b], maxChars: exact })), [
+    ["a.js", "b.js"],
+  ]);
+  assert.deepEqual(paths(planBatches({ files: [a, b], maxChars: exact - 1 })), [
+    ["a.js"],
+    ["b.js"],
+  ]);
 });
 
 test("keeps the order of the files and does not reach back to fill gaps", () => {
@@ -79,7 +74,7 @@ test("keeps the order of the files and does not reach back to fill gaps", () => 
 });
 
 test("returns no request for no files", () => {
-  assert.deepEqual(planBatches({ title: "Empty", files: [] }), []);
+  assert.deepEqual(planBatches({ files: [] }), []);
 });
 
 test("refuses a file that is larger than one request on its own", () => {
@@ -91,14 +86,11 @@ test("refuses a file that is larger than one request on its own", () => {
   );
 });
 
-test("measures a single file with the title, as one request would", () => {
+test("measures a single file as one request would", () => {
   const file = fileOf("src/a.js", 1234);
 
-  assert.equal(
-    requestSize("Add a", file),
-    buildUserPrompt({ title: "Add a", files: [file] }).length,
-  );
-  assert.equal(requestSize("", file), blockLength(file));
+  assert.equal(requestSize(file), buildUserPrompt({ files: [file] }).length);
+  assert.equal(requestSize(file), blockLength(file));
 });
 
 test("never splits a file and never sends one twice, for many sizes", () => {
@@ -111,23 +103,22 @@ test("never splits a file and never sends one twice, for many sizes", () => {
 
   for (let round = 0; round < 300; round += 1) {
     const maxChars = 200 + Math.floor(random() * 2000);
-    const title = round % 3 === 0 ? "" : `Change ${round}`;
     const count = Math.floor(random() * 30);
     const files = [];
     for (let index = 0; index < count; index += 1) {
       const file = fileOf(`f${index}.js`, Math.floor(random() * 400));
       // Only files that fit on their own reach the batching.
-      if (requestSize(title, file) <= maxChars) files.push(file);
+      if (requestSize(file) <= maxChars) files.push(file);
     }
 
-    const batches = planBatches({ title, files, maxChars });
+    const batches = planBatches({ files, maxChars });
 
     const sent = batches.flatMap((batch) => batch.files);
     assert.deepEqual(sent, files, `round ${round}: every file once, in order`);
     for (const batch of batches) {
       assert.ok(batch.files.length > 0);
       assert.ok(batch.user.length <= maxChars, `round ${round}: too long`);
-      assert.equal(batch.user, buildUserPrompt({ title, files: batch.files }));
+      assert.equal(batch.user, buildUserPrompt({ files: batch.files }));
       // Each file appears whole in its request and in no other.
       for (const file of files) {
         const inside = batch.files.includes(file);
@@ -139,7 +130,6 @@ test("never splits a file and never sends one twice, for many sizes", () => {
     // No two neighbouring requests could have been one.
     for (let index = 1; index < batches.length; index += 1) {
       const joined = buildUserPrompt({
-        title,
         files: [...batches[index - 1].files, batches[index].files[0]],
       });
       assert.ok(joined.length > maxChars, `round ${round}: needless split`);
@@ -153,7 +143,7 @@ test("splits 3000 small files quickly", () => {
   );
 
   const started = performance.now();
-  const batches = planBatches({ title: "Many files", files });
+  const batches = planBatches({ files });
   const elapsed = performance.now() - started;
 
   assert.deepEqual(
@@ -168,7 +158,7 @@ test("does not change the files it is given", () => {
   const files = [fileOf("a.js", 30000), fileOf("b.js", 30000)];
   const before = JSON.stringify(files);
 
-  planBatches({ title: "x", files });
+  planBatches({ files });
 
   assert.equal(JSON.stringify(files), before);
 });
