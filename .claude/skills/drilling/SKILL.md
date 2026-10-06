@@ -47,7 +47,7 @@ Wirkt das Issue zu groß für einen Pull Request, schlage eine Teilung vor, stat
 
 ## 5. Plan festhalten
 
-Fasse das Ergebnis so zusammen:
+Fasse das Ergebnis in dieser Form zusammen. Der Plan gehört ins Issue, nicht in den Chat:
 
 ```
 ## Plan für #<nr> <Titel>
@@ -65,6 +65,6 @@ Fasse das Ergebnis so zusammen:
 - <Abgrenzung>
 ```
 
-Frag dann, ob der Plan als Kommentar im Issue gespeichert werden soll. Dort findet ihn `/implement` auch in einer späteren Sitzung wieder. Poste erst nach Zustimmung, und zwar über eine UTF-8-Datei: `gh issue comment <nr> --body-file <datei>`. Haben sich Tasks oder Akzeptanzkriterien geändert, schlage die Anpassung des Issue-Textes vor und nimm sie ebenfalls erst nach Zustimmung vor.
+Poste den Plan ohne weitere Rückfrage als Kommentar im Issue, über eine UTF-8-Datei: `gh issue comment <nr> --body-file <datei>`. Dort findet ihn `/implement` auch in einer späteren Sitzung wieder. Im Chat steht danach nur der Link zum Kommentar, nicht der Plan. Haben sich Tasks oder Akzeptanzkriterien geändert, schlage die Anpassung des Issue-Textes vor und nimm sie ebenfalls erst nach Zustimmung vor.
 
 Beginne nicht mit der Umsetzung. Nenne als nächsten Schritt `/implement <nr>`.
