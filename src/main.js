@@ -88,10 +88,13 @@ export async function run({
     // and so are files whose name cannot be put into the prompt.
     const relevant = [];
     const excluded = [];
+    let unusableNames = 0;
     for (const file of listing.files) {
-      const reason =
-        excludeReason(file.path) ||
-        (isUsablePath(file.path) ? null : UNUSABLE_PATH_REASON);
+      let reason = excludeReason(file.path);
+      if (!reason && !isUsablePath(file.path)) {
+        reason = UNUSABLE_PATH_REASON;
+        unusableNames += 1;
+      }
       if (reason) excluded.push({ path: file.path, reason });
       else relevant.push(file);
     }
@@ -141,9 +144,14 @@ export async function run({
         core.debug(`${printable(path)}: ${detail}`);
       }
     }
+    if (unusableNames > 0) {
+      core.warning(
+        `Files whose name cannot be put into the prompt: ${unusableNames}. They are not reviewed. A name with a double quote, "<", ">" or a control character cannot be sent.`,
+      );
+    }
     if (tooLarge.length > 0) {
       core.warning(
-        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters of diff.`,
+        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters, the diff and the title included.`,
       );
     }
     if (overLimit.length > 0) {

@@ -1,4 +1,5 @@
 import {
+  SEPARATOR,
   buildUserPrompt,
   fileBlock,
   messageLength,
@@ -49,23 +50,23 @@ export function planBatches({
   const head = titleBlock(title);
   const batches = [];
   let current = [];
-  let lengths = [];
+  let used = 0;
 
   for (const file of files) {
     const length = fileBlock(file).length;
-    if (messageLength(head, [length]) > maxChars) {
+    const alone = messageLength(head, [length]);
+    if (alone > maxChars) {
       throw new Error("A file larger than one request reached the batching.");
     }
-    if (
-      current.length > 0 &&
-      messageLength(head, [...lengths, length]) > maxChars
-    ) {
+    // A block added to a message that already holds one brings a separator.
+    const added = SEPARATOR.length + length;
+    if (current.length > 0 && used + added > maxChars) {
       batches.push(current);
       current = [];
-      lengths = [];
     }
+    if (current.length === 0) used = alone;
+    else used += added;
     current.push(file);
-    lengths.push(length);
   }
   if (current.length > 0) batches.push(current);
 

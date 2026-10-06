@@ -349,7 +349,10 @@ test("reports a cut-off answer as truncated, also when the part so far is valid"
     assert.ok(error instanceof AiError);
     assert.equal(error.kind, "truncated");
     assert.match(error.message, /cut off at the limit of 4096 tokens/);
-    assert.match(error.message, /max-files/);
+    // One request is at most MAX_REQUEST_CHARS large, whatever the limits of
+    // the whole pull request are: they are no remedy.
+    assert.doesNotMatch(error.message, /max-files|max-diff-chars/);
+    assert.match(error.message, /input `exclude`/);
   }
 });
 

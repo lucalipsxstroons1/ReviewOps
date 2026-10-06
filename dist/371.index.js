@@ -28,9 +28,11 @@ var github = __webpack_require__(2413);
 //    9 | +  useEffect(() => {
 // </file>
 //
-// Every line of an annotated diff starts with the number column, so no line
-// of code can start with a tag. The title and the path are the only values
-// that stand on their own, and both are checked here.
+// Every line of an annotated diff, split at line feeds, starts with the
+// number column, so no such line of code can start with a tag. A carriage
+// return or a Unicode line separator inside a line can still make code look
+// like a new line to the model; #15 defuses those. The title and the path are
+// the only values that stand on their own, and both are checked here.
 
 // Long enough for any real title. It only tells the model what the change
 // is meant to do.
@@ -189,23 +191,23 @@ function planBatches({
   const head = titleBlock(title);
   const batches = [];
   let current = [];
-  let lengths = [];
+  let used = 0;
 
   for (const file of files) {
     const length = fileBlock(file).length;
-    if (messageLength(head, [length]) > maxChars) {
+    const alone = messageLength(head, [length]);
+    if (alone > maxChars) {
       throw new Error("A file larger than one request reached the batching.");
     }
-    if (
-      current.length > 0 &&
-      messageLength(head, [...lengths, length]) > maxChars
-    ) {
+    // A block added to a message that already holds one brings a separator.
+    const added = SEPARATOR.length + length;
+    if (current.length > 0 && used + added > maxChars) {
       batches.push(current);
       current = [];
-      lengths = [];
     }
+    if (current.length === 0) used = alone;
+    else used += added;
     current.push(file);
-    lengths.push(length);
   }
   if (current.length > 0) batches.push(current);
 
@@ -958,7 +960,7 @@ function parseReview({ content, finishReason }) {
   if (finishReason === "length") {
     throw new AiError(
       "truncated",
-      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Reduce \`max-files\` or \`max-diff-chars\`, or run the workflow again.`,
+      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Run the workflow again; if it keeps happening, leave the largest files out with the input \`exclude\`.`,
     );
   }
   if (finishReason === "content_filter") {
@@ -2183,10 +2185,13 @@ async function run({
     // and so are files whose name cannot be put into the prompt.
     const relevant = [];
     const excluded = [];
+    let unusableNames = 0;
     for (const file of listing.files) {
-      const reason =
-        excludeReason(file.path) ||
-        (isUsablePath(file.path) ? null : UNUSABLE_PATH_REASON);
+      let reason = excludeReason(file.path);
+      if (!reason && !isUsablePath(file.path)) {
+        reason = UNUSABLE_PATH_REASON;
+        unusableNames += 1;
+      }
       if (reason) excluded.push({ path: file.path, reason });
       else relevant.push(file);
     }
@@ -2236,9 +2241,14 @@ async function run({
         core.debug(`${printable(path)}: ${detail}`);
       }
     }
+    if (unusableNames > 0) {
+      core.warning(
+        `Files whose name cannot be put into the prompt: ${unusableNames}. They are not reviewed. A name with a double quote, "<", ">" or a control character cannot be sent.`,
+      );
+    }
     if (tooLarge.length > 0) {
       core.warning(
-        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters of diff.`,
+        `Files larger than one request to the model: ${tooLarge.length}. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters, the diff and the title included.`,
       );
     }
     if (overLimit.length > 0) {

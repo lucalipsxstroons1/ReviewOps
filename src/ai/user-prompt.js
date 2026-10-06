@@ -10,9 +10,11 @@
 //    9 | +  useEffect(() => {
 // </file>
 //
-// Every line of an annotated diff starts with the number column, so no line
-// of code can start with a tag. The title and the path are the only values
-// that stand on their own, and both are checked here.
+// Every line of an annotated diff, split at line feeds, starts with the
+// number column, so no such line of code can start with a tag. A carriage
+// return or a Unicode line separator inside a line can still make code look
+// like a new line to the model; #15 defuses those. The title and the path are
+// the only values that stand on their own, and both are checked here.
 
 // Long enough for any real title. It only tells the model what the change
 // is meant to do.
@@ -32,7 +34,7 @@ export const UNUSABLE_PATH_REASON =
   "the file name contains characters that cannot be put into the prompt";
 
 // Between two blocks of the message.
-const SEPARATOR = "\n\n";
+export const SEPARATOR = "\n\n";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 

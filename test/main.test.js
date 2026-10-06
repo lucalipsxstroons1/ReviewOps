@@ -306,6 +306,9 @@ test("leaves out a file whose name cannot be put into the prompt, as one harmles
 
   // The name is checked before the patch is parsed.
   assert.equal(parsed, 0);
+  assert.deepEqual(core.messages("warning"), [
+    'Files whose name cannot be put into the prompt: 1. They are not reviewed. A name with a double quote, "<", ">" or a control character cannot be sent.',
+  ]);
   const lines = [...core.messages("info"), ...core.messages("debug")];
   assert.ok(
     lines.includes(
@@ -953,9 +956,25 @@ test("leaves out a file larger than one request and reviews the others", async (
   // It counts against neither limit.
   assert.ok(selectionLines(core).includes(diffSizeLine([DEFAULT_PATCH])));
   assert.deepEqual(core.messages("warning"), [
-    `Files larger than one request to the model: 1. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters of diff.`,
+    `Files larger than one request to the model: 1. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters, the diff and the title included.`,
   ]);
   assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("does not warn about the name of a file that is excluded anyway", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, exclude: "*.lock" });
+  const octokit = createFakeOctokit([
+    apiFile('odd"name.lock'),
+    apiFile("src/<odd>.js"),
+    apiFile("src/good.js"),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.deepEqual(core.messages("warning"), [
+    'Files whose name cannot be put into the prompt: 1. They are not reviewed. A name with a double quote, "<", ">" or a control character cannot be sent.',
+  ]);
+  assert.deepEqual(ai.requests.map(pathsIn), [["src/good.js"]]);
 });
 
 test("ends with the notice when the only file is larger than one request", async () => {

@@ -124,7 +124,7 @@ export function parseReview({ content, finishReason }) {
   if (finishReason === "length") {
     throw new AiError(
       "truncated",
-      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Reduce \`max-files\` or \`max-diff-chars\`, or run the workflow again.`,
+      `The answer of the model was cut off at the limit of ${MAX_OUTPUT_TOKENS} tokens, so the review is incomplete. Run the workflow again; if it keeps happening, leave the largest files out with the input \`exclude\`.`,
     );
   }
   if (finishReason === "content_filter") {

@@ -147,6 +147,23 @@ test("never splits a file and never sends one twice, for many sizes", () => {
   }
 });
 
+test("splits 3000 small files quickly", () => {
+  const files = Array.from({ length: 3000 }, (_, index) =>
+    fileOf(`src/file-${index}.js`, 20),
+  );
+
+  const started = performance.now();
+  const batches = planBatches({ title: "Many files", files });
+  const elapsed = performance.now() - started;
+
+  assert.deepEqual(
+    batches.flatMap((batch) => batch.files),
+    files,
+  );
+  assert.ok(batches.every((batch) => batch.user.length <= MAX_REQUEST_CHARS));
+  assert.ok(elapsed < 1000, `batching took ${Math.round(elapsed)} ms`);
+});
+
 test("does not change the files it is given", () => {
   const files = [fileOf("a.js", 30000), fileOf("b.js", 30000)];
   const before = JSON.stringify(files);
