@@ -43,3 +43,16 @@ export function OrderCount({ customerId }) {
 
   return <span>{count} open orders</span>;
 }
+
+// Shows the orders that match a search term.
+export function OrderSearch({ term }) {
+  const [matches, setMatches] = useState([]);
+
+  useEffect(() => {
+    fetch(`/api/orders/search?term=${encodeURIComponent(term)}`)
+      .then((response) => response.json())
+      .then(setMatches);
+  }, []);
+
+  return <p>{matches.length} matching orders</p>;
+}
