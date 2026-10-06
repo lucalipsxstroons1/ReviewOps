@@ -1,8 +1,8 @@
-export const id = 511;
-export const ids = [511];
+export const id = 762;
+export const ids = [762];
 export const modules = {
 
-/***/ 8511:
+/***/ 1762:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -1850,9 +1850,74 @@ const context_isObject = (value) => typeof value === "object" && value !== null;
 const isRepositoryPart = (value) =>
   typeof value === "string" && REPOSITORY_PART.test(value);
 
+;// CONCATENATED MODULE: ./src/github/api-error.js
+/**
+ * Turns a failed request to the GitHub API into an error that names the HTTP
+ * status and says what to do. The original error stays attached as `cause`.
+ *
+ * What a 403 or a 404 means depends on the request: reading the files of a
+ * pull request needs other permissions than posting a review. The caller
+ * passes these hints. A rate limit is recognised before them, because GitHub
+ * also answers it with 403.
+ *
+ * @param {unknown} error What Octokit threw.
+ * @param {Record<number, string>} [hints] Hints by HTTP status.
+ * @returns {unknown} A new error, or the original one when it is not an
+ *   answer of the API.
+ */
+function describeApiError(error, hints = {}) {
+  const status = error?.status;
+  if (!Number.isInteger(status)) return error;
+
+  // Octokit reports a failed connection as status 500 without a response.
+  // Naming an HTTP status would claim an answer that never came.
+  if (!error.response) {
+    return new Error(
+      "GitHub could not be reached. Check the network of the runner and run the workflow again.",
+      { cause: error },
+    );
+  }
+
+  return new Error(
+    `GitHub API request failed (HTTP ${status}). ${hintFor(status, error, hints)}`,
+    { cause: error },
+  );
+}
+
+function hintFor(status, error, hints) {
+  if (status === 401) {
+    return "The token was rejected. Check the `github-token` input.";
+  }
+  if (status === 429 || (status === 403 && isRateLimited(error))) {
+    return "The rate limit of the token is used up. Run the workflow again later.";
+  }
+  if (Object.hasOwn(hints, status)) return hints[status];
+  if (status >= 500) {
+    return "GitHub could not answer the request. Run the workflow again later.";
+  }
+  return "Turn on debug logging to see the answer from GitHub.";
+}
+
+function isRateLimited(error) {
+  const headers = error.response?.headers ?? {};
+  return (
+    headers["x-ratelimit-remaining"] === "0" ||
+    "retry-after" in headers ||
+    /rate limit/i.test(String(error.message))
+  );
+}
+
 ;// CONCATENATED MODULE: ./src/github/files.js
+
+
 // GitHub lists at most this many files for one pull request.
 const API_FILE_LIMIT = 3000;
+
+// What a 403 or a 404 means when the files of a pull request are read.
+const LIST_FILES_HINTS = Object.freeze({
+  403: "The token may not read this pull request. The workflow needs the `pull-requests` permission.",
+  404: "The pull request was not found, or the token has no access to the repository.",
+});
 
 const SKIP_REASONS = Object.freeze({
   removed: "the file was deleted",
@@ -1892,7 +1957,7 @@ async function listChangedFiles(octokit, { owner, repo, pullNumber }) {
       per_page: 100,
     });
   } catch (error) {
-    throw describeApiError(error);
+    throw describeApiError(error, LIST_FILES_HINTS);
   }
 
   const files = [];
@@ -1935,55 +2000,566 @@ function skipReason(entry) {
   return contentIsUnchanged ? SKIP_REASONS.unchanged : SKIP_REASONS.noPatch;
 }
 
-/**
- * Turns a failed API request into an error that names the HTTP status and
- * says what to do. The original error stays attached as `cause`.
- */
-function describeApiError(error) {
-  const status = error?.status;
-  if (!Number.isInteger(status)) return error;
+;// CONCATENATED MODULE: ./src/github/markdown.js
+// Turns text from the model into Markdown that GitHub renders as nothing but
+// text and code. The model can be steered by the diff, so its text could
+// otherwise mention people, load images from any address, show links under
+// the name of this action or forge the marker of a review comment.
+//
+// The text is read leniently and written strictly: code blocks and inline
+// code are recognised and written again with fences of their own, longer
+// than any run of backticks inside. Everything else is escaped. What GitHub
+// renders is decided here, not by the model.
 
-  // Octokit reports a failed connection as status 500 without a response.
-  // Naming an HTTP status would claim an answer that never came.
-  if (!error.response) {
-    return new Error(
-      "GitHub could not be reached. Check the network of the runner and run the workflow again.",
-      { cause: error },
+// Control characters other than tab and line feed, invisible format
+// characters and the Unicode line and paragraph separators. They could hide
+// text from a reader or reorder it, so they are shown by their code point.
+const INVISIBLE = /[^\P{Cc}\n\t]|[\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+// Every ASCII punctuation character can be escaped with a backslash in
+// CommonMark, and an escaped one is always shown as itself.
+const PUNCTUATION = /[!-/:-@[-`{-~]/g;
+
+// Text that GitHub turns into a link or a notification even without any
+// Markdown: addresses, e-mail addresses, mentions and references to issues.
+// Shown as inline code, it stays plain text. The repetitions are bounded, so
+// matching stays linear on long text.
+const AUTOLINKED = new RegExp(
+  [
+    String.raw`(?:https?|ftp|wss?):\/\/[^\s<>()[\]\x60]{0,2000}`,
+    String.raw`\bwww\.[^\s<>()[\]\x60]{1,2000}`,
+    String.raw`[\w.+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,10}`,
+    String.raw`(?<![\w@])@[A-Za-z0-9-]{1,39}(?:\/[A-Za-z0-9._-]{1,100})?`,
+    String.raw`\b[\w.-]{1,100}\/[\w.-]{1,100}#\d{1,10}\b`,
+    String.raw`(?<![\w&])#\d{1,10}\b`,
+    String.raw`\bGH-\d{1,10}\b`,
+  ].join("|"),
+  "gu",
+);
+
+// The start and the end of a fenced code block, as CommonMark reads them.
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+// A language name of a code block. Anything else is left out.
+const LANGUAGE = /^[A-Za-z0-9#+.-]{1,30}$/;
+
+/**
+ * Shows invisible characters by their code point, a right-to-left override
+ * for example as backslash-u-202e. Line feeds and tabs stay.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function visible(text) {
+  return String(text)
+    .replace(/\r\n?/g, "\n")
+    .replace(
+      INVISIBLE,
+      (character) =>
+        `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+    );
+}
+
+/**
+ * Text as inline code: a run of backticks around it that is longer than any
+ * run inside, so nothing in the text can end the code early. A line break
+ * becomes a space: inline code cannot span a paragraph.
+ *
+ * @param {string} text
+ * @returns {string} Empty for empty text.
+ */
+function inlineCode(text) {
+  const code = visible(text).replace(/\n/g, " ");
+  if (code === "") return "";
+  const fence = "`".repeat(longestRun(code, "`") + 1);
+  // A space keeps a backtick at the edge apart from the fence. CommonMark
+  // removes one space on each side again.
+  const padded = /^`|`$|^ .* $/.test(code) ? ` ${code} ` : code;
+  return `${fence}${padded}${fence}`;
+}
+
+/**
+ * Text as a fenced code block, with a fence longer than any run of backticks
+ * inside.
+ *
+ * @param {string} text
+ * @param {string} [language] A language name. A value that does not look
+ *   like one is left out.
+ * @returns {string}
+ */
+function codeBlock(text, language = "") {
+  const code = visible(text).replace(/\n+$/, "");
+  const fence = "`".repeat(Math.max(3, longestRun(code, "`") + 1));
+  const info = LANGUAGE.test(language) ? language : "";
+  return `${fence}${info}\n${code}\n${fence}`;
+}
+
+/**
+ * Text as Markdown that renders as nothing but text: every punctuation
+ * character is escaped, and addresses, mentions and references become
+ * inline code.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function plainText(text) {
+  const source = visible(text);
+  let result = "";
+  let last = 0;
+  for (const match of source.matchAll(AUTOLINKED)) {
+    result += markdown_escape(source.slice(last, match.index)) + inlineCode(match[0]);
+    last = match.index + match[0].length;
+  }
+  return result + markdown_escape(source.slice(last));
+}
+
+/**
+ * Text from the model as safe Markdown. Fenced code blocks (also one without
+ * an end) and inline code keep their content and become code again; all
+ * other text goes through `plainText()`.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function modelMarkdown(text) {
+  const lines = visible(text).split("\n");
+  const blocks = [];
+  let prose = [];
+  const flushProse = () => {
+    if (prose.length > 0) blocks.push(proseMarkdown(prose.join("\n")));
+    prose = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const open = FENCE.exec(lines[index]);
+    if (!open || (open[1][0] === "`" && open[2].includes("`"))) {
+      prose.push(lines[index]);
+      continue;
+    }
+    flushProse();
+    const [, fence, info] = open;
+    const code = [];
+    index += 1;
+    while (index < lines.length && !closes(lines[index], fence)) {
+      code.push(lines[index]);
+      index += 1;
+    }
+    blocks.push(codeBlock(code.join("\n"), info.trim().split(/\s/)[0]));
+  }
+  flushProse();
+  return blocks.join("\n");
+}
+
+/** Prose with inline code: code spans stay code, the rest becomes text. */
+function proseMarkdown(text) {
+  // Leading spaces would make an indented code block of escaped text.
+  const source = text.replace(/^[ \t]+/gm, "");
+  let result = "";
+  let position = 0;
+  let textStart = 0;
+  while (position < source.length) {
+    if (source[position] !== "`") {
+      position += 1;
+      continue;
+    }
+    const length = runLength(source, position, "`");
+    const end = findRun(source, position + length, length);
+    if (end === -1) {
+      // Backticks without a partner are text.
+      position += length;
+      continue;
+    }
+    result += plainText(source.slice(textStart, position));
+    result += inlineCode(trimCodeSpan(source.slice(position + length, end)));
+    position = end + length;
+    textStart = position;
+  }
+  return result + plainText(source.slice(textStart));
+}
+
+/** Whether a line ends a code block that began with this fence. */
+function closes(line, fence) {
+  const match = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+  return (
+    match !== null &&
+    match[1][0] === fence[0] &&
+    match[1].length >= fence.length
+  );
+}
+
+/** The start of the next run of exactly `length` backticks, or -1. */
+function findRun(text, from, length) {
+  let position = text.indexOf("`", from);
+  while (position !== -1) {
+    const run = runLength(text, position, "`");
+    if (run === length) return position;
+    position = text.indexOf("`", position + run);
+  }
+  return -1;
+}
+
+/** CommonMark removes one space on each side of a code span. */
+function trimCodeSpan(code) {
+  return /^ .* $/s.test(code) && code.trim() !== "" ? code.slice(1, -1) : code;
+}
+
+function runLength(text, from, character) {
+  let end = from;
+  while (text[end] === character) end += 1;
+  return end - from;
+}
+
+function longestRun(text, character) {
+  let longest = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== character) continue;
+    const length = runLength(text, index, character);
+    longest = Math.max(longest, length);
+    index += length - 1;
+  }
+  return longest;
+}
+
+function markdown_escape(text) {
+  return text.replace(PUNCTUATION, "\\$&");
+}
+
+;// CONCATENATED MODULE: ./src/github/review.js
+
+
+
+
+/**
+ * Marks every comment and every review text of this action. It always
+ * stands at the very start of a body; text from the model can never put it
+ * there, and its `<` is escaped anywhere else.
+ */
+const REVIEW_MARKER = "<!-- reviewops -->";
+
+/**
+ * The longest body this action sends. GitHub accepts 65536 characters.
+ */
+const MAX_BODY_CHARS = 60000;
+
+/** File names listed in the review text; the rest is counted. */
+const MAX_LISTED_FILES = 20;
+
+// A longer path is cut in the review text. GitHub allows much longer paths,
+// and the list is meant to be read.
+const MAX_PATH_CHARS = 200;
+
+const SEVERITY_LABELS = Object.freeze({
+  critical: "🔴 Critical",
+  major: "🟠 Major",
+  minor: "🟡 Minor",
+  info: "🔵 Info",
+});
+
+// What a status means when a review is posted.
+const POST_REVIEW_HINTS = Object.freeze({
+  403: "The token may not post a review. Give the workflow the permission `pull-requests: write` under `permissions`.",
+  404: "The pull request was not found, or the token has no access to the repository.",
+  422: "GitHub did not accept the review. Turn on debug logging to see the answer from GitHub.",
+});
+
+/**
+ * The line that marks a text as written by an AI model.
+ *
+ * @param {string} model A name that `parseModel()` returned.
+ * @returns {string}
+ */
+function aiLabel(model) {
+  return `<sub>AI-generated by ReviewOps (${plainText(model)}). Check it before you act on it.</sub>`;
+}
+
+/**
+ * The body of one inline comment.
+ *
+ * @param {import("../ai/schema.js").Finding} finding
+ * @param {string} model
+ * @returns {string}
+ */
+function commentBody(finding, model) {
+  return capLength(
+    [REVIEW_MARKER, findingMarkdown(finding), "---", aiLabel(model)].join(
+      "\n\n",
+    ),
+  );
+}
+
+/**
+ * The text of the review.
+ *
+ * @param {object} options
+ * @param {string} options.model
+ * @param {string[]} options.summaries The summaries of the requests.
+ * @param {import("../ai/schema.js").Finding[]} options.inline Findings that
+ *   are posted as inline comments; only counted here.
+ * @param {import("../ai/schema.js").Finding[]} options.listed Findings whose
+ *   whole text stands in the review text.
+ * @param {number} options.overLimit Findings left out by `max-comments`.
+ * @param {number} options.maxComments
+ * @param {{ path: string, reason: string }[]} options.skipped Files that
+ *   were not reviewed, with the reason.
+ * @param {boolean} [options.fallback] GitHub rejected the inline comments,
+ *   so every finding is listed.
+ * @returns {string} At most {@link MAX_BODY_CHARS} characters.
+ */
+function reviewBody({
+  model,
+  summaries,
+  inline,
+  listed,
+  overLimit,
+  maxComments,
+  skipped,
+  fallback = false,
+}) {
+  const shown = [...inline, ...listed];
+  const counts = SEVERITIES.map(
+    (severity) =>
+      `${shown.filter((finding) => finding.severity === severity).length} ${severity}`,
+  ).join(", ");
+
+  const head = [REVIEW_MARKER, "### ReviewOps"];
+  const findingsLine = [`**Findings:** ${shown.length} (${counts}).`];
+  if (overLimit > 0) {
+    findingsLine.push(
+      `${overLimit} more findings are not shown (\`max-comments\`: ${maxComments}).`,
     );
   }
 
-  return new Error(
-    `GitHub API request failed (HTTP ${status}). ${hintFor(status, error)}`,
-    { cause: error },
+  const listHeading = fallback
+    ? "#### Findings\n\nGitHub did not accept the inline comments, so every finding is listed here."
+    : "#### Findings without a line in the diff\n\nThese findings point at a line that cannot carry a comment.";
+
+  const tail = [];
+  if (skipped.length > 0) tail.push(skippedList(skipped));
+  tail.push("---", aiLabel(model));
+
+  const compose = (summaryCount, findingCount, notes) => {
+    const blocks = [...head];
+    blocks.push(...summaries.slice(0, summaryCount).map(modelMarkdown));
+    blocks.push(findingsLine.join(" "));
+    if (listed.length > 0) {
+      blocks.push(listHeading);
+      blocks.push(
+        ...listed
+          .slice(0, findingCount)
+          .map((finding) => locatedFinding(finding)),
+      );
+    }
+    blocks.push(...notes);
+    blocks.push(...tail);
+    return blocks.join("\n\n");
+  };
+
+  // Too long a text is cut where it hurts least: first the summaries, which
+  // grow with the number of requests, then findings from the end.
+  let summaryCount = summaries.length;
+  let findingCount = listed.length;
+  const notes = () => {
+    const result = [];
+    if (summaryCount < summaries.length) {
+      result.push(
+        `${summaries.length - summaryCount} summaries are left out: they do not fit into one review.`,
+      );
+    }
+    if (findingCount < listed.length) {
+      result.push(
+        `${listed.length - findingCount} more findings are not shown: they do not fit into one review.`,
+      );
+    }
+    return result;
+  };
+  let text = compose(summaryCount, findingCount, notes());
+  while (text.length > MAX_BODY_CHARS && summaryCount > 0) {
+    summaryCount -= 1;
+    text = compose(summaryCount, findingCount, notes());
+  }
+  while (text.length > MAX_BODY_CHARS && findingCount > 0) {
+    findingCount -= 1;
+    text = compose(summaryCount, findingCount, notes());
+  }
+  return capLength(text);
+}
+
+/**
+ * Posts the review of a pull request: one review of the type COMMENT with
+ * every inline comment. When GitHub rejects the inline comments (HTTP 422),
+ * a second review without them lists every finding in its text.
+ *
+ * Nothing in here writes to the log: the texts come from the model.
+ *
+ * @param {object} options
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} options.octokit
+ * @param {{ owner: string, repo: string, pullNumber: number, headSha: string }} options.pullRequest
+ * @param {string} options.model
+ * @param {string[]} options.summaries
+ * @param {{
+ *   inline: import("../ai/schema.js").Finding[],
+ *   unplaced: import("../ai/schema.js").Finding[],
+ *   dropped: { overLimit: number },
+ * }} options.selection What `selectFindings()` returned.
+ * @param {number} options.maxComments
+ * @param {{ path: string, reason: string }[]} options.skipped
+ * @returns {Promise<{ reviewId: number | null, inlineComments: number, fallback: boolean }>}
+ * @throws {Error} When GitHub accepts no review, with a message that says
+ *   what to do.
+ */
+async function postReview({
+  octokit,
+  pullRequest,
+  model,
+  summaries,
+  selection,
+  maxComments,
+  skipped,
+}) {
+  const { inline, unplaced, dropped } = selection;
+  const common = {
+    model,
+    summaries,
+    overLimit: dropped.overLimit,
+    maxComments,
+    skipped,
+  };
+  const request = (body, comments) =>
+    octokit.rest.pulls.createReview({
+      owner: pullRequest.owner,
+      repo: pullRequest.repo,
+      pull_number: pullRequest.pullNumber,
+      commit_id: pullRequest.headSha,
+      // The only type this action ever posts: it never approves and never
+      // blocks a merge.
+      event: "COMMENT",
+      body,
+      ...(comments.length > 0 ? { comments } : {}),
+    });
+
+  const comments = inline.map((finding) => ({
+    path: finding.path,
+    line: finding.line,
+    side: "RIGHT",
+    body: commentBody(finding, model),
+  }));
+
+  try {
+    const response = await request(
+      reviewBody({ ...common, inline, listed: unplaced }),
+      comments,
+    );
+    return {
+      reviewId: reviewIdOf(response),
+      inlineComments: comments.length,
+      fallback: false,
+    };
+  } catch (error) {
+    if (error?.status !== 422 || comments.length === 0) {
+      throw describeApiError(error, POST_REVIEW_HINTS);
+    }
+  }
+
+  try {
+    const response = await request(
+      reviewBody({
+        ...common,
+        inline: [],
+        listed: [...inline, ...unplaced],
+        fallback: true,
+      }),
+      [],
+    );
+    return {
+      reviewId: reviewIdOf(response),
+      inlineComments: 0,
+      fallback: true,
+    };
+  } catch (error) {
+    throw describeApiError(error, POST_REVIEW_HINTS);
+  }
+}
+
+// The address of the GitHub server: github.com or GitHub Enterprise.
+const SERVER_URL = /^https:\/\/[A-Za-z0-9.-]{1,253}(?::\d{1,5})?$/;
+
+/**
+ * The address of the GitHub server of this run. `@actions/github` takes it
+ * from GITHUB_SERVER_URL; anything that does not look like an address of a
+ * server falls back to github.com.
+ *
+ * @param {unknown} value `context.serverUrl`
+ * @returns {string}
+ */
+function serverUrlOf(value) {
+  return typeof value === "string" && SERVER_URL.test(value)
+    ? value
+    : "https://github.com";
+}
+
+/**
+ * The address of a review, built from checked values only.
+ *
+ * @param {string} serverUrl
+ * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
+ * @param {number} reviewId
+ * @returns {string}
+ */
+function reviewUrl(serverUrl, { owner, repo, pullNumber }, reviewId) {
+  return `${serverUrl}/${owner}/${repo}/pull/${pullNumber}#pullrequestreview-${reviewId}`;
+}
+
+/** The id of a created review, or `null` when the answer has none. */
+function reviewIdOf(response) {
+  const id = response?.data?.id;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** Severity, category, title, comment and suggestion of a finding. */
+function findingMarkdown(finding, location = "") {
+  const title = plainText(finding.title.replace(/\s+/g, " ").trim());
+  return [
+    `**${SEVERITY_LABELS[finding.severity]}** · ${inlineCode(finding.category)}${location}`,
+    `**${title}**`,
+    modelMarkdown(finding.comment),
+    "**Suggestion**",
+    modelMarkdown(finding.suggestion),
+  ].join("\n\n");
+}
+
+/** A finding in the review text, with the place it points at. */
+function locatedFinding(finding) {
+  return findingMarkdown(
+    finding,
+    ` · ${pathCode(finding.path)}, line ${finding.line}`,
   );
 }
 
-function hintFor(status, error) {
-  if (status === 401) {
-    return "The token was rejected. Check the `github-token` input.";
+/** The files that were not reviewed, the first ones by name. */
+function skippedList(skipped) {
+  const lines = skipped
+    .slice(0, MAX_LISTED_FILES)
+    .map(({ path, reason }) => `- ${pathCode(path)}: ${plainText(reason)}`);
+  if (skipped.length > MAX_LISTED_FILES) {
+    lines.push(`- and ${skipped.length - MAX_LISTED_FILES} more files`);
   }
-  if (status === 429 || (status === 403 && isRateLimited(error))) {
-    return "The rate limit of the token is used up. Run the workflow again later.";
-  }
-  if (status === 403) {
-    return "The token may not read this pull request. The workflow needs the `pull-requests` permission.";
-  }
-  if (status === 404) {
-    return "The pull request was not found, or the token has no access to the repository.";
-  }
-  if (status >= 500) {
-    return "GitHub could not answer the request. Run the workflow again later.";
-  }
-  return "Turn on debug logging to see the answer from GitHub.";
+  return [`#### Files not reviewed (${skipped.length})`, lines.join("\n")].join(
+    "\n\n",
+  );
 }
 
-function isRateLimited(error) {
-  const headers = error.response?.headers ?? {};
-  return (
-    headers["x-ratelimit-remaining"] === "0" ||
-    "retry-after" in headers ||
-    /rate limit/i.test(String(error.message))
-  );
+/** A file name as inline code. File names come from the pull request. */
+function pathCode(path) {
+  const name =
+    path.length > MAX_PATH_CHARS ? `${path.slice(0, MAX_PATH_CHARS)}…` : path;
+  return inlineCode(name);
+}
+
+/** The last guard: a body is never longer than GitHub accepts. */
+function capLength(text) {
+  return text.length > MAX_BODY_CHARS
+    ? `${text.slice(0, MAX_BODY_CHARS - 1)}…`
+    : text;
 }
 
 ;// CONCATENATED MODULE: ./src/inputs.js
@@ -2075,10 +2651,10 @@ const MIN_NUMBER_WIDTH = 4;
 // shown by their code point, a line separator for example as
 // backslash-u-2028, so the model sees them.
 // The tab is kept: it is ordinary indentation.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const annotate_INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-const visible = (text) =>
-  text.replace(INVISIBLE, (character) =>
+const annotate_visible = (text) =>
+  text.replace(annotate_INVISIBLE, (character) =>
     character === "\t"
       ? character
       : `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
@@ -2120,12 +2696,12 @@ function annotateDiff(hunks) {
 
   const rows = [];
   for (const hunk of hunks) {
-    rows.push(hunk.section ? `@@ ${visible(hunk.section)}` : "@@");
+    rows.push(hunk.section ? `@@ ${annotate_visible(hunk.section)}` : "@@");
     for (const { type, line, content } of hunk.lines) {
       const number = type === "added" ? String(line) : "";
       // Files with Windows line endings carry a carriage return on each line.
       const code = content.endsWith("\r") ? content.slice(0, -1) : content;
-      rows.push(`${number.padStart(width)} | ${MARKERS[type]}${visible(code)}`);
+      rows.push(`${number.padStart(width)} | ${MARKERS[type]}${annotate_visible(code)}`);
     }
   }
   return rows.join("\n");
@@ -2426,6 +3002,7 @@ async function reviewInBatches({
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -2435,6 +3012,8 @@ const SUPPORTED_EVENT = "pull_request";
 const MAX_SKIPPED_LINES = 50;
 
 const UNREADABLE_DIFF = "the diff could not be read";
+
+const NOT_REVIEWED = "the request to the model failed";
 
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
@@ -2635,8 +3214,8 @@ async function run({
     // first error says what to do.
     if (review.succeeded === 0) throw review.failed[0].error;
 
+    const notReviewed = review.failed.flatMap(({ paths }) => paths);
     if (review.failed.length > 0) {
-      const notReviewed = review.failed.flatMap(({ paths }) => paths);
       // The messages of the client are its own texts, without anything from
       // the answer of the API.
       const reasons = [
@@ -2648,9 +3227,7 @@ async function run({
         ),
       );
       for (const path of notReviewed.slice(0, MAX_SKIPPED_LINES)) {
-        core.info(
-          `Not reviewed ${printable(path)}: the request to the model failed.`,
-        );
+        core.info(`Not reviewed ${printable(path)}: ${NOT_REVIEWED}.`);
       }
       if (notReviewed.length > MAX_SKIPPED_LINES) {
         core.info(
@@ -2672,7 +3249,7 @@ async function run({
     );
 
     // Numbers only: the findings and the summary hold code from the pull
-    // request. Posting them follows in a later step.
+    // request.
     core.info(
       `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
     );
@@ -2683,6 +3260,45 @@ async function run({
     core.info(
       `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
+
+    // An empty review would only notify people. Files that were not
+    // reviewed are named in the log above.
+    if (shown.length === 0) {
+      core.info("No findings, so no review was posted.");
+      return;
+    }
+
+    // One review of the type COMMENT with every inline comment. The texts
+    // of the model are made safe for Markdown on the way.
+    const posted = await postReview({
+      octokit,
+      pullRequest,
+      model,
+      summaries: review.reviews.map(({ summary }) => summary),
+      selection: { inline, unplaced, dropped },
+      maxComments: limits.maxComments,
+      skipped: [
+        ...skipped,
+        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
+      ],
+    });
+    const where =
+      posted.reviewId === null
+        ? `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`
+        : reviewUrl(
+            serverUrlOf(context.serverUrl),
+            pullRequest,
+            posted.reviewId,
+          );
+    if (posted.fallback) {
+      core.warning(
+        `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review: ${where}`,
+      );
+    } else {
+      core.info(
+        `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text: ${where}`,
+      );
+    }
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(main_describe(error)));
