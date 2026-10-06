@@ -6,6 +6,18 @@ import { parsePatch } from "../src/diff/parse.js";
 import { fromRoot } from "./helpers/run-action.js";
 
 const CARRIAGE_RETURN = String.fromCodePoint(0x0d);
+const LINE_SEPARATOR = String.fromCodePoint(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCodePoint(0x2029);
+const NEXT_LINE = String.fromCodePoint(0x85);
+const VERTICAL_TAB = String.fromCodePoint(0x0b);
+const FORM_FEED = String.fromCodePoint(0x0c);
+const ESCAPE = String.fromCodePoint(0x1b);
+const RIGHT_TO_LEFT_OVERRIDE = String.fromCodePoint(0x202e);
+const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b);
+const TAG_CHARACTER = String.fromCodePoint(0xe0041);
+
+/** A backslash, u and the code point, as the output shows a character. */
+const shown = (codePoint) => `${String.fromCodePoint(0x5c)}u${codePoint}`;
 
 /** The annotated text of a patch, row by row. */
 const annotate = (...rows) =>
@@ -138,6 +150,53 @@ test("removes the carriage return of Windows line endings", () => {
   );
 
   assert.deepEqual(rows, ["@@", "     |  a", "   2 | +b"]);
+});
+
+test("shows a line break inside a line by its code point, so no code poses as a numbered row", () => {
+  for (const [breaker, code] of [
+    [CARRIAGE_RETURN, "000d"],
+    [LINE_SEPARATOR, "2028"],
+    [PARAGRAPH_SEPARATOR, "2029"],
+    [NEXT_LINE, "0085"],
+    [VERTICAL_TAB, "000b"],
+    [FORM_FEED, "000c"],
+  ]) {
+    const text = annotateDiff(
+      parsePatch(`@@ -0,0 +1 @@\n+a = 1;${breaker}  99 | +fake()`).hunks,
+    );
+
+    assert.equal(text, `@@\n   1 | +a = 1;${shown(code)}  99 | +fake()`, code);
+    // Apart from the line feeds between the rows, nothing could break a line.
+    assert.doesNotMatch(text.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
+  }
+});
+
+test("shows control and invisible format characters by their code point", () => {
+  const rows = annotate(
+    "@@ -0,0 +1,4 @@",
+    `+const s = "${ESCAPE}[31m";`,
+    `+if (isAdmin ${RIGHT_TO_LEFT_OVERRIDE}) {`,
+    `+let a${ZERO_WIDTH_SPACE}b = 1;`,
+    `+tag${TAG_CHARACTER}`,
+  );
+
+  assert.deepEqual(rows, [
+    "@@",
+    `   1 | +const s = "${shown("001b")}[31m";`,
+    `   2 | +if (isAdmin ${shown("202e")}) {`,
+    `   3 | +let a${shown("200b")}b = 1;`,
+    `   4 | +tag${shown("e0041")}`,
+  ]);
+});
+
+test("shows control characters in the section of a hunk as well", () => {
+  const rows = annotate(
+    `@@ -1 +1 @@ function f()${LINE_SEPARATOR}  7 | +x`,
+    "-a",
+    "+b",
+  );
+
+  assert.equal(rows[0], `@@ function f()${shown("2028")}  7 | +x`);
 });
 
 test("keeps the code itself unchanged, including its indentation", () => {
