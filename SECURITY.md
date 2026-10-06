@@ -43,7 +43,7 @@ The workflow that runs the action grants these permissions and no others:
 - `contents: read`
 - `pull-requests: write`
 
-The action reads the changed files of the pull request through the GitHub API. It does not read the working tree of the runner. The step that posts the review is not part of this version, so the action posts nothing yet.
+The action reads the changed files of the pull request through the GitHub API. It does not read the working tree of the runner. With `pull-requests: write` it posts one review of the type `COMMENT` per run, with its inline comments at added lines of the diff, and only when there are findings. Without that right the step fails with a message that points at `permissions`.
 
 ## Events, forks and Dependabot
 
@@ -61,8 +61,9 @@ The answer is untrusted input. It comes from a model that reads text written by 
 - Every text of the answer is bounded and cleaned right after it is read. A title is cut at 150 characters, a comment and a suggestion at 1500, a summary at 1000. A cut text ends with `…`. Control characters, format characters (direction overrides, zero-width characters, tag characters) and the few characters that show as blank (such as the Braille blank and the Hangul fillers) are removed. A text that is empty after that is dropped with its finding. This also removes the joiners of emoji sequences and direction marks of right-to-left text; that is a cosmetic cost of the protection.
 - A finding is only used if its file is one of the files that were sent in the same request. Whether it can carry an inline comment depends on the added lines of that file, which the action calculates itself. A line number of the model is never trusted.
 - Nothing from the answer is executed, evaluated or loaded: no code, no URL, no file. The action makes no network request except to the GitHub API and the OpenAI API. A test over the sources keeps it that way.
+- The texts of the model reach the review only as plain text and code. Before they are posted, code blocks and inline code are written again with fences of the action, and every punctuation character outside of code is escaped; addresses, e-mail addresses, mentions and references to issues are shown as code. A review therefore contains no link, image or HTML from the model, notifies nobody and cannot forge the marker `<!-- reviewops -->` that starts every comment of the action. Every comment and every review text says that it was written by an AI model.
 - The action never approves a pull request and never requests changes.
 
 ## What is not in the log
 
-The log never contains the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. It contains file names (shown in a form that cannot break a line), numbers and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.
+The log never contains the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.

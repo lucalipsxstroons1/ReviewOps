@@ -15,7 +15,12 @@ import { SKIP_REASONS } from "../src/github/files.js";
 import { run } from "../src/main.js";
 import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
 import { createFakeCore } from "./helpers/fake-core.js";
-import { apiFile, apiFiles, createFakeOctokit } from "./helpers/github-api.js";
+import {
+  apiFailure,
+  apiFile,
+  apiFiles,
+  createFakeOctokit,
+} from "./helpers/github-api.js";
 import { REVIEWING_LINE } from "./helpers/run-action.js";
 
 const VALID_INPUTS = {
@@ -1041,11 +1046,15 @@ test("logs the requests and the findings per severity, nothing else", async () =
 
   await runWith(core, { ai });
 
-  assert.deepEqual(core.messages("info").slice(-3), [
+  assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
     "Sending 2 files to gpt-4o-mini in 1 requests.",
     "Checked 3 findings: 3 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 3 findings (1 critical, 0 major, 2 minor, 0 info) from 1 of 1 requests.",
   ]);
+  assert.equal(
+    core.messages("info").at(-1),
+    "Posted a review with 3 inline comments and 0 findings in its text: https://github.com/octo-org/demo/pull/42#pullrequestreview-1000",
+  );
   assert.deepEqual(core.messages("warning"), []);
   assert.deepEqual(core.messages("setFailed"), []);
 });
@@ -1075,11 +1084,15 @@ test("spreads a pull request over the budget of one request and merges the findi
     assert.ok(request.user.length <= MAX_REQUEST_CHARS);
     assert.match(request.user, /^<file path="/);
   }
-  assert.deepEqual(core.messages("info").slice(-3), [
+  assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
     "Sending 4 files to gpt-4o-mini in 3 requests.",
     "Checked 4 findings: 4 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 4 findings (0 critical, 4 major, 0 minor, 0 info) from 3 of 3 requests.",
   ]);
+  assert.equal(
+    core.messages("info").at(-1),
+    "Posted a review with 4 inline comments and 0 findings in its text: https://github.com/octo-org/demo/pull/42#pullrequestreview-1000",
+  );
 });
 
 test("leaves out a file larger than one request and reviews the others", async () => {
@@ -1156,12 +1169,16 @@ test("keeps the other findings and ends green with a warning when one request fa
   assert.deepEqual(core.messages("warning"), [
     `Requests to the model that failed: 1 of 3. 1 files were not reviewed. ${failure.message}`,
   ]);
-  assert.deepEqual(core.messages("info").slice(-4), [
+  assert.deepEqual(core.messages("info").slice(-4 - 1, -1), [
     "Sending 3 files to gpt-4o-mini in 3 requests.",
     "Not reviewed src/b.js: the request to the model failed.",
     "Checked 2 findings: 2 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 2 findings (0 critical, 2 major, 0 minor, 0 info) from 2 of 3 requests.",
   ]);
+  assert.equal(
+    core.messages("info").at(-1),
+    "Posted a review with 2 inline comments and 0 findings in its text: https://github.com/octo-org/demo/pull/42#pullrequestreview-1000",
+  );
 });
 
 test("keeps the other findings and ends green when one answer is not valid JSON", async () => {
@@ -1182,10 +1199,14 @@ test("keeps the other findings and ends green when one answer is not valid JSON"
   assert.deepEqual(core.messages("warning"), [
     "Requests to the model that failed: 1 of 2. 1 files were not reviewed. The answer of the model is not valid JSON. Run the workflow again.",
   ]);
-  assert.deepEqual(core.messages("info").slice(-2), [
+  assert.deepEqual(core.messages("info").slice(-2 - 1, -1), [
     "Checked 1 findings: 1 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates and 0 over the limit of 10 (max-comments).",
     "Review finished: 1 findings (1 critical, 0 major, 0 minor, 0 info) from 1 of 2 requests.",
   ]);
+  assert.equal(
+    core.messages("info").at(-1),
+    "Posted a review with 1 inline comments and 0 findings in its text: https://github.com/octo-org/demo/pull/42#pullrequestreview-1000",
+  );
 });
 
 test("checks every finding against the diff and counts what it leaves out", async () => {
@@ -1206,10 +1227,14 @@ test("checks every finding against the diff and counts what it leaves out", asyn
   await runWith(core, { ai });
 
   assert.deepEqual(core.messages("setFailed"), []);
-  assert.deepEqual(core.messages("info").slice(-2), [
+  assert.deepEqual(core.messages("info").slice(-2 - 1, -1), [
     "Checked 7 findings: 2 at an added line, 1 at another line, left out 1 with an empty text, 1 for a file that was not sent, 1 duplicates and 1 over the limit of 3 (max-comments).",
     "Review finished: 3 findings (1 critical, 1 major, 1 minor, 0 info) from 1 of 1 requests.",
   ]);
+  assert.equal(
+    core.messages("info").at(-1),
+    "Posted a review with 2 inline comments and 1 findings in its text: https://github.com/octo-org/demo/pull/42#pullrequestreview-1000",
+  );
   assert.doesNotMatch(JSON.stringify(core.calls), /invented|context line/);
 });
 
@@ -1516,4 +1541,157 @@ test("keeps no unmasked patch once the diffs are parsed", async () => {
   assert.equal(seen.length, 1);
   assert.ok(!JSON.stringify(seen).includes(token));
   assert.ok(!JSON.stringify(core.calls).includes(token));
+});
+
+// --- Posting the review ----------------------------------------------------
+
+const HEAD_SHA = "1111111111111111111111111111111111111111";
+const POSTED_TO =
+  "https://github.com/octo-org/demo/pull/42#pullrequestreview-1000";
+
+test("posts no review and calls no endpoint when there are no findings", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  const { client } = await runWith(core);
+
+  assert.deepEqual(client.reviews, []);
+  assert.equal(
+    core.messages("info").at(-1),
+    "No findings, so no review was posted.",
+  );
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("posts all findings of a run as one review of the type COMMENT", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const ai = createFakeAi(() =>
+    modelAnswer([
+      modelFinding("src/file-0.js", "critical", "first"),
+      modelFinding("src/file-1.js", "minor", "second"),
+    ]),
+  );
+
+  const { client } = await runWith(core, { ai });
+
+  assert.equal(client.reviews.length, 1);
+  const [request] = client.reviews;
+  assert.equal(request.event, "COMMENT");
+  assert.equal(request.commit_id, HEAD_SHA);
+  assert.equal(request.pull_number, 42);
+  assert.deepEqual(
+    request.comments.map(({ path, line, side }) => ({ path, line, side })),
+    [
+      { path: "src/file-0.js", line: 1, side: "RIGHT" },
+      { path: "src/file-1.js", line: 1, side: "RIGHT" },
+    ],
+  );
+  assert.match(request.body, /\*\*Findings:\*\* 2 \(1 critical/);
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("names skipped files and files whose request failed in the review text", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    bigFile("src/a.js", 3000),
+    bigFile("src/b.js", 3000),
+    apiFile("package-lock.json"),
+  ]);
+  const ai = createFakeAi((request) =>
+    pathsIn(request)[0] === "src/b.js"
+      ? new AiError("server", "OpenAI could not answer.", 500)
+      : modelAnswer([modelFinding("src/a.js")]),
+  );
+
+  const { client } = await runWith(core, { octokit, ai });
+
+  const { body } = client.reviews[0];
+  assert.match(body, /#### Files not reviewed \(2\)/);
+  assert.match(
+    body,
+    /- `package-lock\.json`: matches the default exclude pattern/,
+  );
+  assert.match(body, /- `src\/b\.js`: the request to the model failed/);
+});
+
+test("ends green with a warning when GitHub rejects the inline comments", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(2), {
+    createReview: (parameters, index) =>
+      index === 0 ? apiFailure(422) : { status: 200, data: { id: 5 } },
+  });
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/file-0.js", "major", "only")]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(octokit.reviews.length, 2);
+  assert.equal("comments" in octokit.reviews[1], false);
+  assert.match(
+    octokit.reviews[1].body,
+    /GitHub did not accept the inline comments/,
+  );
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.deepEqual(core.messages("warning"), [
+    "GitHub did not accept the inline comments (HTTP 422), so all 1 findings are listed in the text of the review: https://github.com/octo-org/demo/pull/42#pullrequestreview-5",
+  ]);
+});
+
+test("fails the step with a hint at permissions when the token may not post", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(apiFiles(2), {
+    createReview: () =>
+      apiFailure(403, { message: "Resource not accessible by integration" }),
+  });
+  const ai = createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+
+  await runWith(core, { octokit, ai });
+
+  assert.deepEqual(core.messages("setFailed"), [
+    "GitHub API request failed (HTTP 403). The token may not post a review. Give the workflow the permission `pull-requests: write` under `permissions`.",
+  ]);
+});
+
+test("never logs the texts of the findings while it posts them", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const secretText = "TEXTFROMTHEMODEL";
+  const ai = createFakeAi(() =>
+    modelAnswer(
+      [modelFinding("src/file-0.js", "major", secretText)],
+      secretText,
+    ),
+  );
+  const octokit = createFakeOctokit(apiFiles(2), {
+    createReview: (parameters, index) =>
+      index === 0 ? apiFailure(422) : { status: 200, data: { id: 5 } },
+  });
+
+  await runWith(core, { octokit, ai });
+
+  assert.match(octokit.reviews[0].body, new RegExp(secretText));
+  for (const call of core.calls) {
+    assert.doesNotMatch(JSON.stringify(call.args), new RegExp(secretText));
+  }
+});
+
+test("links the review on the server of the run, or on github.com", async () => {
+  const ai = () =>
+    createFakeAi(() => modelAnswer([modelFinding("src/file-0.js")]));
+
+  const enterprise = createFakeCore(VALID_INPUTS);
+  await runWith(enterprise, {
+    ai: ai(),
+    context: createFakeContext({ serverUrl: "https://github.example.com" }),
+  });
+  const hostile = createFakeCore(VALID_INPUTS);
+  await runWith(hostile, {
+    ai: ai(),
+    context: createFakeContext({ serverUrl: "javascript:alert(1)//" }),
+  });
+
+  assert.match(
+    enterprise.messages("info").at(-1),
+    /: https:\/\/github\.example\.com\/octo-org\/demo\/pull\/42#pullrequestreview-1000$/,
+  );
+  assert.ok(hostile.messages("info").at(-1).endsWith(`: ${POSTED_TO}`));
 });

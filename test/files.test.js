@@ -278,8 +278,21 @@ test("says that GitHub was not reached when there was no answer at all", async (
 // --- No checkout needed ------------------------------------------------------
 
 test("reads nothing from the working tree", () => {
-  const source = readFileSync(fromRoot("src/github/files.js"), "utf8");
-
-  assert.doesNotMatch(source, /node:fs|node:child_process|["']fs["']|git /);
-  assert.doesNotMatch(source, /^import /m);
+  // files.js and the modules it imports: only local modules are allowed,
+  // and none of them may reach the file system or git.
+  for (const file of ["src/github/files.js", "src/github/api-error.js"]) {
+    const source = readFileSync(fromRoot(file), "utf8");
+    assert.doesNotMatch(
+      source,
+      /node:fs|node:child_process|["']fs["']|git /,
+      file,
+    );
+    for (const line of source.match(/^import .*$/gm) ?? []) {
+      assert.match(line, /^import \{ \w+ \} from "\.\/api-error\.js";$/, file);
+    }
+  }
+  assert.doesNotMatch(
+    readFileSync(fromRoot("src/github/api-error.js"), "utf8"),
+    /^import /m,
+  );
 });

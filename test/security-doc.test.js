@@ -84,10 +84,13 @@ test("says that a green run for a fork is no review", () => {
   assert.match(doc, /fork/i);
 });
 
-test("describes the review of a pull request that is not posted yet as not posted", () => {
-  // The step that posts the review is added later; this sentence changes
-  // with it, and this test reminds whoever does it.
-  assert.match(doc, /posts nothing yet/);
+test("describes the posted review and how the texts of the model are shown", () => {
+  // The review is posted since #17. Its type and the way the model's text is
+  // made safe for Markdown belong on the page.
+  assert.doesNotMatch(doc, /posts nothing yet/);
+  assert.match(doc, /one review of the type `COMMENT` per run/);
+  assert.match(doc, /no link, image or HTML from the model, notifies nobody/);
+  assert.match(doc, /`<!-- reviewops -->`/);
 });
 
 // --- Reporting and what must not be on the page -----------------------------

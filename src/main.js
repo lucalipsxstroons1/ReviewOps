@@ -21,6 +21,7 @@ import {
 import { selectFindings } from "./findings.js";
 import { explainMissingSecret, readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
+import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { applyLimits, parseLimits } from "./limits.js";
 import { printable } from "./printable.js";
@@ -37,6 +38,8 @@ const SUPPORTED_EVENT = "pull_request";
 const MAX_SKIPPED_LINES = 50;
 
 const UNREADABLE_DIFF = "the diff could not be read";
+
+const NOT_REVIEWED = "the request to the model failed";
 
 /**
  * Runs the action. Every failure inside ends in `core.setFailed()`.
@@ -248,8 +251,8 @@ export async function run({
     // first error says what to do.
     if (review.succeeded === 0) throw review.failed[0].error;
 
+    const notReviewed = review.failed.flatMap(({ paths }) => paths);
     if (review.failed.length > 0) {
-      const notReviewed = review.failed.flatMap(({ paths }) => paths);
       // The messages of the client are its own texts, without anything from
       // the answer of the API.
       const reasons = [
@@ -261,9 +264,7 @@ export async function run({
         ),
       );
       for (const path of notReviewed.slice(0, MAX_SKIPPED_LINES)) {
-        core.info(
-          `Not reviewed ${printable(path)}: the request to the model failed.`,
-        );
+        core.info(`Not reviewed ${printable(path)}: ${NOT_REVIEWED}.`);
       }
       if (notReviewed.length > MAX_SKIPPED_LINES) {
         core.info(
@@ -292,7 +293,7 @@ export async function run({
     );
 
     // Numbers only: the findings and the summary hold code from the pull
-    // request. Posting them follows in a later step.
+    // request.
     core.info(
       `Checked ${received} findings: ${inline.length} at an added line, ${unplaced.length} at another line, left out ${dropped.empty} with an empty text, ${dropped.unknownPath} for a file that was not sent, ${dropped.duplicate} duplicates and ${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).`,
     );
@@ -303,6 +304,45 @@ export async function run({
     core.info(
       `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
+
+    // An empty review would only notify people. Files that were not
+    // reviewed are named in the log above.
+    if (shown.length === 0) {
+      core.info("No findings, so no review was posted.");
+      return;
+    }
+
+    // One review of the type COMMENT with every inline comment. The texts
+    // of the model are made safe for Markdown on the way.
+    const posted = await postReview({
+      octokit,
+      pullRequest,
+      model,
+      summaries: review.reviews.map(({ summary }) => summary),
+      selection: { inline, unplaced, dropped },
+      maxComments: limits.maxComments,
+      skipped: [
+        ...skipped,
+        ...notReviewed.map((path) => ({ path, reason: NOT_REVIEWED })),
+      ],
+    });
+    const where =
+      posted.reviewId === null
+        ? `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`
+        : reviewUrl(
+            serverUrlOf(context.serverUrl),
+            pullRequest,
+            posted.reviewId,
+          );
+    if (posted.fallback) {
+      core.warning(
+        `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review: ${where}`,
+      );
+    } else {
+      core.info(
+        `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text: ${where}`,
+      );
+    }
   } catch (error) {
     // Mark the step as failed first: nothing below may prevent that.
     core.setFailed(redact(describe(error)));

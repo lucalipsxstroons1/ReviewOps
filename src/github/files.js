@@ -1,5 +1,13 @@
+import { describeApiError } from "./api-error.js";
+
 // GitHub lists at most this many files for one pull request.
 const API_FILE_LIMIT = 3000;
+
+// What a 403 or a 404 means when the files of a pull request are read.
+const LIST_FILES_HINTS = Object.freeze({
+  403: "The token may not read this pull request. The workflow needs the `pull-requests` permission.",
+  404: "The pull request was not found, or the token has no access to the repository.",
+});
 
 export const SKIP_REASONS = Object.freeze({
   removed: "the file was deleted",
@@ -39,7 +47,7 @@ export async function listChangedFiles(octokit, { owner, repo, pullNumber }) {
       per_page: 100,
     });
   } catch (error) {
-    throw describeApiError(error);
+    throw describeApiError(error, LIST_FILES_HINTS);
   }
 
   const files = [];
@@ -80,55 +88,4 @@ function skipReason(entry) {
   const contentIsUnchanged =
     STATUSES_WITHOUT_CONTENT_CHANGE.has(entry.status) && !entry.changes;
   return contentIsUnchanged ? SKIP_REASONS.unchanged : SKIP_REASONS.noPatch;
-}
-
-/**
- * Turns a failed API request into an error that names the HTTP status and
- * says what to do. The original error stays attached as `cause`.
- */
-function describeApiError(error) {
-  const status = error?.status;
-  if (!Number.isInteger(status)) return error;
-
-  // Octokit reports a failed connection as status 500 without a response.
-  // Naming an HTTP status would claim an answer that never came.
-  if (!error.response) {
-    return new Error(
-      "GitHub could not be reached. Check the network of the runner and run the workflow again.",
-      { cause: error },
-    );
-  }
-
-  return new Error(
-    `GitHub API request failed (HTTP ${status}). ${hintFor(status, error)}`,
-    { cause: error },
-  );
-}
-
-function hintFor(status, error) {
-  if (status === 401) {
-    return "The token was rejected. Check the `github-token` input.";
-  }
-  if (status === 429 || (status === 403 && isRateLimited(error))) {
-    return "The rate limit of the token is used up. Run the workflow again later.";
-  }
-  if (status === 403) {
-    return "The token may not read this pull request. The workflow needs the `pull-requests` permission.";
-  }
-  if (status === 404) {
-    return "The pull request was not found, or the token has no access to the repository.";
-  }
-  if (status >= 500) {
-    return "GitHub could not answer the request. Run the workflow again later.";
-  }
-  return "Turn on debug logging to see the answer from GitHub.";
-}
-
-function isRateLimited(error) {
-  const headers = error.response?.headers ?? {};
-  return (
-    headers["x-ratelimit-remaining"] === "0" ||
-    "retry-after" in headers ||
-    /rate limit/i.test(String(error.message))
-  );
 }
