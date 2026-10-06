@@ -52,6 +52,7 @@ test("returns each file in the model of the action", async () => {
     files: [
       {
         path: "src/main.js",
+        previousPath: null,
         status: "added",
         additions: 3,
         deletions: 0,
@@ -63,18 +64,36 @@ test("returns each file in the model of the action", async () => {
   });
 });
 
-test("keeps a renamed file that also changed", async () => {
+test("keeps a renamed file that also changed, with its old name", async () => {
   const octokit = createFakeOctokit([
-    apiFile("src/new-name.js", { status: "renamed" }),
+    apiFile("src/new-name.js", {
+      status: "renamed",
+      previous_filename: "src/old-name.js",
+    }),
   ]);
 
   const { files, skipped } = await listChangedFiles(octokit, PULL_REQUEST);
 
   assert.deepEqual(
-    files.map((file) => file.path),
-    ["src/new-name.js"],
+    files.map(({ path, previousPath }) => ({ path, previousPath })),
+    [{ path: "src/new-name.js", previousPath: "src/old-name.js" }],
   );
   assert.deepEqual(skipped, []);
+});
+
+test("has no old name for a file that was not renamed", async () => {
+  const octokit = createFakeOctokit([
+    apiFile("a.js"),
+    apiFile("b.js", { previous_filename: "" }),
+    apiFile("c.js", { previous_filename: 42 }),
+  ]);
+
+  const { files } = await listChangedFiles(octokit, PULL_REQUEST);
+
+  assert.deepEqual(
+    files.map((file) => file.previousPath),
+    [null, null, null],
+  );
 });
 
 const SKIPPED_CASES = [

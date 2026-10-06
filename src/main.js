@@ -13,7 +13,11 @@ import {
   PatchFormatError,
   parsePatch as diffParsePatch,
 } from "./diff/parse.js";
-import { createExcludeFilter } from "./exclude.js";
+import {
+  SENSITIVE_REASON,
+  createExcludeFilter,
+  isSensitiveFile,
+} from "./exclude.js";
 import { selectFindings } from "./findings.js";
 import { readPullRequest } from "./github/context.js";
 import { listChangedFiles } from "./github/files.js";
@@ -22,6 +26,7 @@ import { applyLimits, parseLimits } from "./limits.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
 import { reviewInBatches } from "./review.js";
+import { maskSecrets } from "./secrets.js";
 
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
@@ -85,12 +90,22 @@ export async function run({
     const octokit = getOctokit(inputs.githubToken);
     const listing = await listChangedFiles(octokit, pullRequest);
 
-    // Generated and irrelevant files are left out before anything is parsed,
-    // and so are files whose name cannot be put into the prompt.
+    // Files that may hold secrets are left out first, under their new and
+    // their old name, whatever the inputs say. Then generated and irrelevant
+    // files, and files whose name cannot be put into the prompt. All of this
+    // happens before anything is parsed.
     const relevant = [];
+    const sensitive = [];
     const excluded = [];
     let unusableNames = 0;
     for (const file of listing.files) {
+      if (
+        isSensitiveFile(file.path) ||
+        (file.previousPath && isSensitiveFile(file.previousPath))
+      ) {
+        sensitive.push({ path: file.path, reason: SENSITIVE_REASON });
+        continue;
+      }
       let reason = excludeReason(file.path);
       if (!reason && !isUsablePath(file.path)) {
         reason = UNUSABLE_PATH_REASON;
@@ -101,6 +116,8 @@ export async function run({
     }
 
     // Line numbers are calculated here and never taken from the model.
+    // Strings that look like secrets are masked right away: everything after
+    // this point, the limits included, sees only the masked text.
     const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
@@ -114,12 +131,13 @@ export async function run({
       },
     );
 
-    // The list below is cut off, so the order matters: unreadable diffs and
-    // files that the limits left out are the ones someone has to look at,
-    // excluded files are a decision of this action, the rest could not be
-    // reviewed anyway.
+    // The list below is cut off, so the order matters: unreadable diffs,
+    // files that may hold secrets and files that the limits left out are the
+    // ones someone has to look at, excluded files are a decision of this
+    // action, the rest could not be reviewed anyway.
     const skipped = [
       ...unreadable.map(({ path }) => ({ path, reason: UNREADABLE_DIFF })),
+      ...sensitive,
       ...tooLarge,
       ...overLimit,
       ...excluded,
@@ -144,6 +162,22 @@ export async function run({
       for (const { path, detail } of unreadable) {
         core.debug(`${printable(path)}: ${detail}`);
       }
+    }
+    const withSecrets = diffs.filter((diff) => diff.masked > 0);
+    if (withSecrets.length > 0) {
+      const count = withSecrets.reduce((sum, diff) => sum + diff.masked, 0);
+      core.warning(
+        `Strings that look like secrets were masked before anything was sent to the model: ${count} in ${withSecrets.length} files. Check that no real secret is part of this pull request.`,
+      );
+      // Names and numbers only, never what was found.
+      for (const { path, masked } of withSecrets.slice(0, MAX_SKIPPED_LINES)) {
+        core.info(`Masked ${masked} possible secrets in ${printable(path)}.`);
+      }
+    }
+    if (sensitive.length > 0) {
+      core.warning(
+        `Files that may hold secrets: ${sensitive.length}. They are never sent to the model and are not reviewed. Check that no real secret is part of this pull request.`,
+      );
     }
     if (unusableNames > 0) {
       core.warning(
@@ -269,16 +303,22 @@ export async function run({
 }
 
 /**
- * Parses the patch of every file. A file whose patch cannot be read is set
- * aside instead of failing the run: one odd file must not prevent the review
- * of all others. Any other error is a defect and is passed on.
+ * Parses the patch of every file and masks strings that look like secrets.
+ * A file whose patch cannot be read is set aside instead of failing the run:
+ * one odd file must not prevent the review of all others. Any other error is
+ * a defect and is passed on.
  */
 function parseDiffs(files, parsePatch) {
   const diffs = [];
   const unreadable = [];
   for (const file of files) {
     try {
-      diffs.push({ ...file, ...parsePatch(file.patch) });
+      const { patch, ...rest } = file;
+      const parsed = parsePatch(patch);
+      const { hunks, masked } = maskSecrets(parsed.hunks);
+      // The raw patch stays behind: from here on, only the masked hunks
+      // exist, so nothing later can send an unmasked secret by mistake.
+      diffs.push({ ...rest, ...parsed, hunks, masked });
     } catch (error) {
       if (!(error instanceof PatchFormatError)) throw error;
       // The message names positions in the patch, never its content.

@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   DEFAULT_EXCLUDES,
   MATCH_OPTIONS,
+  SENSITIVE_FILES,
   createExcludeFilter,
+  isSensitiveFile,
 } from "../src/exclude.js";
 
 const BACKSLASH = String.fromCodePoint(0x5c);
@@ -165,6 +167,107 @@ test("the default list cannot be changed and leaves bin/ alone", () => {
 test("every default pattern follows the rules for own patterns", () => {
   assert.doesNotThrow(() => createExcludeFilter(input(...DEFAULT_EXCLUDES)));
   assert.ok(DEFAULT_EXCLUDES.length <= 50);
+});
+
+// --- Files that may hold secrets ----------------------------------------------
+
+test("lists exactly the files that may hold secrets", () => {
+  assert.ok(Object.isFrozen(SENSITIVE_FILES));
+  assert.deepEqual(
+    [...SENSITIVE_FILES].sort(),
+    [
+      ".env*",
+      ".git-credentials",
+      ".netrc",
+      ".npmrc",
+      ".pypirc",
+      "*.jks",
+      "*.key",
+      "*.keystore",
+      "*.p12",
+      "*.pem",
+      "*.pfx",
+      "credentials.json",
+      "id_dsa*",
+      "id_ecdsa*",
+      "id_ed25519*",
+      "id_rsa*",
+      "secrets.*",
+    ].sort(),
+  );
+});
+
+test("every sensitive pattern follows the rules for own patterns", () => {
+  assert.doesNotThrow(() => createExcludeFilter(input(...SENSITIVE_FILES)));
+});
+
+const SENSITIVE = [
+  ".env",
+  ".env.local",
+  ".env.example",
+  "apps/api/.env.production",
+  "certs/server.pem",
+  "config/tls.key",
+  "certs/client.pfx",
+  "certs/client.p12",
+  "android/release.jks",
+  "android/app.keystore",
+  "id_rsa",
+  "home/.ssh/id_rsa.pub",
+  "id_dsa",
+  "deploy/id_ecdsa",
+  ".ssh/id_ed25519",
+  ".npmrc",
+  "packages/web/.npmrc",
+  ".pypirc",
+  ".netrc",
+  ".git-credentials",
+  "credentials.json",
+  "gcp/credentials.json",
+  "secrets.json",
+  "config/secrets.yaml",
+  "src/secrets.js",
+  // Upper and lower case make no difference.
+  ".ENV",
+  "Certs/Server.PEM",
+];
+
+for (const path of SENSITIVE) {
+  test(`treats ${path} as a file that may hold secrets`, () => {
+    assert.equal(isSensitiveFile(path), true);
+  });
+}
+
+const NOT_SENSITIVE = [
+  "src/env.js",
+  "src/environment.ts",
+  "docs/dotenv.md",
+  "src/keys.js",
+  "src/monkey.js",
+  "src/keyboard.key.js",
+  "src/pem.md",
+  "src/credentials.ts",
+  "docs/secrets.md.backup/readme.txt",
+  "README.md",
+];
+
+for (const path of NOT_SENSITIVE) {
+  test(`does not treat ${path} as a file that may hold secrets`, () => {
+    assert.equal(isSensitiveFile(path), false);
+  });
+}
+
+test("treats a sensitive name with a line break in it as sensitive", () => {
+  assert.equal(isSensitiveFile(`.env${LINE_FEED}`), true);
+  assert.equal(isSensitiveFile(`dir${LINE_SEPARATOR}x/.env`), true);
+});
+
+test("the sensitive list is independent of the exclude input", () => {
+  // No own pattern removes a file from the list: there is no negation, and
+  // the list is checked on its own.
+  const filter = createExcludeFilter("");
+  assert.equal(filter(".env"), null);
+  assert.equal(isSensitiveFile(".env"), true);
 });
 
 // --- Own patterns ------------------------------------------------------------

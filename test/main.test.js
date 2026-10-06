@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { MAX_REQUEST_CHARS } from "../src/ai/batch.js";
 import { AiError } from "../src/ai/error.js";
 import { buildSystemPrompt } from "../src/ai/prompt.js";
+import { SENSITIVE_REASON } from "../src/exclude.js";
 import { MAX_OUTPUT_TOKENS, REVIEW_FORMAT } from "../src/ai/schema.js";
 import {
   UNUSABLE_PATH_REASON,
@@ -825,6 +826,148 @@ test("accepts a valid model name and the default without a message", async () =>
   }
 });
 
+// --- Files that may hold secrets ----------------------------------------------
+
+const SENSITIVE_WARNING =
+  "Files that may hold secrets: 2. They are never sent to the model and are not reviewed. Check that no real secret is part of this pull request.";
+
+test("never sends a file that may hold secrets, also with an empty exclude input", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, exclude: "" });
+  const octokit = createFakeOctokit([
+    apiFile(".env", { patch: "@@ -0,0 +1 @@\n+VALUE-FROM-ENV-FILE" }),
+    apiFile("certs/server.pem", { patch: "@@ -0,0 +1 @@\n+VALUE-FROM-PEM" }),
+    apiFile("src/app.js"),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.deepEqual(ai.requests.map(pathsIn), [["src/app.js"]]);
+  const sent = JSON.stringify(ai.requests);
+  assert.doesNotMatch(sent, /VALUE-FROM|\.env|server\.pem/);
+  assert.ok(
+    selectionLines(core).includes(`Skipped .env: ${SENSITIVE_REASON}.`),
+  );
+  assert.ok(
+    selectionLines(core).includes(
+      `Skipped certs/server.pem: ${SENSITIVE_REASON}.`,
+    ),
+  );
+  assert.deepEqual(core.messages("warning"), [SENSITIVE_WARNING]);
+});
+
+test("leaves out a file that was renamed from a sensitive name", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("config/settings.txt", {
+      status: "renamed",
+      previous_filename: ".env",
+    }),
+    apiFile("config/other.txt", {
+      status: "renamed",
+      previous_filename: "id_rsa",
+    }),
+    apiFile("src/app.js", {
+      status: "renamed",
+      previous_filename: "src/old.js",
+    }),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.deepEqual(ai.requests.map(pathsIn), [["src/app.js"]]);
+  assert.deepEqual(core.messages("warning"), [SENSITIVE_WARNING]);
+});
+
+test("does not parse a file that may hold secrets", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([apiFile(".env"), apiFile("src/a.js")]);
+  const parsed = [];
+
+  await runWith(core, {
+    octokit,
+    parsePatch: (patch) => {
+      parsed.push(patch);
+      return parsePatch(patch);
+    },
+  });
+
+  assert.equal(parsed.length, 1);
+});
+
+test("ends with the notice and no request when only sensitive files changed", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([apiFile(".env"), apiFile(".npmrc")]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.equal(ai.options.length, 0);
+  assert.equal(core.messages("notice").length, 1);
+  assert.deepEqual(core.messages("warning"), [SENSITIVE_WARNING]);
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("lists files that may hold secrets right after unreadable ones", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-files": "1" });
+  const octokit = createFakeOctokit([
+    apiFile("src/odd.js", { patch: "not a diff" }),
+    apiFile("src/a.js"),
+    apiFile("src/b.js"),
+    apiFile("package-lock.json"),
+    apiFile(".env"),
+  ]);
+
+  await runWith(core, { octokit });
+
+  const reasons = selectionLines(core)
+    .filter((line) => line.startsWith("Skipped "))
+    .map((line) => line.split(": ")[0]);
+  assert.deepEqual(reasons, [
+    "Skipped src/odd.js",
+    "Skipped .env",
+    "Skipped src/b.js",
+    "Skipped package-lock.json",
+  ]);
+});
+
+// --- Strings that look like secrets -------------------------------------------
+
+// A stand-in in the shape of a GitHub token, put together at run time so that
+// no file contains anything that looks like a credential.
+const FAKE_TOKEN = `gh${"p"}_${"Ab1".repeat(12)}`;
+
+test("masks a token before it reaches the model and keeps the line numbers", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const patch = `@@ -0,0 +1,2 @@\n+const token = "${FAKE_TOKEN}";\n+run(token);`;
+  const octokit = createFakeOctokit([apiFile("src/config.js", { patch })]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  const [request] = ai.requests;
+  assert.ok(!request.user.includes(FAKE_TOKEN));
+  assert.match(
+    request.user,
+    /^ {3}1 \| \+const token = "\[REDACTED SECRET\]";$/m,
+  );
+  assert.match(request.user, /^ {3}2 \| \+run\(token\);$/m);
+  assert.deepEqual(core.messages("warning"), [
+    "Strings that look like secrets were masked before anything was sent to the model: 1 in 1 files. Check that no real secret is part of this pull request.",
+  ]);
+  assert.ok(
+    core
+      .messages("info")
+      .includes("Masked 1 possible secrets in src/config.js."),
+  );
+  assert.ok(!JSON.stringify(core.calls).includes(FAKE_TOKEN));
+});
+
+test("warns about no secrets when there are none", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+
+  await runWith(core);
+
+  assert.deepEqual(core.messages("warning"), []);
+});
+
 // --- The request to the model ------------------------------------------------
 
 /** A finding as the model returns it. */
@@ -1329,3 +1472,23 @@ for (const thrown of [{ code: 500, token: "token-value" }, undefined, "  "]) {
     ]);
   });
 }
+
+test("keeps no unmasked patch once the diffs are parsed", async () => {
+  // A stand-in in the shape of a GitHub token, put together at run time.
+  const token = `gh${"p"}_${"Ab1".repeat(12)}`;
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("src/config.js", { patch: `@@ -0,0 +1 @@\n+"${token}"` }),
+  ]);
+  const seen = [];
+  const ai = createFakeAi((request) => {
+    seen.push(request);
+    return modelAnswer();
+  });
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(seen.length, 1);
+  assert.ok(!JSON.stringify(seen).includes(token));
+  assert.ok(!JSON.stringify(core.calls).includes(token));
+});

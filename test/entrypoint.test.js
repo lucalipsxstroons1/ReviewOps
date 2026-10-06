@@ -335,6 +335,54 @@ test("ends green with a warning when one of several requests fails", async (t) =
   assert.equal(result.stderr, "");
 });
 
+test("never sends a file that may hold secrets to OpenAI, also with an empty exclude input", async (t) => {
+  const api = await startApis(t, {
+    files: [
+      apiFile(".env", { patch: "@@ -0,0 +1 @@\n+VALUE-FROM-ENV-FILE" }),
+      apiFile("src/app.js"),
+    ],
+  });
+
+  const result = await runAction(pullRequestRun(api, { INPUT_EXCLUDE: "" }));
+
+  assert.equal(result.status, 0);
+  assert.equal(api.openai.requests.length, 1);
+  const sent = JSON.stringify(api.openai.requests[0].body);
+  assert.match(sent, /src\/app\.js/);
+  assert.doesNotMatch(sent, /VALUE-FROM-ENV-FILE|\.env/);
+  assert.match(
+    result.stdout,
+    /^Skipped \.env: may hold secrets and is never sent to the model\.$/m,
+  );
+  assert.match(result.stdout, /^::warning::Files that may hold secrets: 1\./m);
+  assert.equal(result.stderr, "");
+});
+
+test("sends a token in the diff to OpenAI only masked", async (t) => {
+  // Put together at run time: no file contains anything that looks like a
+  // credential.
+  const token = `gh${"p"}_${"Ab1".repeat(12)}`;
+  const api = await startApis(t, {
+    files: [
+      apiFile("src/config.js", {
+        patch: `@@ -0,0 +1 @@\n+const token = "${token}";`,
+      }),
+    ],
+  });
+
+  const result = await runAction(pullRequestRun(api));
+
+  assert.equal(result.status, 0);
+  const sent = JSON.stringify(api.openai.requests[0].body);
+  assert.ok(!sent.includes(token));
+  assert.ok(sent.includes('const token = \\"[REDACTED SECRET]\\";'));
+  assert.ok(!result.output.includes(token));
+  assert.match(
+    result.stdout,
+    /^::warning::Strings that look like secrets were masked before anything was sent to the model: 1 in 1 files\./m,
+  );
+});
+
 test("fails the step when OpenAI rejects the key", async (t) => {
   const api = await startApis(t, { files: apiFiles(1) }, apiError(401));
 

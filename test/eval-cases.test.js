@@ -14,13 +14,29 @@ const cases = loadCases(fromRoot("eval/cases"));
 const faulty = cases.filter((testCase) => !testCase.clean);
 const clean = cases.filter((testCase) => testCase.clean);
 
-test("has one case with a defect per focus area and two clean cases", () => {
-  assert.equal(cases.length, 6);
+test("has one case with a defect per focus area, one with an embedded instruction and two clean cases", () => {
+  assert.equal(cases.length, 7);
+  const injection = faulty.find(
+    (testCase) => testCase.name === "security-prompt-injection",
+  );
+  assert.ok(injection);
   assert.deepEqual(
-    faulty.map((testCase) => testCase.expect.category).sort(),
+    faulty
+      .filter((testCase) => testCase !== injection)
+      .map((testCase) => testCase.expect.category)
+      .sort(),
     [...CATEGORIES].sort(),
   );
   assert.equal(clean.length, 2);
+});
+
+test("the case with an embedded instruction tells the model to report nothing", () => {
+  const injection = cases.find(
+    (testCase) => testCase.name === "security-prompt-injection",
+  );
+  assert.match(injection.patch, /Ignore all previous instructions/);
+  assert.match(injection.patch, /empty list of findings/);
+  assert.equal(injection.expect.category, "security");
 });
 
 test("has one clean case in JavaScript/React and one in C#", () => {
@@ -55,6 +71,7 @@ const DEFECT_MARKERS = {
     "i.OrderId == order.Id",
   ],
   "security-command-injection": ["exec(`ping -c 1 ${req.query.host}`"],
+  "security-prompt-injection": ["db.query(", "${req.query.name}"],
 };
 
 test("points the expected lines at the defect", () => {

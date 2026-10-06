@@ -14,6 +14,9 @@ import {
   runEvaluation,
   tally,
   verdict,
+  MAX_PARALLEL_EVAL_REQUESTS,
+  RATE_LIMIT_RETRIES,
+  RATE_LIMIT_WAIT_MS,
 } from "../eval/lib.mjs";
 import { AiError } from "../src/ai/error.js";
 import { DEFAULT_MODEL, parseModel } from "../src/ai/model.js";
@@ -292,7 +295,7 @@ test("runs every case three times", async () => {
   });
 
   assert.equal(calls.length, cases.length * RUNS_PER_CASE);
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, cases.length);
   for (const entry of rows) {
     assert.deepEqual(
       [entry.passed, entry.runs, entry.invalid],
@@ -350,6 +353,107 @@ test("takes a cut-off answer as an error of the run, not as no findings", async 
     [rows[0].passed, rows[0].errors],
     [0, ["truncated", "truncated", "truncated"]],
   );
+});
+
+// --- Rate limits ---------------------------------------------------------------
+
+/** Records the waits instead of waiting. */
+const recordWaits = (waits) => async (milliseconds) => {
+  waits.push(milliseconds);
+};
+
+test("sends at most two requests at once by default", async () => {
+  assert.equal(MAX_PARALLEL_EVAL_REQUESTS, 2);
+  let running = 0;
+  let highest = 0;
+  const good = goodModel([]);
+  const ai = {
+    async complete(request) {
+      running += 1;
+      highest = Math.max(highest, running);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      running -= 1;
+      return good.complete(request);
+    },
+  };
+
+  await runEvaluation({ cases, ai });
+
+  assert.equal(highest, 2);
+});
+
+test("waits out a rate limit and sends the request again", async () => {
+  const waits = [];
+  const good = goodModel([]);
+  let failuresLeft = 2;
+  const ai = {
+    async complete(request) {
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        throw new AiError("rate_limit", "limited", 429);
+      }
+      return good.complete(request);
+    },
+  };
+
+  const { rows } = await runEvaluation({
+    cases: [faultyCase],
+    ai,
+    concurrency: 1,
+    wait: recordWaits(waits),
+  });
+
+  assert.deepEqual(waits, [RATE_LIMIT_WAIT_MS, RATE_LIMIT_WAIT_MS]);
+  assert.equal(RATE_LIMIT_WAIT_MS, 20000);
+  assert.deepEqual([rows[0].passed, rows[0].errors], [3, []]);
+});
+
+test("counts a rate limit that stays as an error of the run", async () => {
+  const waits = [];
+  let calls = 0;
+  const ai = {
+    async complete() {
+      calls += 1;
+      throw new AiError("rate_limit", "limited", 429);
+    },
+  };
+
+  const { rows } = await runEvaluation({
+    cases: [cleanCase],
+    ai,
+    concurrency: 1,
+    wait: recordWaits(waits),
+  });
+
+  // Three runs, each sent once and then twice more.
+  assert.equal(RATE_LIMIT_RETRIES, 2);
+  assert.equal(calls, 3 * (1 + RATE_LIMIT_RETRIES));
+  assert.equal(waits.length, 3 * RATE_LIMIT_RETRIES);
+  assert.deepEqual(rows[0].errors, ["rate_limit", "rate_limit", "rate_limit"]);
+  assert.equal(rows[0].passed, 0);
+  assert.equal(verdict(rows).ok, false);
+});
+
+test("sends a request again only after a rate limit", async () => {
+  const waits = [];
+  let calls = 0;
+  const ai = {
+    async complete() {
+      calls += 1;
+      throw new AiError("server", "down", 500);
+    },
+  };
+
+  const { rows } = await runEvaluation({
+    cases: [cleanCase],
+    ai,
+    concurrency: 1,
+    wait: recordWaits(waits),
+  });
+
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, []);
+  assert.deepEqual(rows[0].errors, ["server", "server", "server"]);
 });
 
 test("stops after an error that repeats for every request", async () => {
