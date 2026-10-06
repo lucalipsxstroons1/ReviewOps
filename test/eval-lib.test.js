@@ -8,6 +8,7 @@ import {
   loadCases,
   missingKeyOutcome,
   renderTable,
+  requiredPasses,
   runEvaluation,
   tally,
   verdict,
@@ -163,10 +164,50 @@ const row = (overrides = {}) => ({
   ...overrides,
 });
 
-test("meets the thresholds when every case passes 3 of 3 and nothing is invalid", () => {
+test("meets the thresholds when every defect is found in 3 of 3 runs and nothing is invalid", () => {
   const result = verdict([row(), row({ clean: true })]);
 
   assert.deepEqual(result, { ok: true, problems: [] });
+});
+
+test("requires 3 of 3 runs for a defect and 2 of 3 for a clean diff", () => {
+  assert.equal(requiredPasses(false), RUNS_PER_CASE);
+  assert.equal(requiredPasses(true), RUNS_PER_CASE - 1);
+});
+
+test("tolerates one false alarm in three runs on a clean diff", () => {
+  const result = verdict([row({ clean: true, passed: 2 })]);
+
+  assert.deepEqual(result, { ok: true, problems: [] });
+});
+
+test("does not tolerate two false alarms in three runs on a clean diff", () => {
+  const result = verdict([row({ name: "a", clean: true, passed: 1 })]);
+
+  assert.deepEqual(result, {
+    ok: false,
+    problems: ["a: clean in 1 of 3 runs (needs 2)"],
+  });
+});
+
+test("does not tolerate a missed defect in one of three runs", () => {
+  const result = verdict([row({ name: "a", passed: 2 })]);
+
+  assert.deepEqual(result, {
+    ok: false,
+    problems: ["a: found in 2 of 3 runs (needs 3)"],
+  });
+});
+
+test("does not hide a run that ended with an error behind the tolerance", () => {
+  const result = verdict([
+    row({ name: "a", clean: true, passed: 2, errors: ["server"] }),
+  ]);
+
+  assert.deepEqual(result, {
+    ok: false,
+    problems: ["a: 1 runs ended with an error"],
+  });
 });
 
 test("names every missed threshold", () => {
@@ -183,14 +224,14 @@ test("names every missed threshold", () => {
 
   assert.equal(result.ok, false);
   assert.deepEqual(result.problems, [
-    "a: found in 2 of 3 runs",
-    "b: clean in 0 of 3 runs",
+    "a: found in 2 of 3 runs (needs 3)",
+    "b: clean in 0 of 3 runs (needs 2)",
     "c: 1 invalid findings",
   ]);
 });
 
-test("renders the result as a table with the version and the model", () => {
-  const rows = [row({ name: "a" }), row({ name: "b", clean: true, passed: 2 })];
+test("renders the result as a table with the version, the model and the runs needed", () => {
+  const rows = [row({ name: "a" }), row({ name: "b", clean: true, passed: 1 })];
   const result = verdict(rows);
 
   const table = renderTable({
@@ -206,15 +247,15 @@ test("renders the result as a table with the version and the model", () => {
   );
   assert.match(
     table,
-    /\| a \| finding of the expected kind \| 3\/3 \| 0 \| 0 \|/,
+    /\| a \| finding of the expected kind \| 3\/3 \| 3\/3 \| 0 \| 0 \|/,
   );
   assert.match(
     table,
-    /\| b \| no finding of major or higher \| 2\/3 \| 0 \| 0 \|/,
+    /\| b \| no finding of major or higher \| 1\/3 \| 2\/3 \| 0 \| 0 \|/,
   );
   assert.doesNotMatch(table, /German/);
   assert.match(table, /Result: thresholds missed\./);
-  assert.match(table, /- b: clean in 2 of 3 runs/);
+  assert.match(table, /- b: clean in 1 of 3 runs \(needs 2\)/);
 });
 
 // --- runEvaluation() ---------------------------------------------------------
@@ -461,4 +502,31 @@ test("takes the model of EVAL_MODEL, without surrounding white space", () => {
 test("keeps the reference model apart from the default model of the action", () => {
   assert.equal(parseModel(REFERENCE_MODEL), REFERENCE_MODEL);
   assert.notEqual(REFERENCE_MODEL, DEFAULT_MODEL);
+});
+
+test("passes a run of the evaluation in which a clean diff raises one false alarm", async () => {
+  let cleanRuns = 0;
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      // The first run on the clean React case raises a major finding.
+      if (testCase === cleanCase) cleanRuns += 1;
+      const alarm = testCase === cleanCase && cleanRuns === 1;
+      const findings = testCase.clean
+        ? alarm
+          ? [finding(testCase, { severity: "major" })]
+          : []
+        : [hit(testCase)];
+      return {
+        content: JSON.stringify({ summary: "s", findings }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { rows } = await runEvaluation({ cases, ai, concurrency: 1 });
+
+  const entry = rows.find((r) => r.name === cleanCase.name);
+  assert.equal(entry.passed, 2);
+  assert.deepEqual(verdict(rows), { ok: true, problems: [] });
 });
