@@ -7,8 +7,140 @@
       "defects": [
         {
           "path": "demo/react/OrderList.jsx",
-          "description": "A useEffect fetches by customerId but has an empty dependency array.",
+          "description": "A useEffect fetches by customerId but has an empty dependency array. Built on purpose for the end-to-end test.",
           "evidence": "https://github.com/lucalipsxstroons1/ReviewOps/pull/62"
+        }
+      ]
+    },
+    {
+      "id": "efcore-n-plus-one-demo",
+      "pr": "lucalipsxstroons1/ReviewOps#63",
+      "focus": "efcore",
+      "defects": [
+        {
+          "path": "demo/dotnet/Repositories/OrderRepository.cs",
+          "description": "A query runs inside a loop, one query per customer (N+1). Built on purpose for the end-to-end test.",
+          "evidence": "https://github.com/lucalipsxstroons1/ReviewOps/pull/63"
+        }
+      ]
+    },
+    {
+      "id": "security-missing-authorize-demo",
+      "pr": "lucalipsxstroons1/ReviewOps#64",
+      "focus": "security",
+      "defects": [
+        {
+          "path": "demo/dotnet/Controllers/OrdersController.cs",
+          "description": "The Export action has no [Authorize] while the neighbouring action has it. Built on purpose for the end-to-end test.",
+          "evidence": "https://github.com/lucalipsxstroons1/ReviewOps/pull/64"
+        }
+      ]
+    },
+    {
+      "id": "react-link-null-ref",
+      "pr": "vercel/next.js#74670",
+      "focus": "react",
+      "defects": [
+        {
+          "path": "packages/next/src/client/app-dir/link.tsx",
+          "description": "The merged ref callback can be called with null, and the element is then used as a WeakMap key and passed to an IntersectionObserver, which throws.",
+          "evidence": "https://github.com/vercel/next.js/pull/75012"
+        }
+      ]
+    },
+    {
+      "id": "react-dismissable-layer",
+      "pr": "radix-ui/primitives#3928",
+      "focus": "react",
+      "defects": [
+        {
+          "path": "packages/react/dismissable-layer/src/dismissable-layer.tsx",
+          "description": "Clicks on an element that stops propagation no longer count as outside interactions, which also stops a dialog from closing when its overlay calls stopPropagation.",
+          "evidence": "https://github.com/radix-ui/primitives/pull/3952"
+        }
+      ]
+    },
+    {
+      "id": "react-form-default-values",
+      "pr": "react-hook-form/react-hook-form#12961",
+      "focus": "react",
+      "defects": [
+        {
+          "path": "src/logic/createFormControl.ts",
+          "description": "useFormState().defaultValues is not updated after reset() with new defaultValues.",
+          "evidence": "https://github.com/react-hook-form/react-hook-form/pull/12990"
+        }
+      ]
+    },
+    {
+      "id": "efcore-unique-index-order",
+      "pr": "dotnet/efcore#38581",
+      "focus": "efcore",
+      "defects": [
+        {
+          "path": "src/EFCore.Relational/Update/Internal/CommandBatchPreparer.cs",
+          "description": "A check that skips commands whose original value equals the current value is redundant and unsafe in the second pass, so UPDATE commands that reassign a unique index value are not ordered.",
+          "evidence": "https://github.com/dotnet/efcore/pull/38924"
+        }
+      ]
+    },
+    {
+      "id": "efcore-filter-parameter",
+      "pr": "dotnet/efcore#38155",
+      "focus": "efcore",
+      "defects": [
+        {
+          "path": "src/EFCore/Query/Internal/ExpressionTreeFuncletizer.cs",
+          "description": "The new validation rejects EF.Parameter and EF.Constant when the argument is a property of the current DbContext, for example in a global query filter.",
+          "evidence": "https://github.com/dotnet/efcore/pull/39091"
+        }
+      ]
+    },
+    {
+      "id": "efcore-scaffold-default-constraint",
+      "pr": "dotnet/efcore#36067",
+      "focus": "efcore",
+      "defects": [
+        {
+          "path": "src/EFCore.SqlServer/Design/Internal/SqlServerAnnotationCodeGenerator.cs",
+          "description": "A debug assertion assumes that a default value or default SQL exists next to a constraint name, so scaffolding throws a NullReferenceException when only the constraint name is left. Large diff.",
+          "evidence": "https://github.com/dotnet/efcore/pull/37243"
+        }
+      ]
+    },
+    {
+      "id": "security-payload-password-update",
+      "pr": "payloadcms/payload#9998",
+      "focus": "security",
+      "defects": [
+        {
+          "path": "packages/payload/src/collections/operations/utilities/update.ts",
+          "description": "The consolidated update logic does not enforce a field-level access.update restriction on the password field.",
+          "evidence": "https://github.com/advisories/GHSA-fx49-4h83-wjv9"
+        }
+      ]
+    },
+    {
+      "id": "security-nx-docker-injection",
+      "pr": "nrwl/nx#32149",
+      "focus": "security",
+      "defects": [
+        {
+          "path": "packages/docker/src/executors/release-publish/release-publish.impl.ts",
+          "description": "Docker commands are built as shell strings from the repository name and the registry URL of the configuration, which allows OS command injection.",
+          "evidence": "https://github.com/advisories/GHSA-6vc5-vf29-ffr2"
+        }
+      ]
+    },
+    {
+      "id": "security-vm2-promise-rejection",
+      "pr": "patriksimek/vm2#395",
+      "focus": "security",
+      "defects": [
+        {
+          "path": "lib/bridge.js",
+          "description": "The construct trap forwards a rejected native Promise without the host-side rejection handling that the apply trap uses, so an unhandled rejection can end the host process. Large diff.",
+          "evidence": "https://github.com/advisories/GHSA-2v2p-6j97-cjg9"
         }
       ]
     }
