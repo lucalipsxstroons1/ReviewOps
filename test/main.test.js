@@ -1038,7 +1038,7 @@ test("uses the default model and English without inputs", async () => {
 
   const { ai } = await runWith(core);
 
-  assert.equal(ai.options[0].model, "gpt-4o-mini");
+  assert.equal(ai.options[0].model, "gpt-6-luna");
   assert.equal(ai.requests[0].system, buildSystemPrompt({ language: "en" }));
 });
 
@@ -1055,7 +1055,7 @@ test("logs the requests and the findings per severity, nothing else", async () =
   await runWith(core, { ai });
 
   assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
-    "Sending 2 files to gpt-4o-mini in 1 requests.",
+    "Sending 2 files to gpt-6-luna in 1 requests.",
     "Checked 3 findings: 3 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 3 findings (1 critical, 0 major, 2 minor, 0 info) from 1 of 1 requests.",
   ]);
@@ -1093,7 +1093,7 @@ test("spreads a pull request over the budget of one request and merges the findi
     assert.match(request.user, /^<file path="/);
   }
   assert.deepEqual(core.messages("info").slice(-3 - 1, -1), [
-    "Sending 4 files to gpt-4o-mini in 3 requests.",
+    "Sending 4 files to gpt-6-luna in 3 requests.",
     "Checked 4 findings: 4 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 4 findings (0 critical, 4 major, 0 minor, 0 info) from 3 of 3 requests.",
   ]);
@@ -1178,7 +1178,7 @@ test("keeps the other findings and ends green with a warning when one request fa
     `Requests to the model that failed: 1 of 3. 1 files were not reviewed. ${failure.message}`,
   ]);
   assert.deepEqual(core.messages("info").slice(-4 - 1, -1), [
-    "Sending 3 files to gpt-4o-mini in 3 requests.",
+    "Sending 3 files to gpt-6-luna in 3 requests.",
     "Not reviewed src/b.js: the request to the model failed.",
     "Checked 2 findings: 2 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 0 over the limit of 10 (max-comments).",
     "Review finished: 2 findings (0 critical, 2 major, 0 minor, 0 info) from 2 of 3 requests.",

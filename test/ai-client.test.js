@@ -98,7 +98,7 @@ test("sends the prompt, the model and a low temperature with the key", async (t)
   assert.equal(request.path, "/v1/chat/completions");
   assert.equal(request.authorization, `Bearer ${KEY}`);
   assert.deepEqual(request.body, {
-    model: "gpt-4o-mini",
+    model: "gpt-6-luna",
     temperature: 0.1,
     messages: [
       { role: "system", content: "SYSTEM-MARKER-1" },
@@ -138,7 +138,7 @@ test("uses the default model when none is given", async (t) => {
 
     await client.complete(PROMPT);
 
-    assert.equal(api.requests[0].body.model, "gpt-4o-mini");
+    assert.equal(api.requests[0].body.model, "gpt-6-luna");
   }
 });
 
@@ -918,7 +918,7 @@ test("sends the response format and the output limit when they are given", async
   });
 
   assert.deepEqual(api.requests[0].body, {
-    model: "gpt-4o-mini",
+    model: "gpt-6-luna",
     temperature: 0.1,
     messages: [
       { role: "system", content: "SYSTEM-MARKER-1" },

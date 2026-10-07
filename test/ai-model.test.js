@@ -8,9 +8,9 @@ const ESCAPE = String.fromCodePoint(0x1b);
 
 test("uses the default model when the input is empty or missing", () => {
   for (const value of [undefined, "", "  ", "\n"]) {
-    assert.equal(parseModel(value), "gpt-4o-mini");
+    assert.equal(parseModel(value), "gpt-6-luna");
   }
-  assert.equal(DEFAULT_MODEL, "gpt-4o-mini");
+  assert.equal(DEFAULT_MODEL, "gpt-6-luna");
 });
 
 for (const name of [

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: OpenAI model to compare, for example gpt-4o-mini or gpt-4.1.
+        description: OpenAI model to compare, for example gpt-6-luna or gpt-6.1-sol.
         required: true
       runs:
         description: Runs per case, a whole number from 1 to 5.

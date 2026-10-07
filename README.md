@@ -107,7 +107,7 @@ jobs:
 |---|---|---|---|
 | `openai-api-key` | yes | | OpenAI API key. Pass it from a repository secret, never as plain text. |
 | `github-token` | no | `${{ github.token }}` | Token used to read the pull request and post the review. It needs `pull-requests: write`. The token of the workflow run is enough. A personal access token makes the action fail to recognise its own earlier comments. |
-| `openai-model` | no | `gpt-4o-mini` | OpenAI model that writes the review, for example `gpt-4o-mini` or `gpt-4.1`. It has to support Structured Outputs. |
+| `openai-model` | no | `gpt-6-luna` | OpenAI model that writes the review, for example `gpt-6-luna` or `gpt-6.1-sol`. It has to support Structured Outputs. A model with a low token limit per minute can fail on large pull requests. |
 | `language` | no | `en` | Language of the feedback: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `ja`, `zh` or `ko`. Code, identifiers, file paths, severities and categories stay in English. |
 | `exclude` | no | empty | More glob patterns for files to leave out, one per line. They extend the built-in list (lockfiles, build output, generated code, binary files). A pattern without a slash applies in every directory, a pattern with a slash from the root of the repository. At most 50 patterns, and no negation, braces, parentheses or backslashes. A pattern has at most two `*` and two `**`. |
 | `max-files` | no | `50` | Maximum number of files that are reviewed, from 1. Files after the limit are skipped and named in the log. |
@@ -166,13 +166,13 @@ The limits that keep a run small:
 | Requests at the same time | 4 |
 | Time of the job | `timeout-minutes: 15` in the example workflow |
 
-Files and findings over a limit are left out. The log and the job summary say which. Whether `gpt-4o-mini` stays the default model is still open in [#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41).
+Files and findings over a limit are left out. The log and the job summary say which. The default model `gpt-6-luna` was chosen by a comparison on twelve pull requests ([#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)): it costs about a fourteenth of `gpt-6.1-sol` per review and finds nearly as many documented defects. `gpt-4o-mini` missed security defects that both newer models found and is no longer the default.
 
 ## Known limitations
 
 - The model sometimes raises a false alarm, for example for code in a test that shows an attack on purpose ([#61](https://github.com/lucalipsxstroons1/ReviewOps/issues/61)).
 - For a defect inside a method, the comment can sit at the head of the method and not at the faulty line ([#70](https://github.com/lucalipsxstroons1/ReviewOps/issues/70)).
-- `gpt-4o-mini` missed a defect that `gpt-4.1` found in the end-to-end test ([#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)).
+- The model finds only part of the real defects. In the comparison of #41, the default model found 4 of 12 documented defects in at least two of three runs, and 7 of 9 defects in real projects were found by no model. Treat the review as a help, not as a check.
 - With a personal access token as `github-token`, the action does not recognise its own comments and reviews the whole pull request on every run.
 - A run without findings posts no review, so it leaves the starting point of the next run where it was.
 
