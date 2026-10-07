@@ -5,6 +5,8 @@ import { parse } from "yaml";
 import { fromRoot } from "./helpers/run-action.js";
 import {
   assertCheckoutWithoutCredentials,
+  assertReviewConcurrency,
+  assertReviewTriggers,
   assertPermissionsAtTop,
   assertPinnedToCommits,
   assertTimeoutForRequests,
@@ -43,10 +45,8 @@ for (const [file, { config }] of Object.entries(workflows)) {
 const reviewops = workflows["reviewops.yml"].config;
 const reviewSteps = reviewops.jobs.review.steps;
 
-test("reviewops.yml: runs for new, updated and reopened pull requests only", () => {
-  assert.deepEqual(reviewops.on, {
-    pull_request: { types: ["opened", "synchronize", "reopened"] },
-  });
+test("reviewops.yml: runs for the events that start a review", () => {
+  assertReviewTriggers(reviewops);
 });
 
 test("reviewops.yml: grants exactly the two permissions the action needs", () => {
@@ -56,12 +56,8 @@ test("reviewops.yml: grants exactly the two permissions the action needs", () =>
   });
 });
 
-test("reviewops.yml: cancels the older run of the same pull request", () => {
-  assert.equal(reviewops.concurrency["cancel-in-progress"], true);
-  assert.match(
-    reviewops.concurrency.group,
-    /\$\{\{ github\.event\.pull_request\.number \}\}/,
-  );
+test("reviewops.yml: cancels the older run of the same pull request, but not for a label", () => {
+  assertReviewConcurrency(reviewops);
 });
 
 test("reviewops.yml: gives the requests to the model enough time", () => {

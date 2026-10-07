@@ -42,6 +42,18 @@ inputs:
     description: Lets the step fail when open findings reach this severity, as one of none, critical and major. major includes critical. The step fails only after the review is posted. Open findings are the findings of this run and earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. The default is none, so no finding fails the workflow.
     required: false
     default: none
+  review-drafts:
+    description: Whether draft pull requests are reviewed, as true or false. By default a draft is left out, and the review starts when the pull request is marked ready for review (add the event type ready_for_review to the workflow). A run that leaves out the review asks no model and posts nothing, but it still counts the open findings of earlier reviews and applies fail-on. The default is false.
+    required: false
+    default: "false"
+  skip-label:
+    description: Name of a label that leaves out the review of a pull request that has it, without regard to case, at most 50 characters. An empty value switches the label off. Taking the label off starts the review when the workflow listens to the event type unlabeled. A run that leaves out the review asks no model and posts nothing, but it still counts the open findings of earlier reviews and applies fail-on. The default is no-ai-review.
+    required: false
+    default: no-ai-review
+  review-bots:
+    description: Whether pull requests that a bot opened, such as Dependabot, are reviewed, as true or false. By default they are left out. A run that leaves out the review asks no model and posts nothing, but it still counts the open findings of earlier reviews and applies fail-on. The default is false.
+    required: false
+    default: "false"
 
 outputs:
   findings-count:

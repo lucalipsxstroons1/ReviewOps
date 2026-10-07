@@ -82,7 +82,15 @@ ReviewOps runs on the `pull_request` event only. It ends with a notice on any ot
 
 GitHub passes no secrets to workflows of pull requests from forks, and runs started by Dependabot get only the Dependabot secrets. In both cases the API key is empty. ReviewOps then ends **green with a notice** and sends no request. The same pull request would end in an error if the key were missing for any other reason.
 
-**A green run does not mean that the pull request was reviewed.** If you make this check required, pull requests from forks and from Dependabot pass without a review. To review Dependabot pull requests, store the key as a Dependabot secret as well. A fork gets a review only if the owner of the repository passes secrets to workflows of forks, which is a risk of its own.
+**A green run does not mean that the pull request was reviewed.** If you make this check required, pull requests from forks and from Dependabot pass without a review. To review Dependabot pull requests, set the input `review-bots` to `true` (pull requests of bots are left out by default) and store the key as a Dependabot secret as well. A fork gets a review only if the owner of the repository passes secrets to workflows of forks, which is a risk of its own.
+
+### Pull requests that are left out on purpose
+
+Three inputs choose which pull requests are reviewed: `review-drafts` (drafts are left out by default), `skip-label` (default `no-ai-review`) and `review-bots` (bots are left out by default). Whether a run leaves out the review is decided from the event alone: the draft flag, the type of the author (`Bot`), the names of the labels and, for the event `unlabeled`, the label that was removed. These values come from the author of the pull request or from whoever set a label. They are compared, never written to the log, and limited in number and length. The log names only the reason and the name of the skip label from the input.
+
+A run that leaves out the review sends nothing to OpenAI, posts nothing and needs no OpenAI key. It does read the files and the earlier reviews, counts the open findings, sets the outputs and applies `fail-on`, as a run with nothing new does. So a label is **no bypass** for `fail-on` used as a required check: a label can be set by anyone with the role Triage, who cannot write to the repository, and the check stays red while an open finding reaches the threshold. Only a resolved thread or changed code takes a finding out of the count.
+
+The example workflow does not cancel a running review when a label changes, so a change of labels cannot stop a review that is under way.
 
 ## What happens with the answer of the model
 

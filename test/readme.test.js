@@ -8,6 +8,8 @@ import { MAX_PARALLEL_REQUESTS } from "../src/review.js";
 import { fromRoot } from "./helpers/run-action.js";
 import {
   assertCheckoutWithoutCredentials,
+  assertReviewConcurrency,
+  assertReviewTriggers,
   assertPermissionsAtTop,
   assertPinnedToCommits,
   assertTimeoutForRequests,
@@ -75,10 +77,8 @@ workflows.forEach((config, index) => {
     }
   });
 
-  test(`${name}: runs for new, updated and reopened pull requests only`, () => {
-    assert.deepEqual(config.on, {
-      pull_request: { types: ["opened", "synchronize", "reopened"] },
-    });
+  test(`${name}: runs for the events that start a review`, () => {
+    assertReviewTriggers(config);
   });
 
   test(`${name}: grants exactly the two permissions the action needs`, () => {
@@ -88,12 +88,8 @@ workflows.forEach((config, index) => {
     });
   });
 
-  test(`${name}: cancels the older run of the same pull request`, () => {
-    assert.equal(config.concurrency["cancel-in-progress"], true);
-    assert.match(
-      config.concurrency.group,
-      /\$\{\{ github\.event\.pull_request\.number \}\}/,
-    );
+  test(`${name}: cancels the older run of the same pull request, but not for a label`, () => {
+    assertReviewConcurrency(config);
   });
 
   test(`${name}: needs no checkout`, () => {

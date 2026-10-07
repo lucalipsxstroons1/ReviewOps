@@ -23,17 +23,19 @@ name: ReviewOps
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
 
 # The token of this workflow may read the code and write reviews, nothing else.
 permissions:
   contents: read
   pull-requests: write
 
-# A newer push makes the review of the older one pointless.
+# A newer push makes the review of the older one pointless. A change of labels
+# does not: its run leaves out the review, and it must not cancel a review that
+# is running.
 concurrency:
   group: reviewops-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'unlabeled' }}
 
 jobs:
   review:
@@ -70,7 +72,7 @@ name: ReviewOps
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
 
 permissions:
   contents: read
@@ -78,7 +80,7 @@ permissions:
 
 concurrency:
   group: reviewops-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'unlabeled' }}
 
 jobs:
   review:
@@ -116,6 +118,9 @@ jobs:
 | `max-diff-chars` | no | `200000` | Maximum size of the diffs that are reviewed, counted in characters of the annotated diff, from 1. A file that no longer fits is skipped. 200000 is about 50000 to 65000 tokens. |
 | `max-comments` | no | `10` | Maximum number of findings the review shows, from 1. The most serious come first. Findings at a line of the diff become inline comments, the others are listed in the text of the review. |
 | `fail-on` | no | `none` | Lets the step fail when open findings reach this severity: `none`, `critical` or `major` (`major` includes `critical`). The step fails only after the review is posted. |
+| `review-drafts` | no | `false` | Whether draft pull requests are reviewed: `true` or `false`. A draft is left out by default, and the review starts when it is marked ready for review ([Skipping pull requests](#skipping-pull-requests)). |
+| `skip-label` | no | `no-ai-review` | Name of a label that leaves out the review of a pull request that has it, without regard to case, at most 50 characters. Empty switches the label off. |
+| `review-bots` | no | `false` | Whether pull requests that a bot opened, such as Dependabot, are reviewed: `true` or `false`. They are left out by default. |
 
 ## Outputs
 
@@ -126,6 +131,21 @@ jobs:
 | `review-url` | Address of the review that this run posted. Empty when the run posted no review. |
 
 A run that fails with an error sets no output. Every run also writes a job summary with the reviewed and the skipped files, the open findings by severity and the tokens that were used.
+
+## Skipping pull requests
+
+ReviewOps leaves out the review, and asks no model, in these cases. The first one that applies counts, and the log says which:
+
+1. The pull request has the label `no-ai-review` (input `skip-label`, without regard to case).
+2. The pull request is a draft (input `review-drafts` is `false`).
+3. A bot opened the pull request (input `review-bots` is `false`). The author of the pull request counts, not who pushed last.
+4. The event is the removal of a label other than the skip label.
+
+The example workflow listens to `ready_for_review` and `unlabeled` for this. A draft that is marked ready gets its first, full review. A pull request gets its review when the skip label is taken off. When you re-run an old run, it reads the labels from the event of that run, not the labels the pull request has now.
+
+A run that leaves out the review ends green with a notice, and posts nothing. It still reads the earlier reviews, counts their open findings, sets the outputs and applies `fail-on`: a label can be set by anyone with the role Triage, and it must not turn a red check green. A run that leaves out the review needs no OpenAI key. The example workflow does not cancel a running review when a label changes.
+
+Pull requests of Dependabot are bot pull requests. To have them reviewed, set `review-bots: true` and store the key as a Dependabot secret as well.
 
 ## How it works
 
