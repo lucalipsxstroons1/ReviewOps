@@ -69,7 +69,13 @@ const EMPTY_SELECTION = {
 test("builds exactly the example of the contract for a prepared run", () => {
   const { payload, omitted } = build();
 
-  assert.deepStrictEqual(payload, FIXTURE);
+  // The example shows the version of the action as it was when the contract
+  // was written. Every release changes it, so the example is compared with the
+  // current version in its place.
+  assert.deepStrictEqual(payload, {
+    ...FIXTURE,
+    actionVersion: ACTION_VERSION,
+  });
   assert.deepEqual(omitted, { overLimit: 0, longPath: 0 });
 });
 

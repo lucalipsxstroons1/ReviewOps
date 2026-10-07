@@ -1,0 +1,135 @@
+name: Release
+
+# Started by hand by the maintainer. It makes the release and the tag of the
+# version in package.json, and moves the major tag (v1, v2, ...) to the same
+# commit. The checklist is in docs/release.md.
+on:
+  workflow_dispatch:
+
+# Tags and the release are made through the API of GitHub, so this is the one
+# write right the workflow needs. Nothing else is granted.
+permissions:
+  contents: write
+
+# Two releases at once would fight over the tags. A release that is running
+# is never cancelled: it could stop between the tag and the major tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Only the default branch is released. A condition on the job would skip it
+      # on another branch, and a skipped run looks green: this step fails instead.
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases are made from main only. Start the workflow on the branch main."
+            exit 1
+          fi
+
+      # The checkout does not keep the credentials: nothing is pushed with git.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      # The version has to be a plain MAJOR.MINOR.PATCH, the same in
+      # package.json and src/version.js, new as a tag, and the notes have to
+      # exist. Everything is checked before anything is made.
+      - name: Check the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::The version in package.json is not MAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          code_version="$(sed -n 's/^export const ACTION_VERSION = "\(.*\)";$/\1/p' src/version.js)"
+          if [ "$code_version" != "$version" ]; then
+            echo "::error::ACTION_VERSION in src/version.js differs from the version in package.json."
+            exit 1
+          fi
+          if [ ! -s "docs/releases/v$version.md" ]; then
+            echo "::error::There are no release notes: docs/releases/v$version.md is missing or empty."
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" --silent 2>/dev/null; then
+            echo "::error::The tag v$version exists already. Raise the version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # GitHub runs dist/, not src/. A bundle that is out of date would ship old code.
+      - name: Check that dist/ matches the sources
+        run: |
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ does not match the sources. Run 'npm run build' and commit the result."
+            git status --porcelain dist/
+            exit 1
+          fi
+
+      # The release creates the tag v<version> on the commit of this run.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --notes-file "docs/releases/v$VERSION.md"
+
+      # The major tag moves with every release of that major version.
+      - name: Move the major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAJOR: ${{ steps.version.outputs.major }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$MAJOR" --silent 2>/dev/null; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" \
+              -f sha="$GITHUB_SHA" -F force=true --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/v$MAJOR" -f sha="$GITHUB_SHA" --silent
+          fi
+
+      - name: Check that both tags point at the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+        run: |
+          for tag in "v$VERSION" "v$MAJOR"; do
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha')"
+            if [ "$sha" != "$GITHUB_SHA" ]; then
+              echo "::error::The tag $tag does not point at the release commit."
+              exit 1
+            fi
+          done
+          echo "v$VERSION and v$MAJOR point at $GITHUB_SHA."

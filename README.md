@@ -16,7 +16,7 @@ ReviewOps is a GitHub Action that reviews pull requests with an AI model. It sta
 
 1. **Create an OpenAI API key** in your OpenAI account.
 2. **Store it as a secret.** In your repository open **Settings**, then **Secrets and variables**, then **Actions**, choose **New repository secret**, enter the name `OPENAI_API_KEY` and paste the key.
-3. **Add the workflow.** Create the file `.github/workflows/reviewops.yml` with this content:
+3. **Add the workflow.** Create the file `.github/workflows/reviewops.yml` with this content. The tag `@v1` exists once the first release is made ([docs/release.md](docs/release.md)); until then, pin the action to a commit of `main` as described under [Pinning to a commit](#pinning-to-a-commit):
 
 ```yaml
 name: ReviewOps
@@ -58,6 +58,8 @@ The workflow needs the `pull_request` event. Use no other event: on any other ev
 ```yaml
 uses: lucalipsxstroons1/ReviewOps@<full-commit-sha> # v1.0.0
 ```
+
+Until the first release exists, there is no `v1` and no release commit. Use the SHA of a commit of `main` and write `# main` as the comment.
 
 ### Using the result in later steps
 
