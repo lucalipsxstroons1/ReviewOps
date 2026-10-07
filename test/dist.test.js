@@ -205,7 +205,7 @@ test("the bundle sends the review to OpenAI and reports the result", async (t) =
   assert.equal(api.openai.requests[0].authorization, `Bearer ${API_KEY}`);
   assert.match(
     result.stdout,
-    /^Sending 2 files to gpt-4o-mini in 1 requests\.$/m,
+    /^Sending 2 files to gpt-6-luna in 1 requests\.$/m,
   );
   assert.match(
     result.stdout,

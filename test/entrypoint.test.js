@@ -303,7 +303,7 @@ test("spreads a large pull request over several requests", async (t) => {
   assert.equal(api.openai.requests.length, 2);
   assert.match(
     result.stdout,
-    /^Sending 3 files to gpt-4o-mini in 2 requests\.$/m,
+    /^Sending 3 files to gpt-6-luna in 2 requests\.$/m,
   );
   assert.match(result.stdout, /from 2 of 2 requests\.$/m);
   assert.equal(result.stderr, "");

@@ -69,7 +69,7 @@ test("the model is optional and defaults to the model in the code", () => {
 
   assert.equal(input.required, false);
   assert.equal(input.default, DEFAULT_MODEL);
-  assert.match(input.description, /default is gpt-4o-mini\./);
+  assert.match(input.description, /default is gpt-6-luna\./);
 });
 
 test("the language is optional and defaults to the language in the code", () => {

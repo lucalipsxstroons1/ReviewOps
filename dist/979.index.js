@@ -228,7 +228,7 @@ function printable(text) {
 
 
 // The same value is written into action.yml. A test keeps them equal.
-const DEFAULT_MODEL = "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-6-luna";
 
 // Letters, digits and the characters that model names use, such as
 // "gpt-4.1", "o3-mini" or the fine-tuning name "ft:gpt-4o-mini:org::id".

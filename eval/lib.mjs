@@ -42,9 +42,9 @@ export function requiredPasses(clean) {
 }
 
 // The model the prompt is measured with. It is not the default model of the
-// action: with `gpt-4o-mini` the prompt misses the N+1 case (0 of 3 runs),
-// with `gpt-4.1` it meets every threshold. Which model becomes the default
-// of the action is decided in #41.
+// action (`gpt-6-luna`, decided in #41): with `gpt-4o-mini` the prompt misses
+// the React dependency case (1 of 3 runs), with `gpt-4.1`, `gpt-6-luna` and
+// `gpt-6.1-sol` it meets every threshold.
 export const REFERENCE_MODEL = "gpt-4.1";
 
 /**

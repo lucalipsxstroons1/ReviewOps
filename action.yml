@@ -15,9 +15,9 @@ inputs:
     description: OpenAI API key used to request the review. Pass it from a repository secret, never as plain text.
     required: true
   openai-model:
-    description: OpenAI model that writes the review, for example gpt-4o-mini or gpt-4.1. The default is gpt-4o-mini.
+    description: OpenAI model that writes the review, for example gpt-6-luna or gpt-6.1-sol. It has to support Structured Outputs. A model with a low token limit per minute can fail on large pull requests. The default is gpt-6-luna.
     required: false
-    default: gpt-4o-mini
+    default: gpt-6-luna
   language:
     description: Language of the feedback, as one of the codes en, de, fr, es, it, pt, nl, pl, tr, ja, zh and ko. Code, identifiers, file paths, severities and categories stay in English. The default is en.
     required: false
