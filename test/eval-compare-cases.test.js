@@ -22,6 +22,13 @@ const one = (change = {}) => ({
   ...change,
 });
 
+// A case that has no `defects` field at all, not one with an empty value.
+const withoutDefects = () => {
+  const entry = one();
+  delete entry.defects;
+  return entry;
+};
+
 const valid = (...cases) => ({ cases: cases.length ? cases : [one()] });
 
 test("the list of cases of the repository is valid", () => {
@@ -80,8 +87,8 @@ const INVALID = [
   ],
   [
     "a case without the defects field",
-    valid(one({ defects: undefined })),
-    /cases\[0\]/,
+    valid(withoutDefects()),
+    /cases\[0\]: must have exactly the fields/,
   ],
   [
     "a defect with another field",
