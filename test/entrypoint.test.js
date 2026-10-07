@@ -624,7 +624,7 @@ for (const debug of [false, true]) {
     );
 
     const maskCommands = result.stdout
-      .split(/\r?\n/)
+      .split("\n")
       .filter((line) => line.startsWith("::add-mask::"));
     assert.deepEqual(maskCommands, [
       `::add-mask::${TOKEN}`,
@@ -645,7 +645,7 @@ test("prints a stack trace only as a debug command", async () => {
 
   // The runner encodes line breaks as %0A, so a whole stack is one line.
   const linesWithStack = result.output
-    .split(/\r?\n/)
+    .split("\n")
     .filter((line) => /(%0A|^)\s+at /.test(line));
 
   assert.ok(linesWithStack.length > 0, "expected a stack trace in the output");
