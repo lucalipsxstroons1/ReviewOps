@@ -108,8 +108,9 @@ Observations, one run per case, so no statistic:
 
 - The comment line of `gpt-4.1` for method-level defects is the head of the
   method, not the line of the defect (cases #63 and #64). The
-  [follow-up in #70](#follow-up-in-70-2026-10-07) found that neither the
-  prompt nor the annotated diff causes this.
+  [follow-up in #70](#follow-up-in-70-2026-10-07) found that the other models
+  put the comment at the query line with the same prompt and diff; for
+  `gpt-4.1` the cause stays open, because there is only one run.
 - The special cases and both events (`opened`, `synchronize`) work as
   specified, each with a clear notice or warning.
 
@@ -132,12 +133,14 @@ Runs: [37597484540](https://github.com/lucalipsxstroons1/ReviewOps/actions/runs/
 (`gpt-6.1-sol`), [37597189072](https://github.com/lucalipsxstroons1/ReviewOps/actions/runs/37597189072)
 (`gpt-4o-mini`).
 
-- **Cause.** Neither the prompt nor the annotated diff. Three models with the
-  same prompt and the same diff put the N+1 comment at the query line (`:36`).
-  The `:31` of `gpt-4.1` is one run of a model that is no longer the default,
-  and one run cannot be told apart from variance. It stays as an observation;
-  `gpt-4.1` was not measured again and remains the reference model of the
-  evaluation.
+- **Cause.** For the three models measured here, neither the prompt nor the
+  annotated diff: with the same prompt and the same diff they put the N+1
+  comment at the query line (`:36`) in 9 of 9 runs. For `gpt-4.1` the runs do
+  not identify the cause. Its `:31` is one run of a model that is no longer
+  the default, which cannot be told apart from variance, and an effect of the
+  prompt or the diff on that model is not ruled out. It stays as an
+  observation; `gpt-4.1` was not measured again and remains the reference
+  model of the evaluation.
 - **Expectation widened afterwards.** For the authorization case both `:26`
   (the `[HttpGet]` line of the new action) and `:27` (the signature) count as
   the right place: `[Authorize]` belongs there, and all models that find the
