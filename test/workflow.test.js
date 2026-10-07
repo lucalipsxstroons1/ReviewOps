@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { MAX_REQUEST_CHARS } from "../src/ai/batch.js";
-import { DEFAULT_MAX_DIFF_CHARS } from "../src/limits.js";
-import { MAX_PARALLEL_REQUESTS } from "../src/review.js";
 import { fromRoot } from "./helpers/run-action.js";
+import {
+  assertCheckoutWithoutCredentials,
+  assertPermissionsAtTop,
+  assertPinnedToCommits,
+  assertTimeoutForRequests,
+} from "./helpers/workflow-rules.js";
 
 const WORKFLOW_DIR = ".github/workflows";
 
@@ -19,38 +22,19 @@ const workflows = Object.fromEntries(
     }),
 );
 
-const stepsOf = (config) =>
-  Object.values(config.jobs).flatMap((job) => job.steps ?? []);
-
 // --- Rules for every workflow ---------------------------------------------
 
 for (const [file, { config }] of Object.entries(workflows)) {
   test(`${file}: pins every third-party action to a full commit SHA`, () => {
-    const thirdParty = stepsOf(config)
-      .map((step) => step.uses)
-      .filter((uses) => uses && !uses.startsWith("./"));
-
-    for (const uses of thirdParty) {
-      assert.match(uses, /@[0-9a-f]{40}$/, `${uses} is not pinned to a commit`);
-    }
+    assertPinnedToCommits(config);
   });
 
   test(`${file}: sets its permissions once, at the top`, () => {
-    assert.equal(typeof config.permissions, "object");
-    for (const [name, job] of Object.entries(config.jobs)) {
-      assert.equal("permissions" in job, false, `job ${name} overrides them`);
-    }
+    assertPermissionsAtTop(config);
   });
 
   test(`${file}: checks out the code without keeping credentials`, () => {
-    // A workflow without a checkout is fine; this only covers the ones it has.
-    const checkouts = stepsOf(config).filter((step) =>
-      step.uses?.startsWith("actions/checkout@"),
-    );
-
-    for (const step of checkouts) {
-      assert.equal(step.with?.["persist-credentials"], false);
-    }
+    assertCheckoutWithoutCredentials(config);
   });
 }
 
@@ -81,16 +65,7 @@ test("reviewops.yml: cancels the older run of the same pull request", () => {
 });
 
 test("reviewops.yml: gives the requests to the model enough time", () => {
-  // Requests are filled in the order of GitHub, so two neighbouring requests
-  // always hold more than one budget: a pull request of the default size
-  // needs about eight requests at most.
-  const requests = 2 * Math.ceil(DEFAULT_MAX_DIFF_CHARS / MAX_REQUEST_CHARS);
-  const rounds = Math.ceil(requests / MAX_PARALLEL_REQUESTS);
-  // Three attempts of 120 seconds and the waits of the SDK between them.
-  const minutesPerRequest = (3 * 120 + 30) / 60;
-
-  assert.equal(reviewops.jobs.review["timeout-minutes"], 15);
-  assert.ok(rounds * minutesPerRequest <= 15);
+  assertTimeoutForRequests(reviewops.jobs.review);
 });
 
 test("reviewops.yml: loads the action from the checked-out repository", () => {
