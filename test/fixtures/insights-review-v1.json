@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "deliveryId": "3f2b8c1e-5d47-4a9b-8e21-7c6f0d9a4b12",
+  "repository": "octo-org/shop-api",
+  "prNumber": 42,
+  "commitSha": "9f3c1a7b2d4e6f8091a2b3c4d5e6f708192a3b4c",
+  "runId": 18234567890,
+  "runAttempt": 1,
+  "model": "gpt-4o-mini",
+  "tokens": { "input": 18250, "output": 1140, "total": 19390 },
+  "durationMs": 48211,
+  "mode": "full",
+  "actionVersion": "0.1.0",
+  "promptVersion": 9,
+  "githubReviewId": 2817345012,
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "path": "src/Orders/OrderRepository.cs",
+      "line": 42,
+      "fingerprint": "5a1f0c9e3b7d2a46",
+      "placement": "inline"
+    },
+    {
+      "severity": "major",
+      "category": "efcore",
+      "path": "src/Orders/OrderService.cs",
+      "line": 118,
+      "fingerprint": "c04e7a91d2b85f36",
+      "placement": "inline"
+    },
+    {
+      "severity": "minor",
+      "category": "code-quality",
+      "path": "src/Orders/OrderMapper.cs",
+      "line": null,
+      "fingerprint": null,
+      "placement": "body"
+    }
+  ]
+}

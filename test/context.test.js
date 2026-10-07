@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readPullRequest } from "../src/github/context.js";
+import { readPullRequest, readRun } from "../src/github/context.js";
 import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
 
 /** The example payload with one change applied to its pull request. */
@@ -176,3 +176,33 @@ test("never repeats a value from the payload in an error message", () => {
     );
   }
 });
+
+test("reads the run number and the attempt", () => {
+  assert.deepEqual(readRun({ runId: 18234567890, runAttempt: 2 }), {
+    runId: 18234567890,
+    runAttempt: 2,
+  });
+});
+
+for (const [name, value] of [
+  ["missing", undefined],
+  ["NaN", Number.NaN],
+  ["zero", 0],
+  ["negative", -7654321],
+  ["fractional", 1.7654321],
+  ["above 2^53 - 1", 2 ** 53],
+  ["text", "7654321"],
+]) {
+  test(`readRun rejects a ${name} run id and attempt without the value`, () => {
+    assert.throws(
+      () => readRun({ runId: value, runAttempt: 1 }),
+      (error) =>
+        /GITHUB_RUN_ID/.test(error.message) &&
+        !error.message.includes("7654321"),
+    );
+    assert.throws(
+      () => readRun({ runId: 1, runAttempt: value }),
+      /GITHUB_RUN_ATTEMPT/,
+    );
+  });
+}
