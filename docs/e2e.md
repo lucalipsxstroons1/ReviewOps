@@ -33,9 +33,10 @@ of the affected method and not at the line named in advance. The comment of
 the security case is one line above the expected one, and it is the first line
 of the added action. The comment of the N+1 case is five lines above the
 query. These two cases therefore **do not meet the strict reading** of the
-acceptance criterion "at the right line". The cause is open and is
-tracked in [#70](https://github.com/lucalipsxstroons1/ReviewOps/issues/70); neither the prompt nor the demo
-code was adapted here.
+acceptance criterion "at the right line". The cause was open at the time and
+is investigated in [#70](https://github.com/lucalipsxstroons1/ReviewOps/issues/70),
+see [Follow-up in #70](#follow-up-in-70-2026-10-07) below; neither the prompt
+nor the demo code was adapted here.
 
 ## Workflow runs
 
@@ -106,7 +107,45 @@ Observations, one run per case, so no statistic:
 ## Findings of this test
 
 - The comment line of `gpt-4.1` for method-level defects is the head of the
-  method, not the line of the defect (cases #63 and #64). Whether the prompt,
-  the annotated diff or the model causes this has to be investigated.
+  method, not the line of the defect (cases #63 and #64). The
+  [follow-up in #70](#follow-up-in-70-2026-10-07) found that neither the
+  prompt nor the annotated diff causes this.
 - The special cases and both events (`opened`, `synchronize`) work as
   specified, each with a clear notice or warning.
+
+## Follow-up in #70 (2026-10-07)
+
+Question: does the default model `gpt-6-luna` put the comment at the line of a
+method-level defect, and what caused the deviation of `gpt-4.1` above? No new
+run was made. The series of [#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)
+ran the same three demo pull requests (#62 to #64) with the same prompt
+(version 9) and the same diffs, three runs per model. The lines below are read
+from the logs of those runs.
+
+| Case | Right place | `gpt-4.1` (1 run, above) | `gpt-6-luna` (3 runs) | `gpt-6.1-sol` (3 runs) | `gpt-4o-mini` (3 runs) |
+|---|---|---|---|---|---|
+| EF Core, N+1 query (#63), `OrderRepository.cs` | `:36` | `:31` | `:36` in 3 of 3 | `:36` in 3 of 3 | `:36` in 3 of 3 |
+| Security, missing `[Authorize]` (#64), `OrdersController.cs` | `:26` or `:27` | `:26` | `:26` in 3 of 3 | `:26` in 3 of 3 | not found, 0 of 3 |
+
+Runs: [37597484540](https://github.com/lucalipsxstroons1/ReviewOps/actions/runs/37597484540)
+(`gpt-6-luna`), [37598858902](https://github.com/lucalipsxstroons1/ReviewOps/actions/runs/37598858902)
+(`gpt-6.1-sol`), [37597189072](https://github.com/lucalipsxstroons1/ReviewOps/actions/runs/37597189072)
+(`gpt-4o-mini`).
+
+- **Cause.** Neither the prompt nor the annotated diff. Three models with the
+  same prompt and the same diff put the N+1 comment at the query line (`:36`).
+  The `:31` of `gpt-4.1` is one run of a model that is no longer the default,
+  and one run cannot be told apart from variance. It stays as an observation;
+  `gpt-4.1` was not measured again and remains the reference model of the
+  evaluation.
+- **Expectation widened afterwards.** For the authorization case both `:26`
+  (the `[HttpGet]` line of the new action) and `:27` (the signature) count as
+  the right place: `[Authorize]` belongs there, and all models that find the
+  defect choose `:26`. The expectation of the first table, fixed before the
+  runs, was too narrow. That table stays as it was.
+- **Extra comment.** `gpt-6-luna` also commented on `:33` (the query for the
+  customers, rated `minor`) in all three N+1 runs. This is an additional
+  comment, not a miss of the defect.
+- **`gpt-4o-mini`** does not find the missing authorization, so there is no
+  line to judge. That was one reason for the choice of the model in #41.
+- Nothing under `src/` or `eval/` changed, and `PROMPT_VERSION` stays 9.
