@@ -6,7 +6,7 @@ ReviewOps sends the diff of a pull request to the OpenAI API and treats everythi
 
 Do not open a public issue. Use GitHub's private reporting: open the **Security** tab of this repository and choose **Report a vulnerability**. The report is visible to the maintainers only.
 
-Only the latest version on the default branch is supported.
+Only the latest release of the current major version (v1) is supported.
 
 ## What is sent to OpenAI
 

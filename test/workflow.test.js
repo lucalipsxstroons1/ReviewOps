@@ -275,3 +275,131 @@ test("compare.yml: installs exactly what the lock file says before it compares",
 
   assert.deepEqual(commands, ["npm ci", "npm run compare"]);
 });
+
+// --- release.yml: the release and the tags, started by the maintainer --------
+
+const release = workflows["release.yml"];
+const releaseJob = release.config.jobs.release;
+const releaseSteps = releaseJob.steps;
+const stepNamed = (name) => releaseSteps.find((step) => step.name === name);
+const indexOfStep = (name) =>
+  releaseSteps.findIndex((step) => step.name === name);
+
+test("release.yml: runs by hand only, without inputs", () => {
+  assert.deepEqual(Object.keys(release.config.on), ["workflow_dispatch"]);
+  assert.equal(release.config.on.workflow_dispatch, null);
+});
+
+test("release.yml: has the one write right it needs and nothing else", () => {
+  assert.deepEqual(release.config.permissions, { contents: "write" });
+});
+
+test("release.yml: releases the default branch only, and fails on another branch", () => {
+  // A condition on the job would skip it, and a skipped run looks green.
+  assert.equal("if" in releaseJob, false);
+  const [first] = releaseSteps;
+
+  assert.equal(first.name, "Check the branch");
+  assert.match(first.run, /refs\/heads\/main/);
+  assert.match(first.run, /::error::/);
+  assert.match(first.run, /exit 1/);
+});
+
+test("release.yml: never cancels a release that is running, and has a time limit", () => {
+  assert.equal(release.config.concurrency.group, "release");
+  assert.equal(release.config.concurrency["cancel-in-progress"], false);
+  assert.equal(releaseJob["timeout-minutes"], 15);
+});
+
+test("release.yml: checks and builds before it makes anything", () => {
+  const order = [
+    "Check the branch",
+    "Check the version",
+    "Install dependencies",
+    "Lint",
+    "Test",
+    "Build",
+    "Check that dist/ matches the sources",
+    "Create the release",
+    "Move the major tag",
+    "Check that both tags point at the release commit",
+  ].map(indexOfStep);
+
+  assert.ok(
+    order.every((index) => index >= 0),
+    "a step is missing",
+  );
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+  );
+  assert.equal(stepNamed("Install dependencies").run, "npm ci");
+  assert.equal(stepNamed("Lint").run, "npm run lint");
+  assert.equal(stepNamed("Test").run, "npm test");
+  assert.equal(stepNamed("Build").run, "npm run build");
+});
+
+test("release.yml: stops when the build changes dist/", () => {
+  const { run } = stepNamed("Check that dist/ matches the sources");
+
+  assert.match(run, /git status --porcelain dist\//);
+  assert.match(run, /::error::/);
+  assert.match(run, /exit 1/);
+});
+
+test("release.yml: checks the version before it makes anything", () => {
+  const { run } = stepNamed("Check the version");
+
+  assert.match(run, /\^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$/);
+  assert.match(run, /ACTION_VERSION/);
+  assert.match(run, /docs\/releases\/v\$version\.md/);
+  assert.match(run, /git\/ref\/tags\/v\$version/);
+});
+
+test("release.yml: the release and the major tag are made on the commit of the run", () => {
+  const create = stepNamed("Create the release").run;
+  const move = stepNamed("Move the major tag").run;
+
+  assert.match(create, /gh release create "v\$VERSION"/);
+  assert.match(create, /--target "\$GITHUB_SHA"/);
+  assert.match(create, /--notes-file "docs\/releases\/v\$VERSION\.md"/);
+  assert.doesNotMatch(create, /generate-notes/);
+  assert.equal((move.match(/sha="\$GITHUB_SHA"/g) ?? []).length, 2);
+});
+
+test("release.yml: gives the token only to the steps that call GitHub", () => {
+  const withToken = releaseSteps
+    .filter((step) => step.env?.GH_TOKEN !== undefined)
+    .map((step) => step.name);
+
+  assert.deepEqual(withToken, [
+    "Check the version",
+    "Create the release",
+    "Move the major tag",
+    "Check that both tags point at the release commit",
+  ]);
+  for (const step of releaseSteps) {
+    if (step.env?.GH_TOKEN !== undefined) {
+      assert.equal(step.env.GH_TOKEN, "${{ github.token }}");
+    }
+  }
+});
+
+test("release.yml: uses no secret and no expression inside a command", () => {
+  assert.doesNotMatch(release.source, /secrets\./);
+  for (const step of releaseSteps) {
+    assert.doesNotMatch(step.run ?? "", /\$\{\{/);
+  }
+});
+
+test("release.yml: hands the version to the steps through the environment", () => {
+  assert.equal(
+    stepNamed("Create the release").env.VERSION,
+    "${{ steps.version.outputs.version }}",
+  );
+  assert.equal(
+    stepNamed("Move the major tag").env.MAJOR,
+    "${{ steps.version.outputs.major }}",
+  );
+  assert.equal(stepNamed("Check the version").id, "version");
+});
