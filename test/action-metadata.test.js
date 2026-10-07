@@ -10,6 +10,12 @@ import {
   DEFAULT_MAX_DIFF_CHARS,
   DEFAULT_MAX_FILES,
 } from "../src/limits.js";
+import {
+  DEFAULT_REVIEW_BOTS,
+  DEFAULT_REVIEW_DRAFTS,
+  DEFAULT_SKIP_LABEL,
+  MAX_LABEL_LENGTH,
+} from "../src/skip.js";
 
 const source = readFileSync(new URL("../action.yml", import.meta.url), "utf8");
 const action = parse(source);
@@ -163,4 +169,36 @@ test("no credential is written into the file", () => {
 
 test("action runs the bundled entry point on Node 24", () => {
   assert.deepEqual(action.runs, { using: "node24", main: "dist/index.js" });
+});
+
+test("the inputs that choose the pull requests are optional and default to the values in the code", () => {
+  const drafts = action.inputs["review-drafts"];
+  const label = action.inputs["skip-label"];
+  const bots = action.inputs["review-bots"];
+
+  for (const input of [drafts, label, bots]) {
+    assert.equal(input.required, false);
+  }
+  assert.equal(drafts.default, DEFAULT_REVIEW_DRAFTS);
+  assert.equal(label.default, DEFAULT_SKIP_LABEL);
+  assert.equal(bots.default, DEFAULT_REVIEW_BOTS);
+  assert.match(drafts.description, /default is false\./);
+  assert.match(
+    label.description,
+    new RegExp(`default is ${DEFAULT_SKIP_LABEL}\\.`),
+  );
+  assert.match(bots.description, /default is false\./);
+});
+
+test("by default drafts and bots are left out, and the label is on", () => {
+  assert.equal(DEFAULT_REVIEW_DRAFTS, "false");
+  assert.equal(DEFAULT_REVIEW_BOTS, "false");
+  assert.equal(DEFAULT_SKIP_LABEL, "no-ai-review");
+  assert.ok(DEFAULT_SKIP_LABEL.length <= MAX_LABEL_LENGTH);
+});
+
+test("the descriptions of the three inputs say that fail-on still applies", () => {
+  for (const name of ["review-drafts", "skip-label", "review-bots"]) {
+    assert.match(action.inputs[name].description, /applies fail-on/, name);
+  }
 });

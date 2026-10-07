@@ -71,3 +71,39 @@ export function assertTimeoutForRequests(job) {
   assert.equal(job["timeout-minutes"], REVIEW_TIMEOUT_MINUTES);
   assert.ok(rounds * minutesPerRequest <= REVIEW_TIMEOUT_MINUTES);
 }
+
+/**
+ * The events that start a review (#23): new, updated and reopened pull
+ * requests, a draft that is marked ready, and a label that is taken off (the
+ * skip label starts the review again when it goes). Every other event type
+ * would review as before, so nothing else is listed.
+ */
+export function assertReviewTriggers(config) {
+  assert.deepEqual(config.on, {
+    pull_request: {
+      types: [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "unlabeled",
+      ],
+    },
+  });
+}
+
+/**
+ * A newer push cancels the older run of the same pull request. A change of
+ * labels does not: its run leaves out the review, and it must not cancel a
+ * review that is running.
+ */
+export function assertReviewConcurrency(config) {
+  assert.equal(
+    config.concurrency["cancel-in-progress"],
+    "${{ github.event.action != 'unlabeled' }}",
+  );
+  assert.match(
+    config.concurrency.group,
+    /\$\{\{ github\.event\.pull_request\.number \}\}/,
+  );
+}

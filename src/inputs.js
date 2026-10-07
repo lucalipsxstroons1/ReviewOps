@@ -15,9 +15,13 @@
  *   maxDiffChars: string,
  *   maxComments: string,
  *   failOn: string,
- * }} The model, the language, the limits and `fail-on` stay text here:
- *   `parseModel()`, `parseLanguage()`, `parseLimits()` and `parseFailOn()`
- *   check them.
+ *   reviewDrafts: string,
+ *   skipLabel: string,
+ *   reviewBots: string,
+ * }} The model, the language, the limits, `fail-on` and the inputs that say
+ *   which pull requests are reviewed stay text here: `parseModel()`,
+ *   `parseLanguage()`, `parseLimits()`, `parseFailOn()` and
+ *   `parseSkipOptions()` check them.
  */
 export function readInputs(core) {
   const inputs = {
@@ -30,6 +34,9 @@ export function readInputs(core) {
     maxDiffChars: core.getInput("max-diff-chars"),
     maxComments: core.getInput("max-comments"),
     failOn: core.getInput("fail-on"),
+    reviewDrafts: core.getInput("review-drafts"),
+    skipLabel: core.getInput("skip-label"),
+    reviewBots: core.getInput("review-bots"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -54,8 +61,20 @@ export function secretsOf(inputs) {
  * Rejects missing inputs with a message that says what to do.
  *
  * @param {{ githubToken: string, openaiApiKey: string }} inputs
+ * @param {{ needsKey?: boolean }} [options] A run that leaves out the review
+ *   asks no model, so it needs no OpenAI key. It still reads the pull request
+ *   and needs the token.
  */
-export function assertInputs(inputs) {
+export function assertInputs(inputs, { needsKey = true } = {}) {
+  if (needsKey) assertKey(inputs);
+  if (!inputs.githubToken) {
+    throw new Error(
+      "Input `github-token` is empty. Remove it from the workflow to use the token of the workflow run, or pass a valid token.",
+    );
+  }
+}
+
+function assertKey(inputs) {
   if (!inputs.openaiApiKey) {
     throw new Error(
       "Input `openai-api-key` is missing. Store the key as a repository secret and pass it to the action, for example `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`.",
@@ -67,11 +86,6 @@ export function assertInputs(inputs) {
   if (/[^!-~]/.test(inputs.openaiApiKey)) {
     throw new Error(
       "Input `openai-api-key` contains a character that is not allowed: a space, a line break or a character outside of ASCII. Copy the key from OpenAI again and store it as the repository secret `OPENAI_API_KEY`.",
-    );
-  }
-  if (!inputs.githubToken) {
-    throw new Error(
-      "Input `github-token` is empty. Remove it from the workflow to use the token of the workflow run, or pass a valid token.",
     );
   }
 }

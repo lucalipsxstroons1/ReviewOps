@@ -2,17 +2,21 @@ name: ReviewOps
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # ready_for_review starts the review of a draft that is finished. unlabeled
+    # starts it when the skip label is taken off.
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
 
 # The token of this workflow may read the code and write reviews, nothing else.
 permissions:
   contents: read
   pull-requests: write
 
-# A newer push makes the review of the older one pointless.
+# A newer push makes the review of the older one pointless. A change of labels
+# does not: its run leaves out the review, and it must not cancel a review that
+# is running.
 concurrency:
   group: reviewops-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'unlabeled' }}
 
 jobs:
   review:

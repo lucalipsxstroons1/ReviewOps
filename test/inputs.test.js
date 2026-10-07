@@ -14,6 +14,9 @@ test("reads all inputs", () => {
     "max-diff-chars": "5000",
     "max-comments": "20",
     "fail-on": "critical",
+    "review-drafts": "true",
+    "skip-label": "skip-me",
+    "review-bots": "true",
   });
 
   assert.deepEqual(readInputs(core), {
@@ -26,6 +29,9 @@ test("reads all inputs", () => {
     maxDiffChars: "5000",
     maxComments: "20",
     failOn: "critical",
+    reviewDrafts: "true",
+    skipLabel: "skip-me",
+    reviewBots: "true",
   });
 });
 
@@ -161,4 +167,33 @@ test("never puts a credential into its own error message", () => {
       (error) => !/token-value|key-value/.test(error.message),
     );
   }
+});
+
+test("a run that leaves out the review needs the token but no key", () => {
+  assert.doesNotThrow(() =>
+    assertInputs(
+      { githubToken: "token-value", openaiApiKey: "" },
+      { needsKey: false },
+    ),
+  );
+  assert.throws(
+    () =>
+      assertInputs({ githubToken: "", openaiApiKey: "" }, { needsKey: false }),
+    /Input `github-token` is empty/,
+  );
+});
+
+test("a run that asks the model still needs the key", () => {
+  assert.throws(
+    () => assertInputs({ githubToken: "token-value", openaiApiKey: "" }),
+    /Input `openai-api-key` is missing/,
+  );
+  assert.throws(
+    () =>
+      assertInputs(
+        { githubToken: "token-value", openaiApiKey: "" },
+        { needsKey: true },
+      ),
+    /Input `openai-api-key` is missing/,
+  );
 });

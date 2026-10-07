@@ -36,6 +36,7 @@ import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
 import { reviewInBatches } from "./review.js";
 import { maskSecrets } from "./secrets.js";
+import { parseSkipOptions, readSkipFacts, skipReason } from "./skip.js";
 import { buildSummary } from "./summary.js";
 
 // `pull_request_target` is left out on purpose: it hands secrets and a write
@@ -99,11 +100,15 @@ export async function run({
 
     const inputs = readInputs(core);
     redact = createRedactor(secretsOf(inputs));
+    // Which pull requests are reviewed. A value of the three inputs that
+    // cannot be used fails the run here, before any request. A run that leaves
+    // out the review asks no model, so it needs no key either.
+    const skip = skipReason(readSkipFacts(context), parseSkipOptions(inputs));
     // Without the key, a pull request from a fork or a run of Dependabot ends
     // here with a notice, before any request: GitHub gives them no secrets,
     // so there is nothing the workflow could fix. Anywhere else, a missing
     // key stays an error.
-    if (!inputs.openaiApiKey) {
+    if (!inputs.openaiApiKey && !skip) {
       const notice = explainMissingSecret(context);
       if (notice) {
         core.notice(notice);
@@ -112,7 +117,7 @@ export async function run({
         return;
       }
     }
-    assertInputs(inputs);
+    assertInputs(inputs, { needsKey: !skip });
     // A pattern, a limit, a model name or a language that cannot be used
     // fails the run here, before any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
@@ -247,6 +252,19 @@ export async function run({
         );
       }
     };
+
+    // A pull request that is not reviewed ends here. Nothing below costs money
+    // or posts something, and the lines about files, limits and masked strings
+    // belong to a review that does not take place. The earlier findings are
+    // counted and `fail-on` applies as in a run with nothing new: a label can
+    // be set by anyone with the role Triage, and it must not turn a red check
+    // green. The text names the reason from the inputs, nothing from the event.
+    if (skip) {
+      report.status = `ReviewOps left out the review: ${skip.text}. A green run does not mean that this pull request was reviewed.`;
+      core.notice(report.status);
+      conclude({ newCounts: NO_NEW_FINDINGS });
+      return;
+    }
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
