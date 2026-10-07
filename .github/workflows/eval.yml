@@ -6,6 +6,7 @@ on:
     paths:
       - src/ai/**
       - eval/**
+      - "!eval/compare/**"
       - .github/workflows/eval.yml
   workflow_dispatch:
     inputs:

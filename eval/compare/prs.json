@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "id": "react-hook-demo",
+      "pr": "lucalipsxstroons1/ReviewOps#62",
+      "focus": "react",
+      "defects": [
+        {
+          "path": "demo/react/OrderList.jsx",
+          "description": "A useEffect fetches by customerId but has an empty dependency array.",
+          "evidence": "https://github.com/lucalipsxstroons1/ReviewOps/pull/62"
+        }
+      ]
+    }
+  ]
+}

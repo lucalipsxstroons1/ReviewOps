@@ -156,6 +156,31 @@ export function createFakeOctokit(
   };
 }
 
+/**
+ * A pull request in the shape of GitHub's "get a pull request" response, with
+ * the fields the action reads. The example payload of the event is the model.
+ *
+ * @param {number} [number]
+ * @param {object} [fields] Fields that differ.
+ */
+export const apiPullRequest = (number = 42, fields = {}) => ({
+  number,
+  title: "Add a greeting helper",
+  draft: false,
+  user: { login: "octocat" },
+  head: {
+    ref: "feature/greeting",
+    sha: "1".repeat(40),
+    repo: { full_name: "octo-org/demo" },
+  },
+  base: {
+    ref: "main",
+    sha: "2".repeat(40),
+    repo: { full_name: "octo-org/demo" },
+  },
+  ...fields,
+});
+
 /** An error in the shape Octokit throws for an answer of the API. */
 export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
   return Object.assign(new Error(message), {
@@ -186,6 +211,8 @@ export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
  *   Answers a comparison of two commits, given as "base...head". Without it,
  *   every comparison fails with 404. The files of the body are split into
  *   pages.
+ * @param {(number: number) => object} [answer.pull] The pull request that
+ *   "get a pull request" answers with. Without it, `apiPullRequest()`.
  * @param {object[] | ((variables: object) => { status: number, body: object })} [answer.threads]
  *   The review threads (`apiThread()`) for the GraphQL query, served in pages,
  *   or a function that answers the query. Without it, there are no threads.
@@ -207,6 +234,7 @@ export async function startGitHubApi(
     existingComments = [],
     compare,
     threads = [],
+    pull = apiPullRequest,
   } = {},
 ) {
   const requests = [];
@@ -291,6 +319,12 @@ export async function startGitHubApi(
           ? { files: compareFiles.slice(start, start + perPage) }
           : {}),
       });
+      return;
+    }
+
+    const pulled = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(url.pathname);
+    if (request.method === "GET" && pulled) {
+      json(200, pull(Number(pulled[1])));
       return;
     }
 

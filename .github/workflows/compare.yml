@@ -1,0 +1,60 @@
+name: Compare models
+
+# Runs the action on real pull requests with one model and writes the figures
+# and the findings to the log. It posts nothing to those pull requests. It
+# runs only by hand, because it costs money. A new workflow file shows up in
+# the Actions tab once it is on the default branch.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: OpenAI model to compare, for example gpt-4o-mini or gpt-4.1.
+        required: true
+      runs:
+        description: Runs per case, a whole number from 1 to 5.
+        required: false
+        default: "3"
+
+# The comparison only reads: the code of this repository and the pull requests.
+permissions:
+  contents: read
+  pull-requests: read
+
+# A run that is cancelled has cost money already, so a new one waits instead.
+concurrency:
+  group: compare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Compare the model on real pull requests
+    runs-on: ubuntu-latest
+    # The cases run one after the other: 12 cases with 3 runs of 10 to 60
+    # seconds take about 40 minutes, and single large cases need a reserve.
+    timeout-minutes: 90
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The key reaches this step only. It is the repository secret
+      # OPENAI_API_KEY, the same one that reviewops.yml uses. The token of the
+      # run reads the pull requests. The model and the number of runs go
+      # through the environment, never into the command.
+      - name: Compare the model
+        run: npm run compare
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          COMPARE_MODEL: ${{ inputs.model }}
+          COMPARE_RUNS: ${{ inputs.runs }}
