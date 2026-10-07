@@ -78,12 +78,8 @@ async function start(
   return { api, model };
 }
 
-// The runner on Windows ends lines with a carriage return, which `$` of a
-// regular expression does not match: the output is compared without it.
-const withoutCarriageReturns = (text) => text.replace(/\r/g, "");
-
-async function compare(servers, env = {}) {
-  const result = await startAction(fromRoot("eval/compare/compare.mjs"), {
+function compare(servers, env = {}) {
+  return startAction(fromRoot("eval/compare/compare.mjs"), {
     GITHUB_API_URL: servers.api.url,
     TEST_OPENAI_URL: servers.model.url,
     OPENAI_API_KEY: KEY,
@@ -93,12 +89,6 @@ async function compare(servers, env = {}) {
     COMPARE_RUNS: "1",
     ...env,
   });
-  return {
-    ...result,
-    stdout: withoutCarriageReturns(result.stdout),
-    output: withoutCarriageReturns(result.output),
-    summary: withoutCarriageReturns(result.summary),
-  };
 }
 
 test("reviews a pull request and writes nothing to GitHub", async (t) => {

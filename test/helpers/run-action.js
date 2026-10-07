@@ -37,6 +37,9 @@ export const fromRoot = (path) =>
  * (`GITHUB_STEP_SUMMARY`) and one for the outputs (`GITHUB_OUTPUT`), unless
  * `env` sets them. Their content is returned as `summary` and `outputs`.
  *
+ * Line endings are the same on every platform: `\r\n` becomes `\n` in all
+ * text it returns, so a test does not strip carriage returns itself.
+ *
  * @param {string} entryPoint Absolute path of the file to start.
  * @param {Record<string, string>} env Variables for this run.
  * @returns {Promise<{
@@ -98,25 +101,34 @@ export function startAction(entryPoint, env) {
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
-    child.on("close", (status) =>
+    child.on("close", (status) => {
+      const { summary, outputs } = collect();
       resolve({
         status,
-        stdout,
-        stderr,
-        output: stdout + stderr,
-        ...collect(),
-      }),
-    );
+        stdout: lineEndsToLf(stdout),
+        stderr: lineEndsToLf(stderr),
+        output: lineEndsToLf(stdout + stderr),
+        summary: lineEndsToLf(summary),
+        outputs,
+      });
+    });
   });
 }
+
+/**
+ * Turns the line endings of Windows (`\r\n`) into line feeds. `@actions/core`
+ * and `console` end their lines with the line ending of the operating system,
+ * so the same run gives `\r\n` on Windows and `\n` on Linux. A lone `\r` stays.
+ */
+export const lineEndsToLf = (text) => text.replaceAll("\r\n", "\n");
 
 /**
  * Reads the file the runner hands out as `GITHUB_OUTPUT`: `@actions/core`
  * writes every output as `name<<delimiter`, the value and the delimiter.
  */
-function readOutputs(text) {
+export function readOutputs(text) {
   const outputs = {};
-  const lines = text.split("\n");
+  const lines = lineEndsToLf(text).split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const match = /^([^<]+)<<(.+)$/.exec(lines[index]);
     if (!match) continue;
@@ -149,6 +161,6 @@ export const withInputs = (env) => ({
 /** Output as it reaches the log: mask commands are consumed by the runner. */
 export const withoutMaskCommands = (output) =>
   output
-    .split(/\r?\n/)
+    .split("\n")
     .filter((line) => !line.startsWith("::add-mask::"))
     .join("\n");
