@@ -110,3 +110,26 @@ const isObject = (value) => typeof value === "object" && value !== null;
 
 const isRepositoryPart = (value) =>
   typeof value === "string" && REPOSITORY_PART.test(value);
+
+/**
+ * Reads which run of the workflow this is: `GITHUB_RUN_ID` and
+ * `GITHUB_RUN_ATTEMPT`. `@actions/github` gives `NaN` for a variable that is
+ * not set. Both must be safe integers from 1, and the message never repeats
+ * the value it read.
+ *
+ * @param {{ runId?: number, runAttempt?: number }} context
+ * @returns {{ runId: number, runAttempt: number }}
+ */
+export function readRun(context) {
+  return {
+    runId: readCounter(context.runId, "GITHUB_RUN_ID"),
+    runAttempt: readCounter(context.runAttempt, "GITHUB_RUN_ATTEMPT"),
+  };
+}
+
+function readCounter(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} is not a valid run number.`);
+  }
+  return value;
+}
