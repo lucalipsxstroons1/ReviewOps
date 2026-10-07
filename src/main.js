@@ -29,6 +29,9 @@ import {
   readResolvedComments,
 } from "./github/threads.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
+import { parseInsightsConfig } from "./insights/config.js";
+import { deliverInsightsReport } from "./insights/deliver.js";
+import { sendInsightsReport as insightsSend } from "./insights/send.js";
 import { applyLimits, parseLimits } from "./limits.js";
 import { countOpenFindings, currentEarlierFindings } from "./open-findings.js";
 import { setOutputs } from "./outputs.js";
@@ -75,6 +78,7 @@ const NO_NEW_FINDINGS = Object.freeze(
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
+ * @param {typeof import("./insights/send.js").sendInsightsReport} [deps.sendInsightsReport]
  */
 export async function run({
   core = actionsCore,
@@ -82,13 +86,19 @@ export async function run({
   getOctokit = actionsGetOctokit,
   parsePatch = diffParsePatch,
   createAiClient = aiCreateClient,
+  sendInsightsReport = insightsSend,
 } = {}) {
+  // The clock of the report: its duration runs from here (#75).
+  const startedAt = performance.now();
   let redact = String;
   // What the job summary shows and what the outputs say. Both are filled
   // while the run goes on and written at the end, however it ends. The
   // outputs stay unset when the run fails with an error.
   const report = { status: "ReviewOps stopped before it reviewed anything." };
   let outputs = null;
+  // The report for ReviewOps Insights (#76), set only at a regular end of a run
+  // that asked the model. `finish()` sends it after the outputs are set.
+  let insightsJob = null;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
@@ -125,8 +135,23 @@ export async function run({
     const model = parseModel(inputs.openaiModel);
     const language = parseLanguage(inputs.language);
     const failOn = parseFailOn(inputs.failOn);
+    // The report leaves the runner, so the address is checked before the
+    // first request. Without the secret, a fork or a run of Dependabot goes on
+    // without sending: GitHub gave it no secrets. Anywhere else it is a
+    // mistake of the workflow.
+    const insights = parseInsightsConfig(inputs);
+    if (insights && !insights.secret && !explainMissingSecret(context)) {
+      throw new Error(
+        "Input `insights-secret` is missing. Store the secret as a repository secret and pass it to the action, for example `insights-secret: ${{ secrets.INSIGHTS_SECRET }}`, or remove `insights-url` to switch the report off.",
+      );
+    }
 
     core.info("ReviewOps started.");
+    if (insights) {
+      core.info(
+        `The report of this run goes to ReviewOps Insights at ${printable(insights.host)}.`,
+      );
+    }
 
     // Only checked values reach the log: the title of the pull request is
     // written by its author and stays out.
@@ -474,12 +499,38 @@ export async function run({
       `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
 
+    // From here on the run ends regularly after a request to the model, so
+    // the report for Insights is due: also for a run without findings. It is
+    // sent after the outputs, in `finish()`, and changes nothing about how
+    // the run ends.
+    const reportToInsights = (posted) => {
+      if (!insights) return;
+      insightsJob = () =>
+        deliverInsightsReport({
+          core,
+          redact,
+          insights,
+          send: sendInsightsReport,
+          facts: {
+            pullRequest,
+            context,
+            model,
+            usage: review.usage,
+            mode: history.mode,
+            posted,
+            selection: { inline, fingerprints, unplaced, unplacedFingerprints },
+            startedAt,
+          },
+        });
+    };
+
     // An empty review would only notify people. Files that were not
     // reviewed are named in the log above.
     if (shown.length === 0) {
       report.status = "No findings, so no review was posted.";
       core.info(report.status);
       conclude({ newCounts, known: dropped.known });
+      reportToInsights(null);
       return;
     }
 
@@ -523,7 +574,10 @@ export async function run({
       overLimit: dropped.overLimit,
       url: posted.reviewId === null ? null : where,
     });
+    reportToInsights(posted);
   } catch (error) {
+    // A run that ends with an error sends no report.
+    insightsJob = null;
     // Mark the step as failed first: nothing below may prevent that.
     const message = redact(describe(error));
     core.setFailed(message);
@@ -541,20 +595,35 @@ export async function run({
       // A broken debug log must not hide the failure reported above.
     }
   } finally {
-    await finish(core, report, outputs);
+    await finish(core, report, outputs, insightsJob);
   }
 }
 
 /**
- * Sets the outputs and writes the job summary. Neither may fail the run: the
- * review is posted already, and a runner without a summary file is no
- * reason for a red step. The warnings name no path and no message.
+ * Sets the outputs, sends the report for Insights and writes the job summary,
+ * in this order: the outputs do not wait for the report, which can take up to
+ * 50 seconds, and the summary can tell how it went. None of it may fail the
+ * run: the review is posted already, and a runner without a summary file or a
+ * server that does not answer is no reason for a red step. The warnings name
+ * no path and no message.
  */
-async function finish(core, report, outputs) {
+async function finish(core, report, outputs, insightsJob) {
   try {
     if (outputs) setOutputs(core, outputs);
   } catch {
     core.warning("The outputs of the step could not be set.");
+  }
+  if (insightsJob) {
+    try {
+      report.insights = await insightsJob();
+    } catch {
+      // `deliverInsightsReport()` catches its errors itself. This is the net
+      // under it, with the same fixed text.
+      const text =
+        "The report for ReviewOps Insights could not be built or sent.";
+      core.warning(text);
+      report.insights = { text };
+    }
   }
   try {
     await core.summary.addRaw(buildSummary(report), true).write();

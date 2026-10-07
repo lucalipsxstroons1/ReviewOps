@@ -17,6 +17,8 @@ test("reads all inputs", () => {
     "review-drafts": "true",
     "skip-label": "skip-me",
     "review-bots": "true",
+    "insights-url": "https://insights.example.com/ingest",
+    "insights-secret": "insights-secret-value",
   });
 
   assert.deepEqual(readInputs(core), {
@@ -32,6 +34,8 @@ test("reads all inputs", () => {
     reviewDrafts: "true",
     skipLabel: "skip-me",
     reviewBots: "true",
+    insightsUrl: "https://insights.example.com/ingest",
+    insightsSecret: "insights-secret-value",
   });
 });
 
@@ -73,7 +77,30 @@ test("masks the credentials, but not the model, the patterns or the limits", () 
   const inputs = readInputs(core);
 
   assert.deepEqual(core.messages("setSecret"), ["token-value", "key-value"]);
-  assert.deepEqual(secretsOf(inputs), ["token-value", "key-value"]);
+  // The secret of the report is empty here: it is named, but not registered.
+  assert.deepEqual(secretsOf(inputs), ["token-value", "key-value", ""]);
+});
+
+test("masks the secret of the report, but not its address", () => {
+  const core = createFakeCore({
+    "github-token": "token-value",
+    "openai-api-key": "key-value",
+    "insights-url": "https://insights.example.com/ingest",
+    "insights-secret": "insights-secret-value",
+  });
+
+  const inputs = readInputs(core);
+
+  assert.deepEqual(core.messages("setSecret"), [
+    "token-value",
+    "key-value",
+    "insights-secret-value",
+  ]);
+  assert.deepEqual(secretsOf(inputs), [
+    "token-value",
+    "key-value",
+    "insights-secret-value",
+  ]);
 });
 
 test("masks both credentials", () => {

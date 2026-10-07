@@ -18,10 +18,13 @@
  *   reviewDrafts: string,
  *   skipLabel: string,
  *   reviewBots: string,
- * }} The model, the language, the limits, `fail-on` and the inputs that say
- *   which pull requests are reviewed stay text here: `parseModel()`,
- *   `parseLanguage()`, `parseLimits()`, `parseFailOn()` and
- *   `parseSkipOptions()` check them.
+ *   insightsUrl: string,
+ *   insightsSecret: string,
+ * }} The model, the language, the limits, `fail-on`, the inputs that say
+ *   which pull requests are reviewed and the two inputs for the report stay
+ *   text here: `parseModel()`, `parseLanguage()`, `parseLimits()`,
+ *   `parseFailOn()`, `parseSkipOptions()` and `parseInsightsConfig()` check
+ *   them.
  */
 export function readInputs(core) {
   const inputs = {
@@ -37,6 +40,8 @@ export function readInputs(core) {
     reviewDrafts: core.getInput("review-drafts"),
     skipLabel: core.getInput("skip-label"),
     reviewBots: core.getInput("review-bots"),
+    insightsUrl: core.getInput("insights-url"),
+    insightsSecret: core.getInput("insights-secret"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -50,11 +55,15 @@ export function readInputs(core) {
  * The inputs that are credentials. Settings such as `exclude` are not: they
  * appear in the log, and masking them would hide ordinary text.
  *
- * @param {{ githubToken: string, openaiApiKey: string }} inputs
+ * @param {{
+ *   githubToken: string,
+ *   openaiApiKey: string,
+ *   insightsSecret?: string,
+ * }} inputs
  * @returns {string[]}
  */
 export function secretsOf(inputs) {
-  return [inputs.githubToken, inputs.openaiApiKey];
+  return [inputs.githubToken, inputs.openaiApiKey, inputs.insightsSecret];
 }
 
 /**

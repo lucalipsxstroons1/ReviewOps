@@ -1,8 +1,8 @@
-export const id = 62;
-export const ids = [62];
+export const id = 164;
+export const ids = [164];
 export const modules = {
 
-/***/ 5062:
+/***/ 7164:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -3404,10 +3404,13 @@ function describeThreadError(error) {
  *   reviewDrafts: string,
  *   skipLabel: string,
  *   reviewBots: string,
- * }} The model, the language, the limits, `fail-on` and the inputs that say
- *   which pull requests are reviewed stay text here: `parseModel()`,
- *   `parseLanguage()`, `parseLimits()`, `parseFailOn()` and
- *   `parseSkipOptions()` check them.
+ *   insightsUrl: string,
+ *   insightsSecret: string,
+ * }} The model, the language, the limits, `fail-on`, the inputs that say
+ *   which pull requests are reviewed and the two inputs for the report stay
+ *   text here: `parseModel()`, `parseLanguage()`, `parseLimits()`,
+ *   `parseFailOn()`, `parseSkipOptions()` and `parseInsightsConfig()` check
+ *   them.
  */
 function readInputs(core) {
   const inputs = {
@@ -3423,6 +3426,8 @@ function readInputs(core) {
     reviewDrafts: core.getInput("review-drafts"),
     skipLabel: core.getInput("skip-label"),
     reviewBots: core.getInput("review-bots"),
+    insightsUrl: core.getInput("insights-url"),
+    insightsSecret: core.getInput("insights-secret"),
   };
 
   for (const secret of secretsOf(inputs)) {
@@ -3436,11 +3441,15 @@ function readInputs(core) {
  * The inputs that are credentials. Settings such as `exclude` are not: they
  * appear in the log, and masking them would hide ordinary text.
  *
- * @param {{ githubToken: string, openaiApiKey: string }} inputs
+ * @param {{
+ *   githubToken: string,
+ *   openaiApiKey: string,
+ *   insightsSecret?: string,
+ * }} inputs
  * @returns {string[]}
  */
 function secretsOf(inputs) {
-  return [inputs.githubToken, inputs.openaiApiKey];
+  return [inputs.githubToken, inputs.openaiApiKey, inputs.insightsSecret];
 }
 
 /**
@@ -3474,6 +3483,618 @@ function assertKey(inputs) {
       "Input `openai-api-key` contains a character that is not allowed: a space, a line break or a character outside of ASCII. Copy the key from OpenAI again and store it as the repository secret `OPENAI_API_KEY`.",
     );
   }
+}
+
+;// CONCATENATED MODULE: ./src/insights/config.js
+/** The longest address that is accepted, in characters. */
+const MAX_URL_CHARS = 2048;
+
+/** The shortest secret, the same rule as `INGEST_SECRET` at Insights. */
+const MIN_SECRET_CHARS = 32;
+
+// Over plain http the report goes only to the machine of the runner itself:
+// the tests of this repository use it, and nothing else.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+// Spaces and control characters, line breaks included.
+const UNSAFE_URL_CHARS = /[\s\p{Cc}]/u;
+
+/**
+ * Reads the two inputs for the report to ReviewOps Insights and checks them
+ * before the first request.
+ *
+ * The report leaves the runner for the address in `insights-url`: repository
+ * names, file paths and token counts. A wrong address would hand them to a
+ * stranger, so everything that does not look like a plain address is refused
+ * (docs/insights-payload.md).
+ *
+ * The messages name the rule that was broken, never the address and never the
+ * secret: the address can hold credentials.
+ *
+ * @param {{ insightsUrl?: string, insightsSecret?: string }} inputs
+ * @returns {{ url: string, host: string, secret: string | null } | null}
+ *   `null` when `insights-url` is empty, which switches the report off, also
+ *   when a secret is set. Otherwise the address in its normal form, its host
+ *   (with the port) for the log and the secret, or `null` when it is empty:
+ *   `run()` decides whether that is an error.
+ * @throws {Error} For an address or a secret that cannot be used.
+ */
+function parseInsightsConfig(inputs) {
+  const text = (inputs.insightsUrl ?? "").trim();
+  if (text === "") return null;
+
+  const url = parseUrl(text);
+  return {
+    url: url.href,
+    host: url.host,
+    secret: parseSecret(inputs.insightsSecret ?? ""),
+  };
+}
+
+function parseUrl(text) {
+  if (text.length > MAX_URL_CHARS) {
+    throw new Error(
+      `Input \`insights-url\` is too long: at most ${MAX_URL_CHARS} characters.`,
+    );
+  }
+  if (UNSAFE_URL_CHARS.test(text)) {
+    throw new Error(
+      "Input `insights-url` contains a space or a control character.",
+    );
+  }
+  // Looked up in the text: an empty query (`https://host/path?`) is gone from
+  // the parsed address.
+  if (text.includes("?") || text.includes("#")) {
+    throw new Error(
+      "Input `insights-url` must not contain a query (`?`) or a fragment (`#`).",
+    );
+  }
+
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(
+      "Input `insights-url` is not a valid address. Use the whole address, for example `https://insights.example.com/api/v1/ingest/review`.",
+    );
+  }
+
+  const local = LOCAL_HOSTS.has(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error(
+      "Input `insights-url` must start with `https://`. `http://` is accepted only for `localhost` and `127.0.0.1`.",
+    );
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new Error(
+      "Input `insights-url` must not contain a user name or a password. Pass the secret in `insights-secret`.",
+    );
+  }
+  return url;
+}
+
+function parseSecret(secret) {
+  if (secret === "") return null;
+  // Visible ASCII only: a space, a line break or a character from a copy
+  // error would change the signature the receiver computes.
+  if (/[^!-~]/.test(secret)) {
+    throw new Error(
+      "Input `insights-secret` contains a character that is not allowed: a space, a line break or a character outside of ASCII. Copy the secret again and store it as a repository secret.",
+    );
+  }
+  if (secret.length < MIN_SECRET_CHARS) {
+    throw new Error(
+      `Input \`insights-secret\` is too short: at least ${MIN_SECRET_CHARS} characters, the same rule as \`INGEST_SECRET\` at ReviewOps Insights.`,
+    );
+  }
+  return secret;
+}
+
+;// CONCATENATED MODULE: ./src/version.js
+// The version of the action. A test keeps it equal to `version` in
+// package.json: src/ does not import package.json.
+const ACTION_VERSION = "1.0.0";
+
+;// CONCATENATED MODULE: ./src/insights/payload.js
+
+
+
+
+const SCHEMA_VERSION = 1;
+const MAX_FINDINGS = 500;
+const payload_MAX_PATH_CHARS = 1024;
+const MAX_REPOSITORY_CHARS = 140;
+
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * Builds the report that ReviewOps Insights reads (contract v1,
+ * docs/insights-payload.md): key figures of one run and the findings the
+ * review shows, with severity and category.
+ *
+ * Only metadata goes in. Every field is taken one by one from the arguments,
+ * nothing is passed through, so the title of the pull request and the texts of
+ * the model (summary, title, comment, suggestion) cannot get into the report.
+ *
+ * Nothing is logged and nothing is sent here. The report is built once per
+ * run, so every attempt to send it carries the same `deliveryId`.
+ *
+ * @param {object} options
+ * @param {{ owner: string, repo: string, pullNumber: number, headSha: string }} options.pullRequest
+ *   As `readPullRequest()` returns it. Nothing else is read.
+ * @param {{ runId: number, runAttempt: number }} options.run From `readRun()`.
+ * @param {string} options.model The name of the model, from `parseModel()`.
+ * @param {{ inputTokens: number, outputTokens: number, totalTokens: number }} options.usage
+ *   From `reviewInBatches()`.
+ * @param {"full" | "incremental"} options.mode `history.mode`.
+ * @param {{ reviewId: number | null, fallback: boolean } | null} options.posted
+ *   The result of `postReview()`, or `null` when nothing was posted.
+ * @param {ReturnType<import("../findings.js").selectFindings>} options.selection
+ *   The findings the review shows.
+ * @param {number} options.startedAt The time `run()` started, from the same
+ *   clock as `now`.
+ * @param {() => number} [options.now] A monotonic clock in milliseconds.
+ *   `Date.now()` can jump back, so it is not the default.
+ * @param {string} [options.deliveryId] The id of this delivery, a lower case
+ *   UUID v4.
+ * @returns {{
+ *   payload: object,
+ *   omitted: { overLimit: number, longPath: number },
+ * }} `omitted` counts the findings that did not fit the contract: a path over
+ *   1024 characters, or more than 500 findings. The numbers are not part of
+ *   the report.
+ * @throws {Error} For a value that breaks the contract. The message names the
+ *   field, never the value.
+ */
+function buildInsightsPayload({
+  pullRequest,
+  run,
+  model,
+  usage,
+  mode,
+  posted,
+  selection,
+  startedAt,
+  now = () => performance.now(),
+  deliveryId = (0,external_node_crypto_.randomUUID)(),
+}) {
+  const repository = `${pullRequest.owner}/${pullRequest.repo}`;
+  ensure(repository.length <= MAX_REPOSITORY_CHARS, "repository");
+  ensure(UUID_V4.test(deliveryId), "deliveryId");
+  ensure(Number.isSafeInteger(pullRequest.pullNumber), "prNumber");
+  for (const [name, value] of Object.entries({
+    input: usage.inputTokens,
+    output: usage.outputTokens,
+    total: usage.totalTokens,
+  })) {
+    ensure(Number.isSafeInteger(value) && value >= 0, `tokens.${name}`);
+  }
+
+  // Same order as in the review: the comments at a line, then the rest.
+  // After the fallback to a review without comments, everything is in the text.
+  const placement = posted?.fallback ? "body" : "inline";
+  const all = [
+    ...selection.inline.map((finding, index) =>
+      toEntry(finding, selection.fingerprints[index], placement),
+    ),
+    ...selection.unplaced.map((finding, index) =>
+      toEntry(finding, selection.unplacedFingerprints[index], "body"),
+    ),
+  ];
+  // `String.length` counts UTF-16 code units, never fewer than code points,
+  // so a path that is allowed here is allowed by the contract.
+  const fitting = all.filter((entry) => entry.path.length <= payload_MAX_PATH_CHARS);
+  const findings = fitting.slice(0, MAX_FINDINGS);
+
+  // Taken last, so the time is that of the finished report.
+  const durationMs = Math.round(now() - startedAt);
+  ensure(Number.isSafeInteger(durationMs) && durationMs >= 0, "durationMs");
+
+  return {
+    payload: {
+      schemaVersion: SCHEMA_VERSION,
+      deliveryId,
+      repository,
+      prNumber: pullRequest.pullNumber,
+      commitSha: pullRequest.headSha,
+      runId: run.runId,
+      runAttempt: run.runAttempt,
+      model,
+      tokens: {
+        input: usage.inputTokens,
+        output: usage.outputTokens,
+        total: usage.totalTokens,
+      },
+      durationMs,
+      mode,
+      actionVersion: ACTION_VERSION,
+      promptVersion: PROMPT_VERSION,
+      githubReviewId: posted?.reviewId ?? null,
+      findings,
+    },
+    omitted: {
+      overLimit: fitting.length - findings.length,
+      longPath: all.length - fitting.length,
+    },
+  };
+}
+
+// A finding has a line only together with its fingerprint: the fingerprint
+// exists when the diff shows the line.
+function toEntry(finding, fingerprint, placement) {
+  const known = typeof fingerprint === "string";
+  return {
+    severity: finding.severity,
+    category: finding.category,
+    path: finding.path,
+    line: known ? finding.line : null,
+    fingerprint: known ? fingerprint : null,
+    placement,
+  };
+}
+
+function ensure(ok, field) {
+  if (!ok) throw new Error(`The insights report has an invalid ${field}.`);
+}
+
+;// CONCATENATED MODULE: ./src/insights/send.js
+
+
+/** Attempts to deliver one report, the first one included. */
+const MAX_ATTEMPTS = 3;
+
+/** Time for one attempt, the answer included, in milliseconds. */
+const ATTEMPT_TIMEOUT_MS = 10_000;
+
+/** The longest pause before another attempt, in seconds. */
+const MAX_PAUSE_SECONDS = 10;
+
+/** The largest report that is sent: the limit of the contract. */
+const MAX_BODY_BYTES = 1024 * 1024;
+
+// Only the start of an error answer is read: it names a code, nothing else.
+const MAX_ANSWER_BYTES = 8 * 1024;
+
+// A code from the answer reaches the log only when it looks like an identifier.
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,49}$/;
+
+/**
+ * Sends the report to ReviewOps Insights (docs/insights-payload.md). This is
+ * the only place of the action that makes a request of its own: a test over
+ * the sources keeps it that way.
+ *
+ * - `POST` with `Content-Type: application/json` and the header
+ *   `X-ReviewOps-Signature: sha256=<hex>`, an HMAC-SHA256 over the bytes of
+ *   the body. Every attempt sends exactly these bytes, so the `deliveryId` is
+ *   the same and the receiver stores the report once.
+ * - A redirect is never followed and never tried again. It would send the
+ *   report, signed, to an address the workflow did not name.
+ * - At most `MAX_ATTEMPTS` attempts of `timeoutMs` each. Another attempt
+ *   follows after a network error, a timeout, `408`, `429` and `5xx`, after a
+ *   pause (`Retry-After` in whole seconds, at most `MAX_PAUSE_SECONDS`,
+ *   otherwise 1 second, then 2). Every other status ends the sending.
+ *
+ * Nothing is logged here. The result holds numbers and words of this module
+ * only, never the address, the body, the signature or the text of an answer:
+ * the error text of `fetch` names the address, and the answer of the server is
+ * untrusted. A code from the answer is passed on only when it looks like an
+ * identifier.
+ *
+ * @param {object} options
+ * @param {string} options.url The address, from `parseInsightsConfig()`.
+ * @param {string} options.secret The secret that signs the report.
+ * @param {object} options.payload The report from `buildInsightsPayload()`.
+ * @param {typeof fetch} [options.fetch] For tests.
+ * @param {(ms: number) => Promise<void>} [options.sleep] For tests: the
+ *   pauses between the attempts.
+ * @param {number} [options.timeoutMs] For tests.
+ * @returns {Promise<
+ *   | { delivered: true, outcome: "created" | "duplicate", httpStatus: number, attempts: number }
+ *   | {
+ *       delivered: false,
+ *       reason: "http" | "redirect" | "timeout" | "network" | "too-large",
+ *       httpStatus?: number,
+ *       code?: string,
+ *       detail?: string,
+ *       attempts: number,
+ *     }
+ * >} `attempts` is 0 when nothing was sent.
+ */
+async function send_sendInsightsReport({
+  url,
+  secret,
+  payload,
+  fetch = globalThis.fetch,
+  sleep = defaultSleep,
+  timeoutMs = ATTEMPT_TIMEOUT_MS,
+}) {
+  const body = Buffer.from(JSON.stringify(payload), "utf8");
+  if (body.length > MAX_BODY_BYTES) {
+    return { delivered: false, reason: "too-large", attempts: 0 };
+  }
+  const headers = {
+    "Content-Type": "application/json",
+    "X-ReviewOps-Signature": `sha256=${(0,external_node_crypto_.createHmac)("sha256", secret).update(body).digest("hex")}`,
+  };
+
+  let attempts = 0;
+  let last;
+  while (attempts < MAX_ATTEMPTS) {
+    attempts += 1;
+    last = await attemptOnce({
+      fetch,
+      url,
+      headers,
+      body,
+      timeoutMs,
+      final: attempts === MAX_ATTEMPTS,
+    });
+    if (!last.retry) break;
+    if (attempts < MAX_ATTEMPTS) {
+      // 1 second before the second attempt, 2 before the third.
+      await sleep((last.pauseSeconds ?? attempts) * 1000);
+    }
+  }
+  return { ...last.result, attempts };
+}
+
+async function attemptOnce({ fetch, url, headers, body, timeoutMs, final }) {
+  // The signal covers the whole attempt, reading the answer included.
+  const signal = AbortSignal.timeout(timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      redirect: "manual",
+      signal,
+    });
+  } catch (error) {
+    return { retry: true, result: failureOf(error) };
+  }
+
+  const { status } = response;
+  if (status === 201 || status === 200) {
+    await discard(response);
+    return {
+      retry: false,
+      result: {
+        delivered: true,
+        outcome: status === 201 ? "created" : "duplicate",
+        httpStatus: status,
+      },
+    };
+  }
+  if (status >= 300 && status < 400) {
+    await discard(response);
+    return {
+      retry: false,
+      result: { delivered: false, reason: "redirect", httpStatus: status },
+    };
+  }
+
+  const temporary = status === 408 || status === 429 || status >= 500;
+  if (temporary && !final) {
+    const pauseSeconds = pauseOf(response.headers.get("retry-after"));
+    await discard(response);
+    return {
+      retry: true,
+      pauseSeconds,
+      result: { delivered: false, reason: "http", httpStatus: status },
+    };
+  }
+
+  const code = await readCode(response);
+  return {
+    retry: false,
+    result: {
+      delivered: false,
+      reason: "http",
+      httpStatus: status,
+      ...(code && { code }),
+    },
+  };
+}
+
+/** What went wrong without an answer: a timeout, or the network. */
+function failureOf(error) {
+  const timeout =
+    error?.name === "TimeoutError" || error?.name === "AbortError";
+  const detail = [error?.cause?.code, error?.code, error?.name].find(
+    (value) =>
+      typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,49}$/.test(value),
+  );
+  return {
+    delivered: false,
+    reason: timeout ? "timeout" : "network",
+    ...(detail && { detail }),
+  };
+}
+
+/** `Retry-After` as whole seconds, at most `MAX_PAUSE_SECONDS`; else `null`. */
+function pauseOf(header) {
+  if (typeof header !== "string" || !/^\d+$/.test(header.trim())) return null;
+  return Math.min(Number(header.trim()), MAX_PAUSE_SECONDS);
+}
+
+/** Frees the connection of an answer whose body is not needed. */
+async function discard(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The answer is not needed, so a failure here changes nothing.
+  }
+}
+
+/**
+ * The `error.code` of an error answer, when it looks like an identifier. At
+ * most 8 KiB are read, and every failure while reading means: no code.
+ */
+async function readCode(response) {
+  try {
+    const reader = response.body?.getReader();
+    if (!reader) return null;
+    const chunks = [];
+    let size = 0;
+    while (size < MAX_ANSWER_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.length;
+    }
+    await reader.cancel().catch(() => {});
+    const text = Buffer.concat(chunks).toString("utf8", 0, MAX_ANSWER_BYTES);
+    const code = JSON.parse(text)?.error?.code;
+    return typeof code === "string" && ERROR_CODE.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How a report that was not delivered is named in the log and in the summary.
+ * Fixed words and numbers, nothing from the answer except a code that looks
+ * like an identifier.
+ *
+ * @param {{ reason: string, httpStatus?: number, code?: string }} result
+ * @returns {string}
+ */
+function describeFailure({ reason, httpStatus, code }) {
+  switch (reason) {
+    case "http":
+      return code ? `HTTP ${httpStatus}, ${code}` : `HTTP ${httpStatus}`;
+    case "redirect":
+      return `redirect (HTTP ${httpStatus})`;
+    case "timeout":
+      return "timeout";
+    case "too-large":
+      return "report over 1 MiB";
+    default:
+      return "network error";
+  }
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+;// CONCATENATED MODULE: ./src/insights/deliver.js
+
+
+
+
+/** The text of every case in which the report could not even be tried. */
+const NOT_SENT =
+  "The report for ReviewOps Insights could not be built or sent.";
+
+// Only these two messages of the code that builds the report may reach the
+// debug log: they name a field and never a value.
+const SAFE_BUILD_ERROR =
+  /^(The insights report has an invalid [\w.]+\.|GITHUB_RUN_(ID|ATTEMPT) is not a valid run number\.)$/;
+
+/**
+ * Builds the report of a finished run, sends it to ReviewOps Insights and says
+ * in the log and in the summary how that went (#76).
+ *
+ * Nothing in here lets the run fail or changes its result: every error ends in
+ * a warning with a fixed text. The log gets the status, the number of attempts
+ * and a code that looks like an identifier, never the address, the body, the
+ * signature or the answer. The address and its host were checked and logged
+ * before the run began.
+ *
+ * @param {object} options
+ * @param {typeof import("@actions/core")} options.core
+ * @param {(text: unknown) => string} options.redact
+ * @param {{ url: string, secret: string | null }} options.insights From
+ *   `parseInsightsConfig()`. Without a secret, nothing is sent.
+ * @param {typeof import("./send.js").sendInsightsReport} options.send
+ * @param {object} options.facts What the run knows, for
+ *   `buildInsightsPayload()`: `pullRequest`, `context`, `model`, `usage`,
+ *   `mode`, `posted`, `selection` and `startedAt`.
+ * @returns {Promise<{ text: string }>} One sentence for the job summary.
+ */
+async function deliverInsightsReport({
+  core,
+  redact,
+  insights,
+  send,
+  facts,
+}) {
+  // A run of a fork or of Dependabot gets no repository secrets. That is no
+  // mistake of the workflow, so the review stays as it is and this says why
+  // nothing was sent.
+  if (!insights.secret) {
+    const text =
+      "The report for ReviewOps Insights was not sent: the secret in `insights-secret` is not available in this run, because GitHub passes no repository secrets to runs of forks and of Dependabot.";
+    core.notice(text);
+    return { text };
+  }
+
+  let result;
+  try {
+    const { payload, omitted } = buildInsightsPayload({
+      pullRequest: facts.pullRequest,
+      run: readRun(facts.context),
+      model: facts.model,
+      usage: facts.usage,
+      mode: facts.mode,
+      posted: facts.posted,
+      selection: facts.selection,
+      startedAt: facts.startedAt,
+    });
+    // Numbers only.
+    if (omitted.overLimit > 0 || omitted.longPath > 0) {
+      core.info(
+        `Findings left out of the report for Insights: ${omitted.overLimit} over the limit of ${MAX_FINDINGS}, ${omitted.longPath} with a path over ${payload_MAX_PATH_CHARS} characters.`,
+      );
+    }
+    result = await send({
+      url: insights.url,
+      secret: insights.secret,
+      payload,
+    });
+  } catch (error) {
+    if (error instanceof Error && SAFE_BUILD_ERROR.test(error.message)) {
+      core.debug(redact(error.message));
+    }
+    core.warning(NOT_SENT);
+    return { text: NOT_SENT };
+  }
+
+  if (result.detail)
+    core.debug(redact(`Insights: ${result.reason}, ${result.detail}`));
+
+  const attempts = `${result.attempts} ${result.attempts === 1 ? "attempt" : "attempts"}`;
+  if (result.delivered) {
+    const known =
+      result.outcome === "duplicate" ? "it was known already" : "stored";
+    core.info(
+      `Report delivered to ReviewOps Insights: ${known} (HTTP ${result.httpStatus}), ${attempts}.`,
+    );
+    return {
+      text:
+        result.outcome === "duplicate"
+          ? "The report reached ReviewOps Insights, which knew it already."
+          : "The report reached ReviewOps Insights.",
+    };
+  }
+
+  const why = describeFailure(result);
+  // The hint for `401` is the one case that a person can fix in the workflow.
+  const hint =
+    result.httpStatus === 401
+      ? " Check that `insights-secret` has the same value as `INGEST_SECRET` at ReviewOps Insights."
+      : "";
+  core.warning(
+    redact(
+      result.attempts === 0
+        ? `The report for ReviewOps Insights was not sent: ${why}.`
+        : `The report for ReviewOps Insights was not delivered: ${why}, after ${attempts}.${hint}`,
+    ),
+  );
+  return {
+    text: redact(`The report did not reach ReviewOps Insights (${why}).`),
+  };
 }
 
 ;// CONCATENATED MODULE: ./src/diff/annotate.js
@@ -4267,6 +4888,10 @@ const NO_FINDINGS = "No findings.";
  *   answered requests.
  * @param {string | null} [report.reviewUrl] Built from checked values.
  * @param {{ failOn: string, reached: number } | null} [report.threshold]
+ * @param {{ text: string } | null} [report.insights] How the report for
+ *   ReviewOps Insights went, one sentence of the action. Only set when the
+ *   workflow switched the report on: without it the summary says nothing
+ *   about Insights.
  * @returns {string}
  */
 function buildSummary({
@@ -4278,6 +4903,7 @@ function buildSummary({
   usage = null,
   reviewUrl = null,
   threshold = null,
+  insights = null,
 }) {
   const blocks = ["## ReviewOps", plainText(status)];
   if (error) blocks.push(`**Error:** ${plainText(error)}`);
@@ -4293,6 +4919,7 @@ function buildSummary({
   }
   if (files) blocks.push(...fileBlocks(files, since));
   if (usage) blocks.push(...usageBlocks(usage));
+  if (insights) blocks.push("### ReviewOps Insights", plainText(insights.text));
 
   const text = `${blocks.join("\n\n")}\n`;
   return text.length > MAX_SUMMARY_CHARS
@@ -4441,6 +5068,9 @@ function summary_pathCode(path) {
 
 
 
+
+
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -4477,6 +5107,7 @@ const NO_NEW_FINDINGS = Object.freeze(
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
+ * @param {typeof import("./insights/send.js").sendInsightsReport} [deps.sendInsightsReport]
  */
 async function run({
   core = lib_core,
@@ -4484,13 +5115,19 @@ async function run({
   getOctokit = github/* getOctokit */.Q,
   parsePatch = parse_parsePatch,
   createAiClient = client_createAiClient,
+  sendInsightsReport = send_sendInsightsReport,
 } = {}) {
+  // The clock of the report: its duration runs from here (#75).
+  const startedAt = performance.now();
   let redact = String;
   // What the job summary shows and what the outputs say. Both are filled
   // while the run goes on and written at the end, however it ends. The
   // outputs stay unset when the run fails with an error.
   const report = { status: "ReviewOps stopped before it reviewed anything." };
   let outputs = null;
+  // The report for ReviewOps Insights (#76), set only at a regular end of a run
+  // that asked the model. `finish()` sends it after the outputs are set.
+  let insightsJob = null;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
@@ -4527,8 +5164,23 @@ async function run({
     const model = parseModel(inputs.openaiModel);
     const language = parseLanguage(inputs.language);
     const failOn = parseFailOn(inputs.failOn);
+    // The report leaves the runner, so the address is checked before the
+    // first request. Without the secret, a fork or a run of Dependabot goes on
+    // without sending: GitHub gave it no secrets. Anywhere else it is a
+    // mistake of the workflow.
+    const insights = parseInsightsConfig(inputs);
+    if (insights && !insights.secret && !explainMissingSecret(context)) {
+      throw new Error(
+        "Input `insights-secret` is missing. Store the secret as a repository secret and pass it to the action, for example `insights-secret: ${{ secrets.INSIGHTS_SECRET }}`, or remove `insights-url` to switch the report off.",
+      );
+    }
 
     core.info("ReviewOps started.");
+    if (insights) {
+      core.info(
+        `The report of this run goes to ReviewOps Insights at ${printable(insights.host)}.`,
+      );
+    }
 
     // Only checked values reach the log: the title of the pull request is
     // written by its author and stays out.
@@ -4876,12 +5528,38 @@ async function run({
       `Review finished: ${shown.length} findings (${counts}) from ${review.succeeded} of ${batches.length} requests.`,
     );
 
+    // From here on the run ends regularly after a request to the model, so
+    // the report for Insights is due: also for a run without findings. It is
+    // sent after the outputs, in `finish()`, and changes nothing about how
+    // the run ends.
+    const reportToInsights = (posted) => {
+      if (!insights) return;
+      insightsJob = () =>
+        deliverInsightsReport({
+          core,
+          redact,
+          insights,
+          send: sendInsightsReport,
+          facts: {
+            pullRequest,
+            context,
+            model,
+            usage: review.usage,
+            mode: history.mode,
+            posted,
+            selection: { inline, fingerprints, unplaced, unplacedFingerprints },
+            startedAt,
+          },
+        });
+    };
+
     // An empty review would only notify people. Files that were not
     // reviewed are named in the log above.
     if (shown.length === 0) {
       report.status = "No findings, so no review was posted.";
       core.info(report.status);
       conclude({ newCounts, known: dropped.known });
+      reportToInsights(null);
       return;
     }
 
@@ -4925,7 +5603,10 @@ async function run({
       overLimit: dropped.overLimit,
       url: posted.reviewId === null ? null : where,
     });
+    reportToInsights(posted);
   } catch (error) {
+    // A run that ends with an error sends no report.
+    insightsJob = null;
     // Mark the step as failed first: nothing below may prevent that.
     const message = redact(main_describe(error));
     core.setFailed(message);
@@ -4943,20 +5624,35 @@ async function run({
       // A broken debug log must not hide the failure reported above.
     }
   } finally {
-    await finish(core, report, outputs);
+    await finish(core, report, outputs, insightsJob);
   }
 }
 
 /**
- * Sets the outputs and writes the job summary. Neither may fail the run: the
- * review is posted already, and a runner without a summary file is no
- * reason for a red step. The warnings name no path and no message.
+ * Sets the outputs, sends the report for Insights and writes the job summary,
+ * in this order: the outputs do not wait for the report, which can take up to
+ * 50 seconds, and the summary can tell how it went. None of it may fail the
+ * run: the review is posted already, and a runner without a summary file or a
+ * server that does not answer is no reason for a red step. The warnings name
+ * no path and no message.
  */
-async function finish(core, report, outputs) {
+async function finish(core, report, outputs, insightsJob) {
   try {
     if (outputs) setOutputs(core, outputs);
   } catch {
     core.warning("The outputs of the step could not be set.");
+  }
+  if (insightsJob) {
+    try {
+      report.insights = await insightsJob();
+    } catch {
+      // `deliverInsightsReport()` catches its errors itself. This is the net
+      // under it, with the same fixed text.
+      const text =
+        "The report for ReviewOps Insights could not be built or sent.";
+      core.warning(text);
+      report.insights = { text };
+    }
   }
   try {
     await core.summary.addRaw(buildSummary(report), true).write();

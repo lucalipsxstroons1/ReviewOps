@@ -1,6 +1,6 @@
 # Security
 
-ReviewOps sends the diff of a pull request to the OpenAI API and treats everything that comes back as untrusted. This page says what leaves GitHub, which rights the action needs, what it does with the answer of the model, and how to report a vulnerability. It describes what the action does today.
+ReviewOps sends the diff of a pull request to the OpenAI API and treats everything that comes back as untrusted. If the workflow switches it on, it also sends a report with key figures, never code, to ReviewOps Insights. This page says what leaves GitHub, which rights the action needs, what it does with the answer of the model, and how to report a vulnerability. It describes what the action does today.
 
 ## Reporting a vulnerability
 
@@ -35,6 +35,29 @@ This is a safety net, not a guarantee. Generic patterns such as `password = "…
 ### What OpenAI does with it
 
 ReviewOps makes no statement about how OpenAI stores or uses the data. That depends on the terms of your OpenAI account and the data controls of the project of your key. Read them before you use the action on code that must not leave your organisation.
+
+## What is sent to ReviewOps Insights
+
+**Only if the workflow sets the input `insights-url`.** By default the action sends nothing to anyone but GitHub and OpenAI. ReviewOps Insights is a dashboard for the cost and quality of reviews across many repositories; the report is the contract in [docs/insights-payload.md](docs/insights-payload.md).
+
+The report holds metadata and nothing else. These are all of its fields:
+
+- the run: `schemaVersion`, `deliveryId` (a random UUID made once per run), `repository` (`owner/name`), `prNumber`, `commitSha`, `runId`, `runAttempt`, `model`, `durationMs`, `mode`, `actionVersion`, `promptVersion` and `githubReviewId`,
+- the token usage as `tokens` with `input`, `output` and `total`,
+- the findings the review shows as `findings`, and for each one `severity`, `category`, `path` (the name of the file), `line`, `fingerprint` (a hash of the line, never the line itself) and `placement`.
+
+What is **never** sent: code, the diff, any text of the model (summary, title, comment, suggestion), the title, the description, the author and the branch of the pull request, names of people, the API keys and `insights-secret`.
+
+How it is sent:
+
+- **Where.** To the address in `insights-url`, and nowhere else. A wrong address would hand repository names, file paths and token counts to a stranger, so the address is checked before the first request: `https` only (`http` only for `localhost` and `127.0.0.1`, for tests), at most 2048 characters, no user name or password, no query and no fragment. A message about a bad address names the rule, never the address. The log names the host once. Set the address from a variable that only you can change.
+- **Signed.** The body is signed with HMAC-SHA256 over its bytes. The signature is in the header `X-ReviewOps-Signature`, and the secret in `insights-secret` (at least 32 visible ASCII characters, the same value as `INGEST_SECRET` at Insights) is never sent. The runner masks it, and the action replaces it in every message.
+- **When.** At the end of a run that asked the model, after the review is posted and after `fail-on` has decided about the step. A run that leaves out the review, finds nothing new, or ends with an error sends nothing.
+- **Never in the way.** A report that does not arrive changes nothing about the result of the step, also with `fail-on`: the log shows a warning. There are at most three attempts of ten seconds each, with the same body and the same `deliveryId`. A redirect is never followed and never repeated, because it would send the signed report to an address the workflow did not name.
+- **The answer is untrusted.** Only its status and an error code that looks like an identifier (capital letters, digits and underscores) reach the log. The body of the answer is never logged.
+- **Forks and Dependabot.** GitHub passes them no repository secrets. Without `insights-secret` the review goes on, the action sends no report and says so in a notice. Anywhere else, an address without a secret is an error before the first request.
+
+The only code that makes a request of its own is `src/insights/send.js`. A test over the sources keeps it that way.
 
 ## Rights of the workflow
 
@@ -99,10 +122,10 @@ The answer is untrusted input. It comes from a model that reads text written by 
 - The model has to answer in a fixed format (a JSON schema). An answer that does not fit, that was cut off, that was filtered or that was refused is an error. It is never read as "no findings".
 - Every text of the answer is bounded and cleaned right after it is read. A title is cut at 150 characters, a comment and a suggestion at 1500, a summary at 1000. A cut text ends with `…`. Control characters, format characters (direction overrides, zero-width characters, tag characters) and the few characters that show as blank (such as the Braille blank and the Hangul fillers) are removed. A text that is empty after that is dropped with its finding. This also removes the joiners of emoji sequences and direction marks of right-to-left text; that is a cosmetic cost of the protection.
 - A finding is only used if its file is one of the files that were sent in the same request. Whether it can carry an inline comment depends on the added lines of that file, which the action calculates itself. A line number of the model is never trusted.
-- Nothing from the answer is executed, evaluated or loaded: no code, no URL, no file. The action makes no network request except to the GitHub API and the OpenAI API. A test over the sources keeps it that way.
+- Nothing from the answer is executed, evaluated or loaded: no code, no URL, no file. The action makes no network request except to the GitHub API, the OpenAI API and, only if the workflow sets `insights-url`, the address of ReviewOps Insights (see above). A test over the sources keeps it that way.
 - The texts of the model reach the review only as plain text and code. Before they are posted, code blocks and inline code are written again with fences of the action, and every punctuation character outside of code is escaped; addresses, e-mail addresses, mentions and references to issues are shown as code. A review therefore contains no link, image or HTML from the model, notifies nobody and cannot forge the marker `<!-- reviewops -->` that starts every comment of the action. Every comment and every review text says that it was written by an AI model.
 - The action never approves a pull request and never requests changes.
 
 ## What is not in the log
 
-The log and the job summary never contain the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.
+The log and the job summary never contain the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. Nor do they contain the report for ReviewOps Insights, its signature, `insights-secret` or the answer of the Insights server. The log names the host of `insights-url`, never the whole address. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.

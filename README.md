@@ -121,6 +121,8 @@ jobs:
 | `review-drafts` | no | `false` | Whether draft pull requests are reviewed: `true` or `false`. A draft is left out by default, and the review starts when it is marked ready for review ([Skipping pull requests](#skipping-pull-requests)). |
 | `skip-label` | no | `no-ai-review` | Name of a label that leaves out the review of a pull request that has it, without regard to case, at most 50 characters. Empty switches the label off. |
 | `review-bots` | no | `false` | Whether pull requests that a bot opened, such as Dependabot, are reviewed: `true` or `false`. They are left out by default. |
+| `insights-url` | no | empty | Address that receives a report with the key figures of every review, for [ReviewOps Insights](#reporting-to-reviewops-insights). Only `https` (`http` for `localhost` and `127.0.0.1`), at most 2048 characters, without credentials, query or fragment. Empty switches the report off. |
+| `insights-secret` | no | empty | Secret that signs the report, the same value as `INGEST_SECRET` at ReviewOps Insights. At least 32 visible ASCII characters. Required when `insights-url` is set. Pass it from a repository secret. |
 
 ## Outputs
 
@@ -147,6 +149,49 @@ A run that leaves out the review ends green with a notice, and posts nothing. It
 
 Pull requests of Dependabot are bot pull requests. To have them reviewed, set `review-bots: true` and store the key as a Dependabot secret as well.
 
+## Reporting to ReviewOps Insights
+
+[ReviewOps Insights](https://github.com/lucalipsxstroons1/ReviewOps-Insights) is a dashboard for the cost and quality of reviews across many repositories. The action can send it a small report at the end of every review. **It is off by default:** without `insights-url`, the action makes no request except to GitHub and OpenAI.
+
+The report holds key figures only: repository, pull request number, model, token usage, duration, and the severity, category and file path of each finding. It never holds code, a diff, a text of the model, or the title of the pull request. [SECURITY.md](SECURITY.md) lists every field, and [docs/insights-payload.md](docs/insights-payload.md) is the contract.
+
+To switch it on, store the address as a repository variable `INSIGHTS_URL` (**Settings**, **Secrets and variables**, **Actions**, **Variables**) and the secret as a repository secret `INSIGHTS_SECRET`, with the same value as `INGEST_SECRET` at your Insights instance, then pass both to the action:
+
+```yaml
+name: ReviewOps
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: reviewops-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event.action != 'unlabeled' }}
+
+jobs:
+  review:
+    name: AI review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Review the pull request and report to Insights
+        uses: lucalipsxstroons1/ReviewOps@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          insights-url: ${{ vars.INSIGHTS_URL }}
+          insights-secret: ${{ secrets.INSIGHTS_SECRET }}
+```
+
+- **Where it goes.** The report goes to the address you set, and nowhere else. A wrong address would hand repository names and file paths to a stranger, so the action checks it before the first request: `https` only, no credentials, no query, no fragment. The log names the host.
+- **Signed.** The report is signed with the secret (HMAC-SHA256). The secret itself is never sent.
+- **When.** After every run that asked the model, also when it found nothing. A run that leaves out the review, finds nothing new or fails sends nothing.
+- **It never breaks the run.** If the report does not arrive (wrong secret, server down, redirect), the step shows a warning with the status and ends as it would have ended without Insights, also with `fail-on`. The action tries up to three times, with the same report each time, so Insights stores it once.
+- **Forks and Dependabot.** GitHub passes them no repository secrets. The review still takes place, and the log says that no report was sent.
+
 ## How it works
 
 1. The action reads the changed files of the pull request through the GitHub API and leaves out files that are not worth a review (lockfiles, build output, generated code, binary files) and every file that may hold secrets.
@@ -161,6 +206,7 @@ Pull requests of Dependabot are bot pull requests. To have them reviewed, set `r
 - **Never sent:** files that may hold secrets (`.env*`, key and certificate files, `id_rsa*`, `.npmrc`, `.netrc`, `credentials.json`, `secrets.*` and a few more), under their new and their old name. The list is fixed, and no input can change it. The title, the description and the author of the pull request are not sent either.
 - **Masked before sending:** strings that look like GitHub tokens, OpenAI keys, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private keys. This is a safety net, not a guarantee. If a pull request contains a real secret, treat it as leaked.
 - **Rights:** the workflow needs `contents: read` and `pull-requests: write`, nothing else.
+- **Insights, only if you switch it on:** with `insights-url`, a report with key figures (never code, never a text of the model) goes to the address you set. Without it, nothing leaves the runner except the requests to GitHub and OpenAI.
 - **Forks and Dependabot:** GitHub passes no secrets to workflows of pull requests from forks, and runs started by Dependabot get only the Dependabot secrets. The run then ends green with a notice and no review. A green run does not mean that the pull request was reviewed.
 - **The answer of the model is untrusted.** It is checked, cut to a fixed length and made safe for Markdown before it is posted: no link, image, HTML or mention gets through. The action never approves a pull request and never requests changes.
 - **Not in the log:** the prompt, the answer of the model, the content of a diff, the title of the pull request and every key.

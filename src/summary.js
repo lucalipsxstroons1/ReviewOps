@@ -55,6 +55,10 @@ export const NO_FINDINGS = "No findings.";
  *   answered requests.
  * @param {string | null} [report.reviewUrl] Built from checked values.
  * @param {{ failOn: string, reached: number } | null} [report.threshold]
+ * @param {{ text: string } | null} [report.insights] How the report for
+ *   ReviewOps Insights went, one sentence of the action. Only set when the
+ *   workflow switched the report on: without it the summary says nothing
+ *   about Insights.
  * @returns {string}
  */
 export function buildSummary({
@@ -66,6 +70,7 @@ export function buildSummary({
   usage = null,
   reviewUrl = null,
   threshold = null,
+  insights = null,
 }) {
   const blocks = ["## ReviewOps", plainText(status)];
   if (error) blocks.push(`**Error:** ${plainText(error)}`);
@@ -81,6 +86,7 @@ export function buildSummary({
   }
   if (files) blocks.push(...fileBlocks(files, since));
   if (usage) blocks.push(...usageBlocks(usage));
+  if (insights) blocks.push("### ReviewOps Insights", plainText(insights.text));
 
   const text = `${blocks.join("\n\n")}\n`;
   return text.length > MAX_SUMMARY_CHARS

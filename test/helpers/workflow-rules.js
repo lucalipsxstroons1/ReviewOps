@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { MAX_REQUEST_CHARS } from "../../src/ai/batch.js";
+import {
+  ATTEMPT_TIMEOUT_MS,
+  MAX_ATTEMPTS,
+  MAX_PAUSE_SECONDS,
+} from "../../src/insights/send.js";
 import { DEFAULT_MAX_DIFF_CHARS } from "../../src/limits.js";
 import { MAX_PARALLEL_REQUESTS } from "../../src/review.js";
 
@@ -60,16 +65,24 @@ export const REVIEW_TIMEOUT_MINUTES = 15;
  *
  * Requests are filled in the order of GitHub, so two neighbouring requests
  * always hold more than one budget: a pull request of the default size needs
- * about eight requests at most.
+ * about eight requests at most. The report for Insights (#76) comes on top
+ * in the worst case: every attempt runs into its time limit, and the pauses
+ * between the attempts are as long as they may be.
  */
 export function assertTimeoutForRequests(job) {
   const requests = 2 * Math.ceil(DEFAULT_MAX_DIFF_CHARS / MAX_REQUEST_CHARS);
   const rounds = Math.ceil(requests / MAX_PARALLEL_REQUESTS);
   // Three attempts of 120 seconds and the waits of the SDK between them.
   const minutesPerRequest = (3 * 120 + 30) / 60;
+  const insightsMinutes =
+    (MAX_ATTEMPTS * (ATTEMPT_TIMEOUT_MS / 1000) +
+      (MAX_ATTEMPTS - 1) * MAX_PAUSE_SECONDS) /
+    60;
 
   assert.equal(job["timeout-minutes"], REVIEW_TIMEOUT_MINUTES);
-  assert.ok(rounds * minutesPerRequest <= REVIEW_TIMEOUT_MINUTES);
+  assert.ok(
+    rounds * minutesPerRequest + insightsMinutes <= REVIEW_TIMEOUT_MINUTES,
+  );
 }
 
 /**
