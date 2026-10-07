@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
 import { fromRoot } from "./helpers/run-action.js";
@@ -220,12 +220,23 @@ test("compare.yml: runs by hand only", () => {
   assert.deepEqual(Object.keys(comparison.config.on), ["workflow_dispatch"]);
 });
 
-test("compare.yml: asks for the model and for the number of runs, 3 by default", () => {
+test("compare.yml: asks for the model, the number of runs (3 by default) and the list of cases (prs by default)", () => {
   const { inputs } = comparison.config.on.workflow_dispatch;
 
-  assert.deepEqual(Object.keys(inputs).sort(), ["model", "runs"]);
+  assert.deepEqual(Object.keys(inputs).sort(), ["cases", "model", "runs"]);
   assert.equal(inputs.model.required, true);
   assert.equal(inputs.runs.default, "3");
+  assert.equal(inputs.cases.default, "prs");
+});
+
+test("compare.yml: offers only the lists of cases that exist, each as a file of the repository", () => {
+  const { cases } = comparison.config.on.workflow_dispatch.inputs;
+
+  assert.equal(cases.type, "choice");
+  assert.deepEqual(cases.options, ["prs", "false-alarms"]);
+  for (const name of cases.options) {
+    assert.ok(existsSync(fromRoot(`eval/compare/${name}.json`)), name);
+  }
 });
 
 test("compare.yml: may only read the code and the pull requests", () => {
@@ -261,6 +272,10 @@ test("compare.yml: passes the key only to the step that needs it", () => {
 test("compare.yml: hands the model and the runs to the program through the environment, not the command", () => {
   assert.equal(compareStep.env.COMPARE_MODEL, "${{ inputs.model }}");
   assert.equal(compareStep.env.COMPARE_RUNS, "${{ inputs.runs }}");
+  assert.equal(
+    compareStep.env.COMPARE_CASES,
+    "eval/compare/${{ inputs.cases }}.json",
+  );
   for (const step of compareSteps) {
     assert.doesNotMatch(step.run ?? "", /\$\{\{/);
   }

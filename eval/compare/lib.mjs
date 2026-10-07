@@ -36,7 +36,8 @@ const isObject = (value) =>
  *       "id": "react-hook-demo",             unique, kebab-case
  *       "pr": "owner/repo#62",               a pull request that was merged
  *       "focus": "react",                    one of the categories
- *       "defects": [{                        the defects that are documented
+ *       "defects": [{                        the defects that are documented;
+ *                                            an empty list measures false alarms
  *         "path": "src/OrderList.jsx",       the file of the defect
  *         "description": "…",                one line, no code
  *         "evidence": "https://…"            where the defect is documented
@@ -78,8 +79,10 @@ export function validateCases(data) {
     if (!CATEGORIES.includes(entry.focus)) {
       fail(`${place}.focus`, `must be one of ${CATEGORIES.join(", ")}`);
     }
-    if (!Array.isArray(entry.defects) || entry.defects.length === 0) {
-      fail(`${place}.defects`, "must list at least one defect");
+    // An empty list is a pull request without a documented defect: a run on
+    // it measures false alarms.
+    if (!Array.isArray(entry.defects)) {
+      fail(`${place}.defects`, "must be a list of defects");
     }
     entry.defects.forEach((defect, at) => {
       const where = `${place}.defects[${at}]`;

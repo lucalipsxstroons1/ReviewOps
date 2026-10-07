@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "id": "false-alarms-pr-60",
+      "pr": "lucalipsxstroons1/ReviewOps#60",
+      "focus": "security",
+      "defects": []
+    }
+  ]
+}
