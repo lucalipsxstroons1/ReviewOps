@@ -161,6 +161,9 @@ test("eval.yml: runs for changes of the prompt, the format and the cases, and by
   assert.deepEqual(evaluation.config.on.pull_request.paths, [
     "src/ai/**",
     "eval/**",
+    // The comparison of models (compare.yml) does not touch the prompt, and a
+    // change to it would only use up the token limit of the reference model.
+    "!eval/compare/**",
     ".github/workflows/eval.yml",
   ]);
 });
@@ -209,4 +212,66 @@ test("eval.yml: installs exactly what the lock file says before it evaluates", (
   const commands = evalSteps.map((step) => step.run).filter(Boolean);
 
   assert.deepEqual(commands, ["npm ci", "npm run eval"]);
+});
+
+// --- compare.yml: the action on real pull requests, one model at a time ------
+
+const comparison = workflows["compare.yml"];
+const compareSteps = comparison.config.jobs.compare.steps;
+const compareStep = compareSteps.find((step) => step.run === "npm run compare");
+
+test("compare.yml: runs by hand only", () => {
+  assert.deepEqual(Object.keys(comparison.config.on), ["workflow_dispatch"]);
+});
+
+test("compare.yml: asks for the model and for the number of runs, 3 by default", () => {
+  const { inputs } = comparison.config.on.workflow_dispatch;
+
+  assert.deepEqual(Object.keys(inputs).sort(), ["model", "runs"]);
+  assert.equal(inputs.model.required, true);
+  assert.equal(inputs.runs.default, "3");
+});
+
+test("compare.yml: may only read the code and the pull requests", () => {
+  assert.deepEqual(comparison.config.permissions, {
+    contents: "read",
+    "pull-requests": "read",
+  });
+});
+
+test("compare.yml: lets a second run wait, because a cancelled one has cost money", () => {
+  assert.equal(comparison.config.concurrency["cancel-in-progress"], false);
+});
+
+test("compare.yml: has a time limit that fits the cases", () => {
+  assert.equal(comparison.config.jobs.compare["timeout-minutes"], 90);
+});
+
+test("compare.yml: passes the key only to the step that needs it", () => {
+  const withSecret = compareSteps.filter((step) =>
+    JSON.stringify(step).includes("secrets."),
+  );
+
+  assert.deepEqual(withSecret, [compareStep]);
+  assert.equal(compareStep.env.OPENAI_API_KEY, "${{ secrets.OPENAI_API_KEY }}");
+  assert.equal(compareStep.env.GITHUB_TOKEN, "${{ github.token }}");
+  assert.doesNotMatch(
+    JSON.stringify(comparison.config.jobs.compare.env ?? {}),
+    /secrets\./,
+  );
+  assert.equal("env" in comparison.config, false);
+});
+
+test("compare.yml: hands the model and the runs to the program through the environment, not the command", () => {
+  assert.equal(compareStep.env.COMPARE_MODEL, "${{ inputs.model }}");
+  assert.equal(compareStep.env.COMPARE_RUNS, "${{ inputs.runs }}");
+  for (const step of compareSteps) {
+    assert.doesNotMatch(step.run ?? "", /\$\{\{/);
+  }
+});
+
+test("compare.yml: installs exactly what the lock file says before it compares", () => {
+  const commands = compareSteps.map((step) => step.run).filter(Boolean);
+
+  assert.deepEqual(commands, ["npm ci", "npm run compare"]);
 });

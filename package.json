@@ -13,7 +13,8 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && ncc build src/index.js -o dist --license licenses.txt",
-    "eval": "node eval/run.mjs"
+    "eval": "node eval/run.mjs",
+    "compare": "node eval/compare/compare.mjs"
   },
   "dependencies": {
     "@actions/core": "^3.0.1",
