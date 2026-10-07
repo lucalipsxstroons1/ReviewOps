@@ -67,6 +67,72 @@ test("names the kinds of secret that are replaced", () => {
   assert.ok(doc.includes("[REDACTED SECRET]"));
 });
 
+/** The text of one `## ` section of SECURITY.md, without its heading. */
+function sectionOf(heading) {
+  const start = doc.indexOf(`## ${heading}\n`);
+  assert.notEqual(start, -1, `${heading} is missing`);
+  const end = doc.indexOf("\n## ", start + 1);
+  return doc.slice(start, end === -1 ? undefined : end);
+}
+
+const report = JSON.parse(
+  readFileSync(fromRoot("test/fixtures/insights-review-v1.json"), "utf8"),
+);
+
+test("names every field of the report that goes to Insights", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+  const fields = [
+    ...Object.keys(report),
+    ...Object.keys(report.tokens),
+    ...Object.keys(report.findings[0]),
+  ];
+
+  assert.ok(fields.length >= 20);
+  for (const field of new Set(fields)) {
+    assert.ok(section.includes(`\`${field}\``), `${field} is not named`);
+  }
+});
+
+test("names no field that the report does not have", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+  const known = new Set([
+    ...Object.keys(report),
+    ...Object.keys(report.tokens),
+    ...Object.keys(report.findings[0]),
+  ]);
+  // The first three list items name the fields, in backticks.
+  const listed = section
+    .split("\n")
+    .filter((line) => line.startsWith("- the "))
+    .flatMap((line) => [...line.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]));
+  const fieldLike = listed.filter((name) => /^[a-z][A-Za-z]*$/.test(name));
+
+  assert.ok(fieldLike.length >= 20);
+  for (const name of fieldLike) {
+    // `owner/name` is a value, `insights-url` an input: neither matches.
+    assert.ok(known.has(name), `${name} is no field of the report`);
+  }
+});
+
+test("says what is never sent to Insights, and that a bad address is checked", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+
+  assert.match(section, /Only if the workflow sets the input `insights-url`/);
+  assert.match(
+    section,
+    /What is \*\*never\*\* sent: code, the diff, any text of the model/,
+  );
+  assert.match(
+    section,
+    /`https` only \(`http` only for `localhost` and `127\.0\.0\.1`/,
+  );
+  assert.match(section, /A redirect is never followed and never repeated/);
+  assert.match(section, /HMAC-SHA256/);
+  assert.match(section, /`X-ReviewOps-Signature`/);
+  assert.match(section, /at most three attempts of ten seconds/);
+  assert.match(section, /`src\/insights\/send\.js`/);
+});
+
 test("says that the address of the API cannot be changed", () => {
   assert.match(doc, /`https:\/\/api\.openai\.com\/v1` and nowhere else/);
   assert.match(doc, /`OPENAI_BASE_URL`/);
@@ -115,6 +181,7 @@ test("is a page that a reader can follow", () => {
   for (const section of [
     "## Reporting a vulnerability",
     "## What is sent to OpenAI",
+    "## What is sent to ReviewOps Insights",
     "## Rights of the workflow",
     "## Events, forks and Dependabot",
     "## What happens with the answer of the model",
@@ -172,6 +239,12 @@ const FORBIDDEN = [
   [/\bprocess\.binding\b|\bprocess\.dlopen\b/, "native code"],
 ];
 
+// The one file that makes a request of its own: it sends the report to
+// ReviewOps Insights, and only if the workflow sets `insights-url` (#76).
+const SENDER = "src/insights/send.js";
+
+const isSender = (file) => file.replaceAll("\\", "/") === SENDER;
+
 test("no source file runs anything from the answer or loads anything", () => {
   const files = sourcesIn("src");
   assert.ok(files.length > 10);
@@ -179,9 +252,26 @@ test("no source file runs anything from the answer or loads anything", () => {
   for (const file of files) {
     const code = codeOf(file);
     for (const [pattern, name] of FORBIDDEN) {
+      if (name === "fetch" && isSender(file)) continue;
       assert.doesNotMatch(code, pattern, `${file} uses ${name}`);
     }
   }
+});
+
+test("only the sender of the report makes a request of its own", () => {
+  const callers = sourcesIn("src")
+    .filter((file) => /\bfetch\s*\(/.test(codeOf(file)))
+    .map((file) => file.replaceAll("\\", "/"));
+
+  assert.deepEqual(callers, [SENDER]);
+});
+
+test("the sender takes its address from its caller and builds none", () => {
+  const code = codeOf(SENDER);
+
+  // No address in the code, not even the one of Insights itself.
+  assert.doesNotMatch(code, /https?:\/\//);
+  assert.match(code, /fetch\(url,/);
 });
 
 test("no source file imports a package that is not on the list", () => {

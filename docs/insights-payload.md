@@ -7,8 +7,10 @@ duration and the findings the review shows, with severity and category. This
 file is the contract, version 1. Both sides follow it, and this repository is
 its source, because it defines what leaves the runner.
 
-`buildInsightsPayload()` in `src/insights/payload.js` builds the report. Sending
-it is a separate step (#76); until then the action sends nothing.
+`buildInsightsPayload()` in `src/insights/payload.js` builds the report, and
+`sendInsightsReport()` in `src/insights/send.js` sends it (#76). The action sends
+it only if the workflow sets the input `insights-url`; without it, nothing is
+sent.
 
 ## Transport
 
@@ -17,8 +19,14 @@ it is a separate step (#76); until then the action sends nothing.
 - Body: JSON in UTF-8, at most 1 MiB, `Content-Type: application/json`.
 - Header `X-ReviewOps-Signature: sha256=<hex>`: HMAC-SHA256 over the bytes of
   the body with the shared secret, 64 lower case hex characters. The secret is
-  called `insights-secret` in the action and `INGEST_SECRET` at Insights.
-- `https` only. Redirects are not followed.
+  called `insights-secret` in the action and `INGEST_SECRET` at Insights. It has
+  at least 32 characters, all of them visible ASCII, on both sides.
+- `https` only. The action accepts `http` only for the host names `localhost`
+  and `127.0.0.1`, for tests. The address has no user name or password, no
+  query and no fragment.
+- Redirects are not followed and not repeated: the status is the answer.
+- At most three attempts of ten seconds each, every one with the same body and
+  so the same `deliveryId`.
 
 ## Fields
 
@@ -91,8 +99,15 @@ description, author and branch of the pull request, names of people, credentials
 | `400` | The report does not fit the contract. Body `{ "error": { "code", "message", "details" } }` with the code `VALIDATION_ERROR` or `UNSUPPORTED_SCHEMA_VERSION` | No retry, warning |
 | `401` | Signature missing or wrong | No retry, warning that names `insights-secret` |
 | `413` | Body too large | No retry, warning |
-| `429` | Too many requests, `Retry-After` in seconds | Retry after the pause |
-| `5xx`, network error, timeout | Temporary | Retry |
+| `415` | `Content-Type` is not `application/json` | No retry, warning |
+| `408`, `429` | Request timeout, too many requests, `Retry-After` in seconds | Retry after the pause: `Retry-After` as whole seconds, at most 10, otherwise 1 second, then 2 |
+| `5xx`, network error, timeout | Temporary | Retry after the pause |
+| `3xx` | Redirect | Not followed, no retry, warning with the status |
+| any other status | Not part of this contract | No retry, warning |
+
+After the third attempt a report that did not arrive ends in a warning, and the
+run ends as it would have ended without Insights. A report over 1 MiB is not
+sent at all.
 
 ## Versioning
 

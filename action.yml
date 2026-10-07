@@ -54,6 +54,13 @@ inputs:
     description: Whether pull requests that a bot opened, such as Dependabot, are reviewed, as true or false. By default they are left out. A run that leaves out the review asks no model and posts nothing, but it still counts the open findings of earlier reviews and applies fail-on. The default is false.
     required: false
     default: "false"
+  insights-url:
+    description: Address that receives a report with the key figures of every review, for ReviewOps Insights. The report holds the repository, the pull request number, the model, the token usage, the duration and the severity, category and file path of each finding, never code and never a text of the model. Only https is accepted (http only for localhost and 127.0.0.1), at most 2048 characters, without credentials, query or fragment. Pass it from a repository variable. Empty switches the report off, and the action then makes no request except to GitHub and OpenAI. The default is empty.
+    required: false
+    default: ""
+  insights-secret:
+    description: Secret that signs the report with HMAC-SHA256, the same value as INGEST_SECRET at ReviewOps Insights. At least 32 visible ASCII characters. Required when insights-url is set. Pass it from a repository secret, never as plain text. Without insights-url it is ignored.
+    required: false
 
 outputs:
   findings-count:
