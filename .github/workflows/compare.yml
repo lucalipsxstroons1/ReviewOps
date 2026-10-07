@@ -14,6 +14,16 @@ on:
         description: Runs per case, a whole number from 1 to 5.
         required: false
         default: "3"
+      cases:
+        description: >-
+          List of cases: prs (pull requests with a documented defect) or
+          false-alarms (pull requests without one, they measure false alarms).
+        required: false
+        type: choice
+        options:
+          - prs
+          - false-alarms
+        default: prs
 
 # The comparison only reads: the code of this repository and the pull requests.
 permissions:
@@ -49,8 +59,9 @@ jobs:
 
       # The key reaches this step only. It is the repository secret
       # OPENAI_API_KEY, the same one that reviewops.yml uses. The token of the
-      # run reads the pull requests. The model and the number of runs go
-      # through the environment, never into the command.
+      # run reads the pull requests. The model, the number of runs and the list
+      # of cases go through the environment, never into the command. The list
+      # is a choice of two names, so the path cannot be anything else.
       - name: Compare the model
         run: npm run compare
         env:
@@ -58,3 +69,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           COMPARE_MODEL: ${{ inputs.model }}
           COMPARE_RUNS: ${{ inputs.runs }}
+          COMPARE_CASES: eval/compare/${{ inputs.cases }}.json

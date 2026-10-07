@@ -30,8 +30,19 @@ test("the list of cases of the repository is valid", () => {
   assert.ok(cases.length >= 1);
 });
 
+test("the list of false alarms of the repository is valid and documents no defect", () => {
+  const cases = loadCases(fromRoot("eval/compare/false-alarms.json"));
+
+  assert.ok(cases.length >= 1);
+  for (const testCase of cases) assert.deepEqual(testCase.defects, []);
+});
+
 test("accepts a case in the documented format", () => {
   assert.equal(validateCases(valid()).length, 1);
+});
+
+test("accepts a case without a documented defect: it measures false alarms", () => {
+  assert.equal(validateCases(valid(one({ defects: [] }))).length, 1);
 });
 
 const INVALID = [
@@ -62,7 +73,16 @@ const INVALID = [
   ],
   ["a pull request with a path", valid(one({ pr: "../x/y#1" })), /pr:/],
   ["an unknown focus", valid(one({ focus: "vue" })), /focus: must be one of/],
-  ["a case without defects", valid(one({ defects: [] })), /defects: must list/],
+  [
+    "defects that are not a list",
+    valid(one({ defects: "none" })),
+    /defects: must be a list/,
+  ],
+  [
+    "a case without the defects field",
+    valid(one({ defects: undefined })),
+    /cases\[0\]/,
+  ],
   [
     "a defect with another field",
     valid(one({ defects: [{ ...defect(), line: 3 }] })),

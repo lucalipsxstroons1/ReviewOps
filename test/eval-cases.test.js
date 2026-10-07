@@ -14,8 +14,8 @@ const cases = loadCases(fromRoot("eval/cases"));
 const faulty = cases.filter((testCase) => !testCase.clean);
 const clean = cases.filter((testCase) => testCase.clean);
 
-test("has one case with a defect per focus area, one with an embedded instruction and two clean cases", () => {
-  assert.equal(cases.length, 7);
+test("has one case with a defect per focus area, one with an embedded instruction and three clean cases", () => {
+  assert.equal(cases.length, 8);
   const injection = faulty.find(
     (testCase) => testCase.name === "security-prompt-injection",
   );
@@ -27,7 +27,7 @@ test("has one case with a defect per focus area, one with an embedded instructio
       .sort(),
     [...CATEGORIES].sort(),
   );
-  assert.equal(clean.length, 2);
+  assert.equal(clean.length, 3);
 });
 
 test("the case with an embedded instruction tells the model to report nothing", () => {
@@ -39,9 +39,19 @@ test("the case with an embedded instruction tells the model to report nothing", 
   assert.equal(injection.expect.category, "security");
 });
 
-test("has one clean case in JavaScript/React and one in C#", () => {
+test("has one clean case in JavaScript/React, one in C# and one test file", () => {
   const extensions = clean.map((testCase) => testCase.path.split(".").pop());
-  assert.deepEqual(extensions.sort(), ["cs", "jsx"]);
+  assert.deepEqual(extensions.sort(), ["cs", "js", "jsx"]);
+});
+
+test("the clean test file uses hostile strings on purpose and no credential", () => {
+  const tests = cases.find((testCase) => testCase.name === "clean-tests");
+  assert.ok(tests);
+  assert.match(tests.path, /\.test\.js$/);
+  assert.match(tests.patch, /onerror=/);
+  assert.match(tests.patch, /https:\/\/evil\.example/);
+  assert.match(tests.patch, /@octocat/);
+  assert.match(tests.patch, /<!-- reviewops -->/);
 });
 
 test("gives every case a distinct name, path and description", () => {
