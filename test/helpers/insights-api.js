@@ -28,7 +28,7 @@ export const insightsError = (status, code, headers = {}) => ({
  *
  * Without an `answer` it behaves like Insights: `401` for a wrong signature,
  * `415` for another content type, `201` for a new `deliveryId` and `200` with
- * `duplicate: true` for a known one.
+ * `duplicate: true` for a known one. A request to `/status` gets `200`.
  *
  * @param {import("node:test").TestContext} t
  * @param {object} [options]
@@ -41,6 +41,7 @@ export const insightsError = (status, code, headers = {}) => ({
  *   `NO_ANSWER` never answers.
  * @returns {Promise<{
  *   url: string,
+ *   statusUrl: string,
  *   secret: string,
  *   requests: {
  *     method: string,
@@ -114,8 +115,10 @@ export async function startInsightsApi(
       }),
   );
 
+  const base = `http://127.0.0.1:${server.address().port}/api/v1/ingest`;
   return {
-    url: `http://127.0.0.1:${server.address().port}/api/v1/ingest/review`,
+    url: `${base}/review`,
+    statusUrl: `${base}/status`,
     secret,
     requests,
   };
@@ -129,6 +132,10 @@ function choose(answer, request, index, known) {
   if (!request.signatureValid) return insightsError(401, "UNAUTHORIZED");
   if (!/^application\/json\b/.test(request.headers["content-type"] ?? "")) {
     return insightsError(415, "UNSUPPORTED_MEDIA_TYPE");
+  }
+  // The status report is never stored: `200` with the counters.
+  if (request.path.endsWith("/status")) {
+    return { status: 200, body: { matched: 0, unknown: 0, changed: 0 } };
   }
   const id = request.body?.deliveryId;
   if (known.has(id)) return { status: 200, body: { id, duplicate: true } };

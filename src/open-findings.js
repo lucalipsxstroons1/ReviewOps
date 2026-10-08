@@ -19,6 +19,18 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * @returns {E[]}
  */
 export function currentEarlierFindings(earlierFindings, diffs) {
+  const current = currentFingerprints(diffs);
+  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
+}
+
+/**
+ * The fingerprints of all added lines of the pull request: a line is
+ * unchanged since a comment if the fingerprint of the comment is among them.
+ *
+ * @param {{ commentableLines: number[], hunks: object[], path: string }[]} diffs
+ * @returns {Set<string>}
+ */
+export function currentFingerprints(diffs) {
   const current = new Set();
   for (const diff of diffs) {
     const prints = lineFingerprintsOf(diff);
@@ -27,7 +39,7 @@ export function currentEarlierFindings(earlierFindings, diffs) {
       if (print) current.add(print);
     }
   }
-  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
+  return current;
 }
 
 /**

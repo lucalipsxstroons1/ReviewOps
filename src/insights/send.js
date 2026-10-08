@@ -44,12 +44,15 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,49}$/;
  * @param {string} options.url The address, from `parseInsightsConfig()`.
  * @param {string} options.secret The secret that signs the report.
  * @param {object} options.payload The report from `buildInsightsPayload()`.
+ * @param {"review" | "status"} [options.kind] The report review answers `201`
+ *   for a new one and `200` for one it knows; the status report is never
+ *   stored, `200` is its normal answer and counts as `stored`.
  * @param {typeof fetch} [options.fetch] For tests.
  * @param {(ms: number) => Promise<void>} [options.sleep] For tests: the
  *   pauses between the attempts.
  * @param {number} [options.timeoutMs] For tests.
  * @returns {Promise<
- *   | { delivered: true, outcome: "created" | "duplicate", httpStatus: number, attempts: number }
+ *   | { delivered: true, outcome: "created" | "duplicate" | "stored", httpStatus: number, attempts: number }
  *   | {
  *       delivered: false,
  *       reason: "http" | "redirect" | "timeout" | "network" | "too-large",
@@ -64,6 +67,7 @@ export async function sendInsightsReport({
   url,
   secret,
   payload,
+  kind = "review",
   fetch = globalThis.fetch,
   sleep = defaultSleep,
   timeoutMs = ATTEMPT_TIMEOUT_MS,
@@ -88,6 +92,7 @@ export async function sendInsightsReport({
       body,
       timeoutMs,
       final: attempts === MAX_ATTEMPTS,
+      kind,
     });
     if (!last.retry) break;
     if (attempts < MAX_ATTEMPTS) {
@@ -98,7 +103,15 @@ export async function sendInsightsReport({
   return { ...last.result, attempts };
 }
 
-async function attemptOnce({ fetch, url, headers, body, timeoutMs, final }) {
+async function attemptOnce({
+  fetch,
+  url,
+  headers,
+  body,
+  timeoutMs,
+  final,
+  kind,
+}) {
   // The signal covers the whole attempt, reading the answer included.
   const signal = AbortSignal.timeout(timeoutMs);
   let response;
@@ -115,13 +128,18 @@ async function attemptOnce({ fetch, url, headers, body, timeoutMs, final }) {
   }
 
   const { status } = response;
-  if (status === 201 || status === 200) {
+  if (status === 200 || (status === 201 && kind !== "status")) {
     await discard(response);
     return {
       retry: false,
       result: {
         delivered: true,
-        outcome: status === 201 ? "created" : "duplicate",
+        outcome:
+          kind === "status"
+            ? "stored"
+            : status === 201
+              ? "created"
+              : "duplicate",
         httpStatus: status,
       },
     };

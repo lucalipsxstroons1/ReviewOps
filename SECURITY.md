@@ -57,6 +57,23 @@ How it is sent:
 - **The answer is untrusted.** Only its status and an error code that looks like an identifier (capital letters, digits and underscores) reach the log. The body of the answer is never logged.
 - **Forks and Dependabot.** GitHub passes them no repository secrets. Without `insights-secret` the review goes on, the action sends no report and says so in a notice. Anywhere else, an address without a secret is an error before the first request.
 
+### The status report
+
+If the workflow sets `insights-url`, the action sends a second, smaller report: what became of the findings of earlier runs (docs/insights-payload.md, "Status report"). It holds metadata and nothing else:
+
+- the run and the pull request: `schemaVersion`, `repository`, `prNumber`, `runId`, `runAttempt` and `pullRequestState` (`open`, `merged` or `closed`),
+- for each earlier inline comment of the action with a fingerprint, at most 1000: `fingerprint` (a hash of the line, never the line itself), `lineUnchanged`, `threadResolved` and `thumbsDown`, three truth values.
+
+Everything above under "never sent" holds for this report too. It also never holds who resolved a thread or set a thumbs down, how many people reacted, other reactions, or the text of a comment. The query for the threads reads the reaction groups of the first comment of each thread and passes on two truth values per comment, never a count and never a name.
+
+- **Address.** Derived from `insights-url`: a path that ends on `/review` becomes `/status`, on the same host. For any other path the action sends no status report and says so in a notice. There is no input of its own, so the address can only be one the workflow named.
+- **When.** At every regular end of a run that has at least one finding it can report: after posting a review, without findings, with nothing new to review, and when the review is skipped. It follows the outputs and the report above. A run that ends with an error sends nothing.
+- **Closed pull requests.** On a pull request that is merged or closed (the workflow must run on the `closed` event), the action asks no model, needs no OpenAI key, posts nothing and changes no comment. It reads the files, the earlier comments and the threads, and sends the final state. Without `insights-url`, a usable address and the secret, it does nothing at all, and makes no request to GitHub. A failure to read there is a warning, and the run stays green.
+- **Without Insights.** Without `insights-url` nothing changes and the action makes no additional request to GitHub. The threads are queried as before, only when an earlier finding is still current.
+- **Never in the way.** The same rules as for the report above: a status report that does not arrive changes nothing about the result of the step, also with `fail-on`. If the query for the threads fails and only the status report needed it, the run goes on with a warning and without the report.
+- **Findings of unknown state.** A finding whose state cannot be determined safely is left out and counted in the log, never reported with a wrong value: its file has no diff (no text diff, unreadable, excluded, possible secrets, list of files cut off at 3000), or its thread was not read.
+- **A limit of the thumbs down.** Anyone who may react to the pull request can set a thumbs down; in a public repository that is every GitHub user. Insights should treat it as a signal and not as proof.
+
 The only code that makes a request of its own is `src/insights/send.js`. A test over the sources keeps it that way.
 
 ## Rights of the workflow
@@ -128,4 +145,4 @@ The answer is untrusted input. It comes from a model that reads text written by 
 
 ## What is not in the log
 
-The log and the job summary never contain the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. Nor do they contain the report for ReviewOps Insights, its signature, `insights-secret` or the answer of the Insights server. The log names the host of `insights-url`, never the whole address. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.
+The log and the job summary never contain the prompt, the answer of the model, the content of a diff, the title of the pull request or a key. Nor do they contain the reports for ReviewOps Insights, their signature, `insights-secret` or the answer of the Insights server. The log names the host of `insights-url`, never the whole address. It contains file names (shown in a form that cannot break a line), numbers, the address of the posted review and the fixed messages of the action. Secrets are also masked by the runner. Debug logging adds the stack of an error, still without any of those values.

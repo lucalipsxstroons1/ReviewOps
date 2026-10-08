@@ -17,7 +17,15 @@ const QUERY = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: S
     pullRequest(number: $number) {
       reviewThreads(first: ${PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { isResolved comments(first: 1) { nodes { databaseId } } }
+        nodes {
+          isResolved
+          comments(first: 1) {
+            nodes {
+              databaseId
+              reactionGroups { content reactors { totalCount } }
+            }
+          }
+        }
       }
     }
   }
@@ -41,28 +49,29 @@ const THREAD_HINTS = Object.freeze({
 });
 
 /**
- * Reads which review threads of a pull request are resolved and returns the
- * ids of the comments that opened them. REST does not know whether a thread
- * is resolved, so this is a GraphQL query.
+ * Reads the review threads of a pull request: for the comment that opened a
+ * thread, whether the thread is resolved and whether the comment carries a
+ * thumbs down. REST knows neither, so this is a GraphQL query, and one query
+ * answers both.
  *
  * Everything in the answer is untrusted: a thread counts as resolved only if
- * `isResolved` is exactly `true` and the id is a positive whole number. An
- * answer of another shape ends the reading, and the threads it did not name
- * count as not resolved.
+ * `isResolved` is exactly `true` and the id is a positive whole number, and
+ * a comment has a thumbs down only if the reaction group `THUMBS_DOWN` has a
+ * count above 0. Only the two truth values leave this function: never a
+ * number of reactions, never who reacted. An answer of another shape ends
+ * the reading, and the threads it did not name are missing from the result.
  *
  * Nothing in here writes to the log.
  *
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
- * @returns {Promise<Set<number>>}
+ * @returns {Promise<Map<number, { resolved: boolean, thumbsDown: boolean }>>}
+ *   By the id of the first comment of a thread.
  * @throws {ThreadsUnavailableError} When GitHub does not answer the query,
  *   with a message that says what to do.
  */
-export async function readResolvedComments(
-  octokit,
-  { owner, repo, pullNumber },
-) {
-  const resolved = new Set();
+export async function readThreadStates(octokit, { owner, repo, pullNumber }) {
+  const states = new Map();
   let cursor = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     let data;
@@ -80,10 +89,13 @@ export async function readResolvedComments(
     const threads = data?.repository?.pullRequest?.reviewThreads;
     if (!Array.isArray(threads?.nodes)) break;
     for (const thread of threads.nodes) {
-      const id = thread?.comments?.nodes?.[0]?.databaseId;
-      if (thread?.isResolved === true && Number.isSafeInteger(id) && id > 0) {
-        resolved.add(id);
-      }
+      const comment = thread?.comments?.nodes?.[0];
+      const id = comment?.databaseId;
+      if (!Number.isSafeInteger(id) || id <= 0) continue;
+      states.set(id, {
+        resolved: thread.isResolved === true,
+        thumbsDown: hasThumbsDown(comment.reactionGroups),
+      });
     }
 
     const next = threads.pageInfo;
@@ -92,7 +104,39 @@ export async function readResolvedComments(
     if (next?.hasNextPage !== true || !usable) break;
     cursor = next.endCursor;
   }
-  return resolved;
+  return states;
+}
+
+/**
+ * Reads which review threads of a pull request are resolved and returns the
+ * ids of the comments that opened them.
+ *
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
+ * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
+ * @returns {Promise<Set<number>>}
+ * @throws {ThreadsUnavailableError} See {@link readThreadStates}.
+ */
+export async function readResolvedComments(octokit, pullRequest) {
+  return resolvedOf(await readThreadStates(octokit, pullRequest));
+}
+
+/** The ids of the comments whose thread is resolved. */
+export function resolvedOf(states) {
+  return new Set(
+    [...states].filter(([, { resolved }]) => resolved).map(([id]) => id),
+  );
+}
+
+function hasThumbsDown(groups) {
+  return (
+    Array.isArray(groups) &&
+    groups.some(
+      (group) =>
+        group?.content === "THUMBS_DOWN" &&
+        Number.isSafeInteger(group.reactors?.totalCount) &&
+        group.reactors.totalCount > 0,
+    )
+  );
 }
 
 /**

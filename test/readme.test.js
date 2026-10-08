@@ -77,8 +77,13 @@ workflows.forEach((config, index) => {
     }
   });
 
+  // The example that reports to Insights also runs on `closed`, to send the
+  // final state of the findings (#77). The others do not.
+  const reportsToInsights = reviewSteps(config).some(
+    (step) => "insights-url" in (step.with ?? {}),
+  );
   test(`${name}: runs for the events that start a review`, () => {
-    assertReviewTriggers(config);
+    assertReviewTriggers(config, { closed: reportsToInsights });
   });
 
   test(`${name}: grants exactly the two permissions the action needs`, () => {

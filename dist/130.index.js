@@ -1,8 +1,8 @@
-export const id = 164;
-export const ids = [164];
+export const id = 130;
+export const ids = [130];
 export const modules = {
 
-/***/ 7164:
+/***/ 8130:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -2110,6 +2110,21 @@ function readCounter(value, name) {
   return value;
 }
 
+/**
+ * Reads whether the pull request of the event is open, merged or closed
+ * without a merge: `state` and `merged` of the payload. Anything that is not
+ * exactly `closed` counts as open, so an odd payload never switches a review
+ * off. Only fixed words come out, never a value of the payload.
+ *
+ * @param {{ payload?: object }} context
+ * @returns {"open" | "merged" | "closed"}
+ */
+function readPullRequestState(context) {
+  const pullRequest = context.payload?.pull_request;
+  if (!context_isObject(pullRequest) || pullRequest.state !== "closed") return "open";
+  return pullRequest.merged === true ? "merged" : "closed";
+}
+
 ;// CONCATENATED MODULE: ./src/github/api-error.js
 /**
  * Turns a failed request to the GitHub API into an error that names the HTTP
@@ -3033,6 +3048,11 @@ const isOwn = (item) =>
  *
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number, headSha: string }} pullRequest
+ * @param {object} [options]
+ * @param {boolean} [options.compare] Compare the last reviewed commit with
+ *   the head. Off for a run that reviews nothing (a closed pull request): it
+ *   needs the earlier comments only, so the request is saved and the result
+ *   is always `full`.
  * @returns {Promise<{
  *   mode: "full" | "incremental",
  *   since: string | null,
@@ -3042,6 +3062,7 @@ const isOwn = (item) =>
  *   ownReviews: number,
  *   ownComments: number,
  *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
+ *   inlineComments: { id: number, path: string, fingerprint: string }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
  *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
  *   `newLines` holds the added lines of the comparison by path. `null` as
@@ -3049,7 +3070,11 @@ const isOwn = (item) =>
  *   missing has no new line. In `full` mode, `newLines` is `null` and
  *   `reason` is one of {@link FULL_REASONS}.
  */
-async function readHistory(octokit, pullRequest) {
+async function readHistory(
+  octokit,
+  pullRequest,
+  { compare: withComparison = true } = {},
+) {
   const { owner, repo, pullNumber } = pullRequest;
   const listParameters = {
     owner,
@@ -3093,11 +3118,32 @@ async function readHistory(octokit, pullRequest) {
     }
   }
 
+  // Every own inline comment with a fingerprint, whatever its severity, for
+  // the status report (#77). The path is the one GitHub names for the comment.
+  const inlineComments = [];
+  for (const comment of ownComments) {
+    const [head] = readHead(comment.body).fingerprints;
+    if (
+      head &&
+      Number.isSafeInteger(comment.id) &&
+      comment.id > 0 &&
+      typeof comment.path === "string" &&
+      comment.path !== ""
+    ) {
+      inlineComments.push({
+        id: comment.id,
+        path: comment.path,
+        fingerprint: head.fingerprint,
+      });
+    }
+  }
+
   const base = {
     fingerprints,
     ownReviews: ownReviews.length,
     ownComments: ownComments.length,
     earlierFindings,
+    inlineComments,
   };
   const full = (reason) => ({
     ...base,
@@ -3108,7 +3154,7 @@ async function readHistory(octokit, pullRequest) {
   });
 
   const since = lastReviewedCommit(ownReviews);
-  if (since === null) return full(FULL_REASONS.noReview);
+  if (since === null || !withComparison) return full(FULL_REASONS.noReview);
 
   // The head was reviewed already: nothing is new, and nothing is compared.
   if (since === pullRequest.headSha) {
@@ -3304,7 +3350,15 @@ const QUERY = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: S
     pullRequest(number: $number) {
       reviewThreads(first: ${PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { isResolved comments(first: 1) { nodes { databaseId } } }
+        nodes {
+          isResolved
+          comments(first: 1) {
+            nodes {
+              databaseId
+              reactionGroups { content reactors { totalCount } }
+            }
+          }
+        }
       }
     }
   }
@@ -3328,28 +3382,29 @@ const THREAD_HINTS = Object.freeze({
 });
 
 /**
- * Reads which review threads of a pull request are resolved and returns the
- * ids of the comments that opened them. REST does not know whether a thread
- * is resolved, so this is a GraphQL query.
+ * Reads the review threads of a pull request: for the comment that opened a
+ * thread, whether the thread is resolved and whether the comment carries a
+ * thumbs down. REST knows neither, so this is a GraphQL query, and one query
+ * answers both.
  *
  * Everything in the answer is untrusted: a thread counts as resolved only if
- * `isResolved` is exactly `true` and the id is a positive whole number. An
- * answer of another shape ends the reading, and the threads it did not name
- * count as not resolved.
+ * `isResolved` is exactly `true` and the id is a positive whole number, and
+ * a comment has a thumbs down only if the reaction group `THUMBS_DOWN` has a
+ * count above 0. Only the two truth values leave this function: never a
+ * number of reactions, never who reacted. An answer of another shape ends
+ * the reading, and the threads it did not name are missing from the result.
  *
  * Nothing in here writes to the log.
  *
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
- * @returns {Promise<Set<number>>}
+ * @returns {Promise<Map<number, { resolved: boolean, thumbsDown: boolean }>>}
+ *   By the id of the first comment of a thread.
  * @throws {ThreadsUnavailableError} When GitHub does not answer the query,
  *   with a message that says what to do.
  */
-async function readResolvedComments(
-  octokit,
-  { owner, repo, pullNumber },
-) {
-  const resolved = new Set();
+async function readThreadStates(octokit, { owner, repo, pullNumber }) {
+  const states = new Map();
   let cursor = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     let data;
@@ -3367,10 +3422,13 @@ async function readResolvedComments(
     const threads = data?.repository?.pullRequest?.reviewThreads;
     if (!Array.isArray(threads?.nodes)) break;
     for (const thread of threads.nodes) {
-      const id = thread?.comments?.nodes?.[0]?.databaseId;
-      if (thread?.isResolved === true && Number.isSafeInteger(id) && id > 0) {
-        resolved.add(id);
-      }
+      const comment = thread?.comments?.nodes?.[0];
+      const id = comment?.databaseId;
+      if (!Number.isSafeInteger(id) || id <= 0) continue;
+      states.set(id, {
+        resolved: thread.isResolved === true,
+        thumbsDown: hasThumbsDown(comment.reactionGroups),
+      });
     }
 
     const next = threads.pageInfo;
@@ -3379,7 +3437,39 @@ async function readResolvedComments(
     if (next?.hasNextPage !== true || !usable) break;
     cursor = next.endCursor;
   }
-  return resolved;
+  return states;
+}
+
+/**
+ * Reads which review threads of a pull request are resolved and returns the
+ * ids of the comments that opened them.
+ *
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
+ * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
+ * @returns {Promise<Set<number>>}
+ * @throws {ThreadsUnavailableError} See {@link readThreadStates}.
+ */
+async function readResolvedComments(octokit, pullRequest) {
+  return resolvedOf(await readThreadStates(octokit, pullRequest));
+}
+
+/** The ids of the comments whose thread is resolved. */
+function resolvedOf(states) {
+  return new Set(
+    [...states].filter(([, { resolved }]) => resolved).map(([id]) => id),
+  );
+}
+
+function hasThumbsDown(groups) {
+  return (
+    Array.isArray(groups) &&
+    groups.some(
+      (group) =>
+        group?.content === "THUMBS_DOWN" &&
+        Number.isSafeInteger(group.reactors?.totalCount) &&
+        group.reactors.totalCount > 0,
+    )
+  );
 }
 
 /**
@@ -3607,6 +3697,230 @@ function parseSecret(secret) {
   return secret;
 }
 
+/**
+ * The address for the status report (#77), derived from the address of the
+ * review report: a path that ends on `/review` becomes `/status`. Any other
+ * path gives `null`, and the action sends no status report.
+ *
+ * @param {string} url `url` of `parseInsightsConfig()`, in its normal form.
+ * @returns {string | null}
+ */
+function deriveStatusUrl(url) {
+  const address = new URL(url);
+  if (!address.pathname.endsWith("/review")) return null;
+  address.pathname = `${address.pathname.slice(0, -"/review".length)}/status`;
+  return address.href;
+}
+
+;// CONCATENATED MODULE: ./src/open-findings.js
+
+
+
+// "critical" first, "info" last.
+const open_findings_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
+
+/**
+ * The earlier findings of this action whose line is still an added line of
+ * the pull request: the code it commented on has not changed since. Each one
+ * stays in the list with its comment, so `countOpenFindings()` can leave out
+ * resolved threads.
+ *
+ * This is a pure function.
+ *
+ * @template {{ fingerprint: string }} E
+ * @param {E[]} earlierFindings `earlierFindings` of `readHistory()`.
+ * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} diffs
+ *   The parsed and masked files of the pull request.
+ * @returns {E[]}
+ */
+function currentEarlierFindings(earlierFindings, diffs) {
+  const current = currentFingerprints(diffs);
+  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
+}
+
+/**
+ * The fingerprints of all added lines of the pull request: a line is
+ * unchanged since a comment if the fingerprint of the comment is among them.
+ *
+ * @param {{ commentableLines: number[], hunks: object[], path: string }[]} diffs
+ * @returns {Set<string>}
+ */
+function currentFingerprints(diffs) {
+  const current = new Set();
+  for (const diff of diffs) {
+    const prints = lineFingerprintsOf(diff);
+    for (const line of diff.commentableLines) {
+      const print = prints.get(line);
+      if (print) current.add(print);
+    }
+  }
+  return current;
+}
+
+/**
+ * Counts the findings that are open on the pull request, by severity: the
+ * new findings of this run and the earlier ones that are still current.
+ *
+ * - An earlier finding counts once per fingerprint, even if two comments
+ *   carry it, with the most serious severity of the comments that count.
+ * - A comment whose thread is resolved does not count: a person decided
+ *   that it needs nothing more.
+ * - A new finding never has the fingerprint of an earlier comment:
+ *   `selectFindings()` drops those as known. So nothing counts twice.
+ *
+ * This is a pure function.
+ *
+ * @param {object} options
+ * @param {Record<string, number>} options.newCounts `counts` of
+ *   `selectFindings()`.
+ * @param {{ id: number, fingerprint: string, severity: string }[]} options.earlier
+ *   What `currentEarlierFindings()` returned.
+ * @param {Set<number>} options.resolved Ids of the comments that opened a
+ *   resolved thread.
+ * @returns {{
+ *   total: number,
+ *   bySeverity: Record<string, number>,
+ *   earlier: number,
+ *   resolved: number,
+ * }} `earlier` counts the earlier findings in `total`, `resolved` the
+ *   current earlier findings that a resolved thread leaves out.
+ */
+function countOpenFindings({ newCounts, earlier, resolved }) {
+  const open = new Map();
+  const dismissed = new Set();
+  for (const { id, fingerprint, severity } of earlier) {
+    if (resolved.has(id)) {
+      dismissed.add(fingerprint);
+      continue;
+    }
+    const known = open.get(fingerprint);
+    if (known === undefined || open_findings_RANK.get(severity) < open_findings_RANK.get(known)) {
+      open.set(fingerprint, severity);
+    }
+  }
+
+  const bySeverity = Object.fromEntries(
+    SEVERITIES.map((severity) => [severity, newCounts[severity] ?? 0]),
+  );
+  for (const severity of open.values()) bySeverity[severity] += 1;
+
+  return {
+    total: SEVERITIES.reduce((sum, severity) => sum + bySeverity[severity], 0),
+    bySeverity,
+    earlier: open.size,
+    resolved: [...dismissed].filter((print) => !open.has(print)).length,
+  };
+}
+
+;// CONCATENATED MODULE: ./src/insights/status.js
+
+
+/** The version of the contract of the status report. */
+const STATUS_SCHEMA_VERSION = 1;
+
+/** At most this many findings go into one report (the limit of the contract). */
+const MAX_STATUS_FINDINGS = 1000;
+
+/**
+ * Builds the status report for ReviewOps Insights (docs/insights-payload.md,
+ * "Status report"): for every earlier inline comment of this action that has
+ * a fingerprint, three facts, and the state of the pull request. Insights
+ * derives what became of a finding from them; the action only reports.
+ *
+ * This is a pure function. Fields are copied one by one: no text of a
+ * comment, no code, no name, no number of reactions.
+ *
+ * A finding whose state cannot be determined safely is left out instead of
+ * reported with a wrong value:
+ *
+ * - its file is part of the pull request, but its diff is not available
+ *   (no patch, unreadable, excluded, possible secrets), or the list of files
+ *   was cut off and the file is not among the parsed ones: whether the line
+ *   is unchanged is unknown;
+ * - the thread of its comment was not read.
+ *
+ * Findings in the text of a review have no thread and are not reported.
+ * Several comments with one fingerprint make one entry: the thread counts as
+ * resolved if all of them are, and a thumbs down on one of them counts.
+ *
+ * @param {object} options
+ * @param {{ owner: string, repo: string, pullNumber: number }} options.pullRequest
+ * @param {{ runId: number, runAttempt: number }} options.run
+ * @param {"open" | "merged" | "closed"} options.state
+ * @param {{ id: number, path: string, fingerprint: string }[]} options.comments
+ *   `inlineComments` of `readHistory()`.
+ * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} options.diffs
+ *   The parsed and masked files of the pull request.
+ * @param {Set<string>} options.unknownPaths Paths of files of the pull
+ *   request whose diff is not available.
+ * @param {boolean} options.listingTruncated GitHub cut the list of files.
+ * @param {Map<number, { resolved: boolean, thumbsDown: boolean }>} options.threads
+ *   `readThreadStates()`.
+ * @returns {{
+ *   payload: object | null,
+ *   omitted: { unknown: number, overLimit: number },
+ * }} `payload` is `null` when there is nothing to report.
+ */
+function buildStatusPayload({
+  pullRequest,
+  run,
+  state,
+  comments,
+  diffs,
+  unknownPaths,
+  listingTruncated,
+  threads,
+}) {
+  const current = currentFingerprints(diffs);
+  const parsed = new Set(diffs.map(({ path }) => path));
+
+  // One entry per fingerprint, in the order of the oldest comment.
+  const byFingerprint = new Map();
+  for (const comment of [...comments].sort((a, b) => a.id - b.id)) {
+    const group = byFingerprint.get(comment.fingerprint) ?? [];
+    group.push(comment);
+    byFingerprint.set(comment.fingerprint, group);
+  }
+
+  const findings = [];
+  let unknown = 0;
+  for (const [fingerprint, group] of byFingerprint) {
+    const pathUnknown = group.some(
+      ({ path }) =>
+        unknownPaths.has(path) || (listingTruncated && !parsed.has(path)),
+    );
+    const states = group.map(({ id }) => threads.get(id));
+    if (pathUnknown || states.some((thread) => thread === undefined)) {
+      unknown += 1;
+      continue;
+    }
+    findings.push({
+      fingerprint,
+      lineUnchanged: current.has(fingerprint),
+      threadResolved: states.every(({ resolved }) => resolved),
+      thumbsDown: states.some(({ thumbsDown }) => thumbsDown),
+    });
+  }
+
+  const overLimit = Math.max(0, findings.length - MAX_STATUS_FINDINGS);
+  const reported = findings.slice(0, MAX_STATUS_FINDINGS);
+  if (reported.length === 0) {
+    return { payload: null, omitted: { unknown, overLimit } };
+  }
+  return {
+    payload: {
+      schemaVersion: STATUS_SCHEMA_VERSION,
+      repository: `${pullRequest.owner}/${pullRequest.repo}`,
+      prNumber: pullRequest.pullNumber,
+      runId: run.runId,
+      runAttempt: run.runAttempt,
+      pullRequestState: state,
+      findings: reported,
+    },
+    omitted: { unknown, overLimit },
+  };
+}
+
 ;// CONCATENATED MODULE: ./src/version.js
 // The version of the action. A test keeps it equal to `version` in
 // package.json: src/ does not import package.json.
@@ -3802,12 +4116,15 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,49}$/;
  * @param {string} options.url The address, from `parseInsightsConfig()`.
  * @param {string} options.secret The secret that signs the report.
  * @param {object} options.payload The report from `buildInsightsPayload()`.
+ * @param {"review" | "status"} [options.kind] The report review answers `201`
+ *   for a new one and `200` for one it knows; the status report is never
+ *   stored, `200` is its normal answer and counts as `stored`.
  * @param {typeof fetch} [options.fetch] For tests.
  * @param {(ms: number) => Promise<void>} [options.sleep] For tests: the
  *   pauses between the attempts.
  * @param {number} [options.timeoutMs] For tests.
  * @returns {Promise<
- *   | { delivered: true, outcome: "created" | "duplicate", httpStatus: number, attempts: number }
+ *   | { delivered: true, outcome: "created" | "duplicate" | "stored", httpStatus: number, attempts: number }
  *   | {
  *       delivered: false,
  *       reason: "http" | "redirect" | "timeout" | "network" | "too-large",
@@ -3822,6 +4139,7 @@ async function send_sendInsightsReport({
   url,
   secret,
   payload,
+  kind = "review",
   fetch = globalThis.fetch,
   sleep = defaultSleep,
   timeoutMs = ATTEMPT_TIMEOUT_MS,
@@ -3846,6 +4164,7 @@ async function send_sendInsightsReport({
       body,
       timeoutMs,
       final: attempts === MAX_ATTEMPTS,
+      kind,
     });
     if (!last.retry) break;
     if (attempts < MAX_ATTEMPTS) {
@@ -3856,7 +4175,15 @@ async function send_sendInsightsReport({
   return { ...last.result, attempts };
 }
 
-async function attemptOnce({ fetch, url, headers, body, timeoutMs, final }) {
+async function attemptOnce({
+  fetch,
+  url,
+  headers,
+  body,
+  timeoutMs,
+  final,
+  kind,
+}) {
   // The signal covers the whole attempt, reading the answer included.
   const signal = AbortSignal.timeout(timeoutMs);
   let response;
@@ -3873,13 +4200,18 @@ async function attemptOnce({ fetch, url, headers, body, timeoutMs, final }) {
   }
 
   const { status } = response;
-  if (status === 201 || status === 200) {
+  if (status === 200 || (status === 201 && kind !== "status")) {
     await discard(response);
     return {
       retry: false,
       result: {
         delivered: true,
-        outcome: status === 201 ? "created" : "duplicate",
+        outcome:
+          kind === "status"
+            ? "stored"
+            : status === 201
+              ? "created"
+              : "duplicate",
         httpStatus: status,
       },
     };
@@ -4000,6 +4332,7 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 
 
+
 /** The text of every case in which the report could not even be tried. */
 const NOT_SENT =
   "The report for ReviewOps Insights could not be built or sent.";
@@ -4041,8 +4374,7 @@ async function deliverInsightsReport({
   // mistake of the workflow, so the review stays as it is and this says why
   // nothing was sent.
   if (!insights.secret) {
-    const text =
-      "The report for ReviewOps Insights was not sent: the secret in `insights-secret` is not available in this run, because GitHub passes no repository secrets to runs of forks and of Dependabot.";
+    const text = NO_SECRET_TEXT;
     core.notice(text);
     return { text };
   }
@@ -4111,6 +4443,106 @@ async function deliverInsightsReport({
   );
   return {
     text: redact(`The report did not reach ReviewOps Insights (${why}).`),
+  };
+}
+
+/** The text of a run that cannot send because the secret is missing. */
+const NO_SECRET_TEXT =
+  "The report for ReviewOps Insights was not sent: the secret in `insights-secret` is not available in this run, because GitHub passes no repository secrets to runs of forks and of Dependabot.";
+
+/**
+ * Builds the status report of a finished run, sends it to ReviewOps Insights
+ * and says in the log and in the summary how that went (#77). It reports what
+ * became of the earlier findings of this action.
+ *
+ * Like `deliverInsightsReport()`, nothing in here lets the run fail or
+ * changes its result, and the log gets numbers and fixed words only: never an
+ * address, a fingerprint, a body or the text of an answer.
+ *
+ * @param {object} options
+ * @param {typeof import("@actions/core")} options.core
+ * @param {(text: unknown) => string} options.redact
+ * @param {{ statusUrl: string, secret: string }} options.insights
+ * @param {typeof import("./send.js").sendInsightsReport} options.send
+ * @param {object} options.facts `pullRequest`, `context`, `state`,
+ *   `comments`, `diffs`, `unknownPaths`, `listingTruncated` and `threads`,
+ *   for `buildStatusPayload()`.
+ * @returns {Promise<{ text: string }>} One sentence for the job summary.
+ */
+async function deliverStatusReport({
+  core,
+  redact,
+  insights,
+  send,
+  facts,
+}) {
+  let result;
+  try {
+    const { payload, omitted } = buildStatusPayload({
+      pullRequest: facts.pullRequest,
+      run: readRun(facts.context),
+      state: facts.state,
+      comments: facts.comments,
+      diffs: facts.diffs,
+      unknownPaths: facts.unknownPaths,
+      listingTruncated: facts.listingTruncated,
+      threads: facts.threads,
+    });
+    // Numbers only.
+    if (omitted.unknown > 0 || omitted.overLimit > 0) {
+      core.info(
+        `Findings left out of the status report: ${omitted.unknown} whose state is not known, ${omitted.overLimit} over the limit of ${MAX_STATUS_FINDINGS}.`,
+      );
+    }
+    if (payload === null) {
+      const text =
+        "No status report was sent: none of the earlier findings has a known state.";
+      core.info(text);
+      return { text };
+    }
+    result = await send({
+      url: insights.statusUrl,
+      secret: insights.secret,
+      payload,
+      kind: "status",
+    });
+  } catch (error) {
+    if (error instanceof Error && SAFE_BUILD_ERROR.test(error.message)) {
+      core.debug(redact(error.message));
+    }
+    const text =
+      "The status report for ReviewOps Insights could not be built or sent.";
+    core.warning(text);
+    return { text };
+  }
+
+  if (result.detail)
+    core.debug(redact(`Insights: ${result.reason}, ${result.detail}`));
+
+  const attempts = `${result.attempts} ${result.attempts === 1 ? "attempt" : "attempts"}`;
+  if (result.delivered) {
+    core.info(
+      `Status report delivered to ReviewOps Insights (HTTP ${result.httpStatus}), ${attempts}.`,
+    );
+    return { text: "The status report reached ReviewOps Insights." };
+  }
+
+  const why = describeFailure(result);
+  const hint =
+    result.httpStatus === 401
+      ? " Check that `insights-secret` has the same value as `INGEST_SECRET` at ReviewOps Insights."
+      : "";
+  core.warning(
+    redact(
+      result.attempts === 0
+        ? `The status report for ReviewOps Insights was not sent: ${why}.`
+        : `The status report for ReviewOps Insights was not delivered: ${why}, after ${attempts}.${hint}`,
+    ),
+  );
+  return {
+    text: redact(
+      `The status report did not reach ReviewOps Insights (${why}).`,
+    ),
   };
 }
 
@@ -4314,94 +4746,6 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
   }
 
   return { selected, overLimit, tooLarge, usedChars };
-}
-
-;// CONCATENATED MODULE: ./src/open-findings.js
-
-
-
-// "critical" first, "info" last.
-const open_findings_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
-
-/**
- * The earlier findings of this action whose line is still an added line of
- * the pull request: the code it commented on has not changed since. Each one
- * stays in the list with its comment, so `countOpenFindings()` can leave out
- * resolved threads.
- *
- * This is a pure function.
- *
- * @template {{ fingerprint: string }} E
- * @param {E[]} earlierFindings `earlierFindings` of `readHistory()`.
- * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} diffs
- *   The parsed and masked files of the pull request.
- * @returns {E[]}
- */
-function currentEarlierFindings(earlierFindings, diffs) {
-  const current = new Set();
-  for (const diff of diffs) {
-    const prints = lineFingerprintsOf(diff);
-    for (const line of diff.commentableLines) {
-      const print = prints.get(line);
-      if (print) current.add(print);
-    }
-  }
-  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
-}
-
-/**
- * Counts the findings that are open on the pull request, by severity: the
- * new findings of this run and the earlier ones that are still current.
- *
- * - An earlier finding counts once per fingerprint, even if two comments
- *   carry it, with the most serious severity of the comments that count.
- * - A comment whose thread is resolved does not count: a person decided
- *   that it needs nothing more.
- * - A new finding never has the fingerprint of an earlier comment:
- *   `selectFindings()` drops those as known. So nothing counts twice.
- *
- * This is a pure function.
- *
- * @param {object} options
- * @param {Record<string, number>} options.newCounts `counts` of
- *   `selectFindings()`.
- * @param {{ id: number, fingerprint: string, severity: string }[]} options.earlier
- *   What `currentEarlierFindings()` returned.
- * @param {Set<number>} options.resolved Ids of the comments that opened a
- *   resolved thread.
- * @returns {{
- *   total: number,
- *   bySeverity: Record<string, number>,
- *   earlier: number,
- *   resolved: number,
- * }} `earlier` counts the earlier findings in `total`, `resolved` the
- *   current earlier findings that a resolved thread leaves out.
- */
-function countOpenFindings({ newCounts, earlier, resolved }) {
-  const open = new Map();
-  const dismissed = new Set();
-  for (const { id, fingerprint, severity } of earlier) {
-    if (resolved.has(id)) {
-      dismissed.add(fingerprint);
-      continue;
-    }
-    const known = open.get(fingerprint);
-    if (known === undefined || open_findings_RANK.get(severity) < open_findings_RANK.get(known)) {
-      open.set(fingerprint, severity);
-    }
-  }
-
-  const bySeverity = Object.fromEntries(
-    SEVERITIES.map((severity) => [severity, newCounts[severity] ?? 0]),
-  );
-  for (const severity of open.values()) bySeverity[severity] += 1;
-
-  return {
-    total: SEVERITIES.reduce((sum, severity) => sum + bySeverity[severity], 0),
-    bySeverity,
-    earlier: open.size,
-    resolved: [...dismissed].filter((print) => !open.has(print)).length,
-  };
 }
 
 ;// CONCATENATED MODULE: ./src/outputs.js
@@ -4909,6 +5253,8 @@ const NO_FINDINGS = "No findings.";
  *   ReviewOps Insights went, one sentence of the action. Only set when the
  *   workflow switched the report on: without it the summary says nothing
  *   about Insights.
+ * @param {{ text: string } | null} [report.insightsStatus] How the status
+ *   report for ReviewOps Insights went (#77), one sentence of the action.
  * @returns {string}
  */
 function buildSummary({
@@ -4921,6 +5267,7 @@ function buildSummary({
   reviewUrl = null,
   threshold = null,
   insights = null,
+  insightsStatus = null,
 }) {
   const blocks = ["## ReviewOps", plainText(status)];
   if (error) blocks.push(`**Error:** ${plainText(error)}`);
@@ -4936,7 +5283,11 @@ function buildSummary({
   }
   if (files) blocks.push(...fileBlocks(files, since));
   if (usage) blocks.push(...usageBlocks(usage));
-  if (insights) blocks.push("### ReviewOps Insights", plainText(insights.text));
+  if (insights || insightsStatus) {
+    blocks.push("### ReviewOps Insights");
+    if (insights) blocks.push(plainText(insights.text));
+    if (insightsStatus) blocks.push(plainText(insightsStatus.text));
+  }
 
   const text = `${blocks.join("\n\n")}\n`;
   return text.length > MAX_SUMMARY_CHARS
@@ -5145,6 +5496,9 @@ async function run({
   // The report for ReviewOps Insights (#76), set only at a regular end of a run
   // that asked the model. `finish()` sends it after the outputs are set.
   let insightsJob = null;
+  // The status report (#77) and the notice for a run without the secret.
+  let statusJob = null;
+  let secretMissingNotice = false;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
@@ -5160,11 +5514,15 @@ async function run({
     // cannot be used fails the run here, before any request. A run that leaves
     // out the review asks no model, so it needs no key either.
     const skip = skip_skipReason(readSkipFacts(context), parseSkipOptions(inputs));
+    // A pull request that is merged or closed is never reviewed, whatever
+    // event started the run. It asks no model, so it needs no key either.
+    const state = readPullRequestState(context);
+    const closed = state !== "open";
     // Without the key, a pull request from a fork or a run of Dependabot ends
     // here with a notice, before any request: GitHub gives them no secrets,
     // so there is nothing the workflow could fix. Anywhere else, a missing
     // key stays an error.
-    if (!inputs.openaiApiKey && !skip) {
+    if (!inputs.openaiApiKey && !skip && !closed) {
       const notice = explainMissingSecret(context);
       if (notice) {
         core.notice(notice);
@@ -5173,7 +5531,7 @@ async function run({
         return;
       }
     }
-    assertInputs(inputs, { needsKey: !skip });
+    assertInputs(inputs, { needsKey: !skip && !closed });
     // A pattern, a limit, a model name or a language that cannot be used
     // fails the run here, before any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
@@ -5192,6 +5550,25 @@ async function run({
       );
     }
 
+    // The status report goes to a second address, derived from the first.
+    const statusUrl = insights ? deriveStatusUrl(insights.url) : null;
+    const statusWanted = Boolean(insights?.secret && statusUrl);
+
+    // A closed pull request is not reviewed. It only has something to do if
+    // the final state can go to Insights; otherwise it ends before the first
+    // request to GitHub.
+    if (closed && !statusWanted) {
+      report.status = `ReviewOps left out the review: the pull request is ${state}. The final state goes to ReviewOps Insights only with \`insights-url\` (a path that ends on \`/review\`) and \`insights-secret\`, and at least one of them was not usable in this run.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
+      return;
+    }
+    if (insights && !statusUrl) {
+      core.notice(
+        "The status report for ReviewOps Insights is not sent: the path of `insights-url` does not end on `/review`, so the address of the status report cannot be derived.",
+      );
+    }
+
     core.info("ReviewOps started.");
     if (insights) {
       core.info(
@@ -5203,10 +5580,59 @@ async function run({
     // written by its author and stays out.
     const pullRequest = readPullRequest(context);
     core.info(
-      `Reviewing ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
+      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
     );
 
     const octokit = getOctokit(inputs.githubToken);
+
+    if (closed) {
+      // Nothing is reviewed and nothing is posted: only the final state of
+      // the earlier findings is reported. A failure to read is a warning here,
+      // because this run exists for the report alone.
+      report.status = `ReviewOps left out the review: the pull request is ${state}. Only the final state of the earlier findings goes to ReviewOps Insights.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
+      try {
+        const files = await listChangedFiles(octokit, pullRequest);
+        const earlierWork = await readHistory(octokit, pullRequest, {
+          compare: false,
+        });
+        const closedFiles = prepareFiles(
+          files,
+          createExcludeFilter(inputs.exclude),
+          parsePatch,
+        );
+        if (earlierWork.inlineComments.length > 0) {
+          const threads = await readThreadStates(octokit, pullRequest);
+          statusJob = () =>
+            deliverStatusReport({
+              core,
+              redact,
+              insights: { statusUrl, secret: insights.secret },
+              send: sendInsightsReport,
+              facts: {
+                pullRequest,
+                context,
+                state,
+                comments: earlierWork.inlineComments,
+                diffs: closedFiles.diffs,
+                unknownPaths: unknownPathsOf(files, closedFiles.diffs),
+                listingTruncated: files.truncated,
+                threads,
+              },
+            });
+        }
+      } catch (error) {
+        if (!isReadingError(error)) throw error;
+        core.warning(
+          redact(
+            `${main_describe(error)} The status report for ReviewOps Insights is not sent.`,
+          ),
+        );
+      }
+      return;
+    }
+
     const listing = await listChangedFiles(octokit, pullRequest);
 
     // What ReviewOps did on this pull request before: the commit it reviewed
@@ -5228,32 +5654,12 @@ async function run({
     // Files that may hold secrets are left out first, under their new and
     // their old name, whatever the inputs say. Then generated and irrelevant
     // files, and files whose name cannot be put into the prompt. All of this
-    // happens before anything is parsed.
-    const relevant = [];
-    const sensitive = [];
-    const excluded = [];
-    let unusableNames = 0;
-    for (const file of listing.files) {
-      if (
-        isSensitiveFile(file.path) ||
-        (file.previousPath && isSensitiveFile(file.previousPath))
-      ) {
-        sensitive.push({ path: file.path, reason: SENSITIVE_REASON });
-        continue;
-      }
-      let reason = excludeReason(file.path);
-      if (!reason && !isUsablePath(file.path)) {
-        reason = UNUSABLE_PATH_REASON;
-        unusableNames += 1;
-      }
-      if (reason) excluded.push({ path: file.path, reason });
-      else relevant.push(file);
-    }
-
-    // Line numbers are calculated here and never taken from the model.
-    // Strings that look like secrets are masked right away: everything after
-    // this point, the limits included, sees only the masked text.
-    const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
+    // happens before anything is parsed. Line numbers are calculated here and
+    // never taken from the model. Strings that look like secrets are masked
+    // right away: everything after this point, the limits included, sees only
+    // the masked text.
+    const { sensitive, excluded, unusableNames, diffs, unreadable } =
+      prepareFiles(listing, excludeReason, parsePatch);
 
     // After an earlier review, only files with a line that is new since then
     // go on. The others were checked already: they count in the log, not
@@ -5268,29 +5674,44 @@ async function run({
 
     // Earlier findings whose line is still an added line of the pull request
     // stay open until the code changes or a person resolves their thread.
-    // Only GraphQL knows the resolved threads, and it is only asked when an
-    // earlier finding is still current. Both happen before anything costs
-    // money.
+    // Only GraphQL knows the resolved threads, and it is asked when an earlier
+    // finding is still current, or when a status report can go to Insights
+    // (`statusWanted`) and there are earlier comments to report. Both happen
+    // before anything costs money.
     const earlier = currentEarlierFindings(history.earlierFindings, diffs);
-    let resolved = new Set();
-    if (earlier.length > 0) {
+    const reportStatus = statusWanted && history.inlineComments.length > 0;
+    let threadStates = null;
+    if (earlier.length > 0 || reportStatus) {
       try {
-        resolved = await readResolvedComments(octokit, pullRequest);
+        threadStates = await readThreadStates(octokit, pullRequest);
       } catch (error) {
-        // The threads matter for the count only. Without `fail-on` the
-        // review goes on, and every earlier finding counts as open: in
-        // doubt more, never fewer. With `fail-on` the count decides about
-        // the step, so it must be right.
-        if (!(error instanceof ThreadsUnavailableError) || failOn !== "none") {
-          throw error;
+        if (!(error instanceof ThreadsUnavailableError)) throw error;
+        if (earlier.length > 0) {
+          // The threads matter for the count. Without `fail-on` the review
+          // goes on, and every earlier finding counts as open: in doubt more,
+          // never fewer. With `fail-on` the count decides about the step, so
+          // it must be right.
+          if (failOn !== "none") throw error;
+          core.warning(
+            redact(
+              `${error.message} Every earlier finding of ReviewOps counts as open.${reportStatus ? " The status report for ReviewOps Insights is not sent." : ""}`,
+            ),
+          );
+        } else {
+          core.warning(
+            redact(
+              `${error.message} The status report for ReviewOps Insights is not sent.`,
+            ),
+          );
         }
-        core.warning(
-          redact(
-            `${error.message} Every earlier finding of ReviewOps counts as open.`,
-          ),
-        );
       }
     }
+    const resolved = threadStates ? resolvedOf(threadStates) : new Set();
+    // Without a secret there is no status report. In a run where one would
+    // have gone out, the log says why.
+    secretMissingNotice =
+      Boolean(insights && statusUrl && !insights.secret) &&
+      history.inlineComments.length > 0;
 
     // Every regular end of the run counts the open findings, sets the
     // outputs and applies `fail-on`, also when nothing was sent to the
@@ -5310,6 +5731,29 @@ async function run({
         core.info(
           `Open findings: ${open.total} (${SEVERITIES.map((severity) => `${open.bySeverity[severity]} ${severity}`).join(", ")}), ${open.earlier} of them from earlier comments; ${open.resolved} earlier findings are left out because their thread is resolved.`,
         );
+      }
+
+      // The state of the earlier findings goes to Insights at every regular
+      // end, after the outputs. It reports facts and changes nothing about
+      // how the run ends.
+      if (reportStatus && threadStates) {
+        statusJob = () =>
+          deliverStatusReport({
+            core,
+            redact,
+            insights: { statusUrl, secret: insights.secret },
+            send: sendInsightsReport,
+            facts: {
+              pullRequest,
+              context,
+              state,
+              comments: history.inlineComments,
+              diffs,
+              unknownPaths: unknownPathsOf(listing, diffs),
+              listingTruncated: listing.truncated,
+              threads: threadStates,
+            },
+          });
       }
 
       const reached = findingsAtThreshold(open.bySeverity, failOn);
@@ -5624,6 +6068,7 @@ async function run({
   } catch (error) {
     // A run that ends with an error sends no report.
     insightsJob = null;
+    statusJob = null;
     // Mark the step as failed first: nothing below may prevent that.
     const message = redact(main_describe(error));
     core.setFailed(message);
@@ -5641,7 +6086,11 @@ async function run({
       // A broken debug log must not hide the failure reported above.
     }
   } finally {
-    await finish(core, report, outputs, insightsJob);
+    await finish(core, report, outputs, {
+      insightsJob,
+      statusJob,
+      secretMissingNotice,
+    });
   }
 }
 
@@ -5653,7 +6102,12 @@ async function run({
  * server that does not answer is no reason for a red step. The warnings name
  * no path and no message.
  */
-async function finish(core, report, outputs, insightsJob) {
+async function finish(
+  core,
+  report,
+  outputs,
+  { insightsJob, statusJob, secretMissingNotice },
+) {
   try {
     if (outputs) setOutputs(core, outputs);
   } catch {
@@ -5671,12 +6125,85 @@ async function finish(core, report, outputs, insightsJob) {
       report.insights = { text };
     }
   }
+  if (statusJob) {
+    try {
+      report.insightsStatus = await statusJob();
+    } catch {
+      const text =
+        "The status report for ReviewOps Insights could not be built or sent.";
+      core.warning(text);
+      report.insightsStatus = { text };
+    }
+  } else if (secretMissingNotice && !insightsJob) {
+    core.notice(NO_SECRET_TEXT);
+    report.insights = { text: NO_SECRET_TEXT };
+  }
   try {
     await core.summary.addRaw(buildSummary(report), true).write();
   } catch {
     core.warning("The job summary could not be written.");
   }
 }
+
+/**
+ * Splits the files of a pull request: the ones that never go to the model
+ * (possible secrets, excluded, a name that cannot be put into the prompt),
+ * and the parsed and masked diffs of the others.
+ */
+function prepareFiles(listing, excludeReason, parsePatch) {
+  const relevant = [];
+  const sensitive = [];
+  const excluded = [];
+  let unusableNames = 0;
+  for (const file of listing.files) {
+    if (
+      isSensitiveFile(file.path) ||
+      (file.previousPath && isSensitiveFile(file.previousPath))
+    ) {
+      sensitive.push({ path: file.path, reason: SENSITIVE_REASON });
+      continue;
+    }
+    let reason = excludeReason(file.path);
+    if (!reason && !isUsablePath(file.path)) {
+      reason = UNUSABLE_PATH_REASON;
+      unusableNames += 1;
+    }
+    if (reason) excluded.push({ path: file.path, reason });
+    else relevant.push(file);
+  }
+  return {
+    sensitive,
+    excluded,
+    unusableNames,
+    ...parseDiffs(relevant, parsePatch),
+  };
+}
+
+/**
+ * The paths of files of the pull request whose diff is not available: the
+ * ones that were not parsed (excluded, possible secrets, unreadable) and the
+ * ones GitHub lists without a text diff. For these the status report cannot
+ * say whether a commented line is unchanged. A deleted file, or one with no
+ * content change, is no such case: it has no added lines.
+ */
+function unknownPathsOf(listing, diffs) {
+  const parsed = new Set(diffs.map(({ path }) => path));
+  const paths = new Set();
+  for (const file of listing.files) {
+    if (parsed.has(file.path)) continue;
+    paths.add(file.path);
+    if (file.previousPath) paths.add(file.previousPath);
+  }
+  for (const { path, reason } of listing.skipped) {
+    if (reason === SKIP_REASONS.noPatch) paths.add(path);
+  }
+  return paths;
+}
+
+/** An error of reading from GitHub, as opposed to a defect of the action. */
+const isReadingError = (error) =>
+  error instanceof ThreadsUnavailableError ||
+  Number.isInteger(error?.cause?.status);
 
 /**
  * Parses the patch of every file and masks strings that look like secrets.

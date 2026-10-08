@@ -20,17 +20,26 @@ import {
 } from "./exclude.js";
 import { selectFindings } from "./findings.js";
 import { findingsAtThreshold, parseFailOn } from "./fail-on.js";
-import { explainMissingSecret, readPullRequest } from "./github/context.js";
-import { listChangedFiles } from "./github/files.js";
+import {
+  explainMissingSecret,
+  readPullRequest,
+  readPullRequestState,
+} from "./github/context.js";
+import { SKIP_REASONS, listChangedFiles } from "./github/files.js";
 import { readHistory, scopeDiffs } from "./github/history.js";
 import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
 import {
   ThreadsUnavailableError,
-  readResolvedComments,
+  readThreadStates,
+  resolvedOf,
 } from "./github/threads.js";
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
-import { parseInsightsConfig } from "./insights/config.js";
-import { deliverInsightsReport } from "./insights/deliver.js";
+import { deriveStatusUrl, parseInsightsConfig } from "./insights/config.js";
+import {
+  NO_SECRET_TEXT,
+  deliverInsightsReport,
+  deliverStatusReport,
+} from "./insights/deliver.js";
 import { sendInsightsReport as insightsSend } from "./insights/send.js";
 import { applyLimits, parseLimits } from "./limits.js";
 import { countOpenFindings, currentEarlierFindings } from "./open-findings.js";
@@ -99,6 +108,9 @@ export async function run({
   // The report for ReviewOps Insights (#76), set only at a regular end of a run
   // that asked the model. `finish()` sends it after the outputs are set.
   let insightsJob = null;
+  // The status report (#77) and the notice for a run without the secret.
+  let statusJob = null;
+  let secretMissingNotice = false;
 
   try {
     if (context.eventName !== SUPPORTED_EVENT) {
@@ -114,11 +126,15 @@ export async function run({
     // cannot be used fails the run here, before any request. A run that leaves
     // out the review asks no model, so it needs no key either.
     const skip = skipReason(readSkipFacts(context), parseSkipOptions(inputs));
+    // A pull request that is merged or closed is never reviewed, whatever
+    // event started the run. It asks no model, so it needs no key either.
+    const state = readPullRequestState(context);
+    const closed = state !== "open";
     // Without the key, a pull request from a fork or a run of Dependabot ends
     // here with a notice, before any request: GitHub gives them no secrets,
     // so there is nothing the workflow could fix. Anywhere else, a missing
     // key stays an error.
-    if (!inputs.openaiApiKey && !skip) {
+    if (!inputs.openaiApiKey && !skip && !closed) {
       const notice = explainMissingSecret(context);
       if (notice) {
         core.notice(notice);
@@ -127,7 +143,7 @@ export async function run({
         return;
       }
     }
-    assertInputs(inputs, { needsKey: !skip });
+    assertInputs(inputs, { needsKey: !skip && !closed });
     // A pattern, a limit, a model name or a language that cannot be used
     // fails the run here, before any request.
     const excludeReason = createExcludeFilter(inputs.exclude);
@@ -146,6 +162,25 @@ export async function run({
       );
     }
 
+    // The status report goes to a second address, derived from the first.
+    const statusUrl = insights ? deriveStatusUrl(insights.url) : null;
+    const statusWanted = Boolean(insights?.secret && statusUrl);
+
+    // A closed pull request is not reviewed. It only has something to do if
+    // the final state can go to Insights; otherwise it ends before the first
+    // request to GitHub.
+    if (closed && !statusWanted) {
+      report.status = `ReviewOps left out the review: the pull request is ${state}. The final state goes to ReviewOps Insights only with \`insights-url\` (a path that ends on \`/review\`) and \`insights-secret\`, and at least one of them was not usable in this run.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
+      return;
+    }
+    if (insights && !statusUrl) {
+      core.notice(
+        "The status report for ReviewOps Insights is not sent: the path of `insights-url` does not end on `/review`, so the address of the status report cannot be derived.",
+      );
+    }
+
     core.info("ReviewOps started.");
     if (insights) {
       core.info(
@@ -157,10 +192,59 @@ export async function run({
     // written by its author and stays out.
     const pullRequest = readPullRequest(context);
     core.info(
-      `Reviewing ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
+      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
     );
 
     const octokit = getOctokit(inputs.githubToken);
+
+    if (closed) {
+      // Nothing is reviewed and nothing is posted: only the final state of
+      // the earlier findings is reported. A failure to read is a warning here,
+      // because this run exists for the report alone.
+      report.status = `ReviewOps left out the review: the pull request is ${state}. Only the final state of the earlier findings goes to ReviewOps Insights.`;
+      core.notice(report.status);
+      outputs = NOTHING_OPEN;
+      try {
+        const files = await listChangedFiles(octokit, pullRequest);
+        const earlierWork = await readHistory(octokit, pullRequest, {
+          compare: false,
+        });
+        const closedFiles = prepareFiles(
+          files,
+          createExcludeFilter(inputs.exclude),
+          parsePatch,
+        );
+        if (earlierWork.inlineComments.length > 0) {
+          const threads = await readThreadStates(octokit, pullRequest);
+          statusJob = () =>
+            deliverStatusReport({
+              core,
+              redact,
+              insights: { statusUrl, secret: insights.secret },
+              send: sendInsightsReport,
+              facts: {
+                pullRequest,
+                context,
+                state,
+                comments: earlierWork.inlineComments,
+                diffs: closedFiles.diffs,
+                unknownPaths: unknownPathsOf(files, closedFiles.diffs),
+                listingTruncated: files.truncated,
+                threads,
+              },
+            });
+        }
+      } catch (error) {
+        if (!isReadingError(error)) throw error;
+        core.warning(
+          redact(
+            `${describe(error)} The status report for ReviewOps Insights is not sent.`,
+          ),
+        );
+      }
+      return;
+    }
+
     const listing = await listChangedFiles(octokit, pullRequest);
 
     // What ReviewOps did on this pull request before: the commit it reviewed
@@ -182,32 +266,12 @@ export async function run({
     // Files that may hold secrets are left out first, under their new and
     // their old name, whatever the inputs say. Then generated and irrelevant
     // files, and files whose name cannot be put into the prompt. All of this
-    // happens before anything is parsed.
-    const relevant = [];
-    const sensitive = [];
-    const excluded = [];
-    let unusableNames = 0;
-    for (const file of listing.files) {
-      if (
-        isSensitiveFile(file.path) ||
-        (file.previousPath && isSensitiveFile(file.previousPath))
-      ) {
-        sensitive.push({ path: file.path, reason: SENSITIVE_REASON });
-        continue;
-      }
-      let reason = excludeReason(file.path);
-      if (!reason && !isUsablePath(file.path)) {
-        reason = UNUSABLE_PATH_REASON;
-        unusableNames += 1;
-      }
-      if (reason) excluded.push({ path: file.path, reason });
-      else relevant.push(file);
-    }
-
-    // Line numbers are calculated here and never taken from the model.
-    // Strings that look like secrets are masked right away: everything after
-    // this point, the limits included, sees only the masked text.
-    const { diffs, unreadable } = parseDiffs(relevant, parsePatch);
+    // happens before anything is parsed. Line numbers are calculated here and
+    // never taken from the model. Strings that look like secrets are masked
+    // right away: everything after this point, the limits included, sees only
+    // the masked text.
+    const { sensitive, excluded, unusableNames, diffs, unreadable } =
+      prepareFiles(listing, excludeReason, parsePatch);
 
     // After an earlier review, only files with a line that is new since then
     // go on. The others were checked already: they count in the log, not
@@ -222,29 +286,44 @@ export async function run({
 
     // Earlier findings whose line is still an added line of the pull request
     // stay open until the code changes or a person resolves their thread.
-    // Only GraphQL knows the resolved threads, and it is only asked when an
-    // earlier finding is still current. Both happen before anything costs
-    // money.
+    // Only GraphQL knows the resolved threads, and it is asked when an earlier
+    // finding is still current, or when a status report can go to Insights
+    // (`statusWanted`) and there are earlier comments to report. Both happen
+    // before anything costs money.
     const earlier = currentEarlierFindings(history.earlierFindings, diffs);
-    let resolved = new Set();
-    if (earlier.length > 0) {
+    const reportStatus = statusWanted && history.inlineComments.length > 0;
+    let threadStates = null;
+    if (earlier.length > 0 || reportStatus) {
       try {
-        resolved = await readResolvedComments(octokit, pullRequest);
+        threadStates = await readThreadStates(octokit, pullRequest);
       } catch (error) {
-        // The threads matter for the count only. Without `fail-on` the
-        // review goes on, and every earlier finding counts as open: in
-        // doubt more, never fewer. With `fail-on` the count decides about
-        // the step, so it must be right.
-        if (!(error instanceof ThreadsUnavailableError) || failOn !== "none") {
-          throw error;
+        if (!(error instanceof ThreadsUnavailableError)) throw error;
+        if (earlier.length > 0) {
+          // The threads matter for the count. Without `fail-on` the review
+          // goes on, and every earlier finding counts as open: in doubt more,
+          // never fewer. With `fail-on` the count decides about the step, so
+          // it must be right.
+          if (failOn !== "none") throw error;
+          core.warning(
+            redact(
+              `${error.message} Every earlier finding of ReviewOps counts as open.${reportStatus ? " The status report for ReviewOps Insights is not sent." : ""}`,
+            ),
+          );
+        } else {
+          core.warning(
+            redact(
+              `${error.message} The status report for ReviewOps Insights is not sent.`,
+            ),
+          );
         }
-        core.warning(
-          redact(
-            `${error.message} Every earlier finding of ReviewOps counts as open.`,
-          ),
-        );
       }
     }
+    const resolved = threadStates ? resolvedOf(threadStates) : new Set();
+    // Without a secret there is no status report. In a run where one would
+    // have gone out, the log says why.
+    secretMissingNotice =
+      Boolean(insights && statusUrl && !insights.secret) &&
+      history.inlineComments.length > 0;
 
     // Every regular end of the run counts the open findings, sets the
     // outputs and applies `fail-on`, also when nothing was sent to the
@@ -264,6 +343,29 @@ export async function run({
         core.info(
           `Open findings: ${open.total} (${SEVERITIES.map((severity) => `${open.bySeverity[severity]} ${severity}`).join(", ")}), ${open.earlier} of them from earlier comments; ${open.resolved} earlier findings are left out because their thread is resolved.`,
         );
+      }
+
+      // The state of the earlier findings goes to Insights at every regular
+      // end, after the outputs. It reports facts and changes nothing about
+      // how the run ends.
+      if (reportStatus && threadStates) {
+        statusJob = () =>
+          deliverStatusReport({
+            core,
+            redact,
+            insights: { statusUrl, secret: insights.secret },
+            send: sendInsightsReport,
+            facts: {
+              pullRequest,
+              context,
+              state,
+              comments: history.inlineComments,
+              diffs,
+              unknownPaths: unknownPathsOf(listing, diffs),
+              listingTruncated: listing.truncated,
+              threads: threadStates,
+            },
+          });
       }
 
       const reached = findingsAtThreshold(open.bySeverity, failOn);
@@ -578,6 +680,7 @@ export async function run({
   } catch (error) {
     // A run that ends with an error sends no report.
     insightsJob = null;
+    statusJob = null;
     // Mark the step as failed first: nothing below may prevent that.
     const message = redact(describe(error));
     core.setFailed(message);
@@ -595,7 +698,11 @@ export async function run({
       // A broken debug log must not hide the failure reported above.
     }
   } finally {
-    await finish(core, report, outputs, insightsJob);
+    await finish(core, report, outputs, {
+      insightsJob,
+      statusJob,
+      secretMissingNotice,
+    });
   }
 }
 
@@ -607,7 +714,12 @@ export async function run({
  * server that does not answer is no reason for a red step. The warnings name
  * no path and no message.
  */
-async function finish(core, report, outputs, insightsJob) {
+async function finish(
+  core,
+  report,
+  outputs,
+  { insightsJob, statusJob, secretMissingNotice },
+) {
   try {
     if (outputs) setOutputs(core, outputs);
   } catch {
@@ -625,12 +737,85 @@ async function finish(core, report, outputs, insightsJob) {
       report.insights = { text };
     }
   }
+  if (statusJob) {
+    try {
+      report.insightsStatus = await statusJob();
+    } catch {
+      const text =
+        "The status report for ReviewOps Insights could not be built or sent.";
+      core.warning(text);
+      report.insightsStatus = { text };
+    }
+  } else if (secretMissingNotice && !insightsJob) {
+    core.notice(NO_SECRET_TEXT);
+    report.insights = { text: NO_SECRET_TEXT };
+  }
   try {
     await core.summary.addRaw(buildSummary(report), true).write();
   } catch {
     core.warning("The job summary could not be written.");
   }
 }
+
+/**
+ * Splits the files of a pull request: the ones that never go to the model
+ * (possible secrets, excluded, a name that cannot be put into the prompt),
+ * and the parsed and masked diffs of the others.
+ */
+function prepareFiles(listing, excludeReason, parsePatch) {
+  const relevant = [];
+  const sensitive = [];
+  const excluded = [];
+  let unusableNames = 0;
+  for (const file of listing.files) {
+    if (
+      isSensitiveFile(file.path) ||
+      (file.previousPath && isSensitiveFile(file.previousPath))
+    ) {
+      sensitive.push({ path: file.path, reason: SENSITIVE_REASON });
+      continue;
+    }
+    let reason = excludeReason(file.path);
+    if (!reason && !isUsablePath(file.path)) {
+      reason = UNUSABLE_PATH_REASON;
+      unusableNames += 1;
+    }
+    if (reason) excluded.push({ path: file.path, reason });
+    else relevant.push(file);
+  }
+  return {
+    sensitive,
+    excluded,
+    unusableNames,
+    ...parseDiffs(relevant, parsePatch),
+  };
+}
+
+/**
+ * The paths of files of the pull request whose diff is not available: the
+ * ones that were not parsed (excluded, possible secrets, unreadable) and the
+ * ones GitHub lists without a text diff. For these the status report cannot
+ * say whether a commented line is unchanged. A deleted file, or one with no
+ * content change, is no such case: it has no added lines.
+ */
+function unknownPathsOf(listing, diffs) {
+  const parsed = new Set(diffs.map(({ path }) => path));
+  const paths = new Set();
+  for (const file of listing.files) {
+    if (parsed.has(file.path)) continue;
+    paths.add(file.path);
+    if (file.previousPath) paths.add(file.previousPath);
+  }
+  for (const { path, reason } of listing.skipped) {
+    if (reason === SKIP_REASONS.noPatch) paths.add(path);
+  }
+  return paths;
+}
+
+/** An error of reading from GitHub, as opposed to a defect of the action. */
+const isReadingError = (error) =>
+  error instanceof ThreadsUnavailableError ||
+  Number.isInteger(error?.cause?.status);
 
 /**
  * Parses the patch of every file and masks strings that look like secrets.

@@ -82,6 +82,11 @@ const isOwn = (item) =>
  *
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number, headSha: string }} pullRequest
+ * @param {object} [options]
+ * @param {boolean} [options.compare] Compare the last reviewed commit with
+ *   the head. Off for a run that reviews nothing (a closed pull request): it
+ *   needs the earlier comments only, so the request is saved and the result
+ *   is always `full`.
  * @returns {Promise<{
  *   mode: "full" | "incremental",
  *   since: string | null,
@@ -91,6 +96,7 @@ const isOwn = (item) =>
  *   ownReviews: number,
  *   ownComments: number,
  *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
+ *   inlineComments: { id: number, path: string, fingerprint: string }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
  *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
  *   `newLines` holds the added lines of the comparison by path. `null` as
@@ -98,7 +104,11 @@ const isOwn = (item) =>
  *   missing has no new line. In `full` mode, `newLines` is `null` and
  *   `reason` is one of {@link FULL_REASONS}.
  */
-export async function readHistory(octokit, pullRequest) {
+export async function readHistory(
+  octokit,
+  pullRequest,
+  { compare: withComparison = true } = {},
+) {
   const { owner, repo, pullNumber } = pullRequest;
   const listParameters = {
     owner,
@@ -142,11 +152,32 @@ export async function readHistory(octokit, pullRequest) {
     }
   }
 
+  // Every own inline comment with a fingerprint, whatever its severity, for
+  // the status report (#77). The path is the one GitHub names for the comment.
+  const inlineComments = [];
+  for (const comment of ownComments) {
+    const [head] = readHead(comment.body).fingerprints;
+    if (
+      head &&
+      Number.isSafeInteger(comment.id) &&
+      comment.id > 0 &&
+      typeof comment.path === "string" &&
+      comment.path !== ""
+    ) {
+      inlineComments.push({
+        id: comment.id,
+        path: comment.path,
+        fingerprint: head.fingerprint,
+      });
+    }
+  }
+
   const base = {
     fingerprints,
     ownReviews: ownReviews.length,
     ownComments: ownComments.length,
     earlierFindings,
+    inlineComments,
   };
   const full = (reason) => ({
     ...base,
@@ -157,7 +188,7 @@ export async function readHistory(octokit, pullRequest) {
   });
 
   const since = lastReviewedCommit(ownReviews);
-  if (since === null) return full(FULL_REASONS.noReview);
+  if (since === null || !withComparison) return full(FULL_REASONS.noReview);
 
   // The head was reviewed already: nothing is new, and nothing is compared.
   if (since === pullRequest.headSha) {
