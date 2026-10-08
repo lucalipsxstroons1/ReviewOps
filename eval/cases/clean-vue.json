@@ -1,0 +1,6 @@
+{
+  "description": "A component that emits an event, keys its list by id and stops its timer when it is removed.",
+  "path": "src/components/WorkoutList.vue",
+  "patch": "@@ -0,0 +1,35 @@\n+<template>\n+  <section class=\"workouts\">\n+    <h2>{{ title }}</h2>\n+    <p class=\"clock\">{{ now }}</p>\n+    <ul>\n+      <li v-for=\"workout in workouts\" :key=\"workout.id\">\n+        <button type=\"button\" @click=\"$emit('select', workout.id)\">\n+          {{ workout.name }}\n+        </button>\n+      </li>\n+    </ul>\n+  </section>\n+</template>\n+\n+<script>\n+export default {\n+  name: \"WorkoutList\",\n+  props: {\n+    title: { type: String, required: true },\n+    workouts: { type: Array, required: true },\n+  },\n+  emits: [\"select\"],\n+  data() {\n+    return { now: new Date().toLocaleTimeString(), timer: null };\n+  },\n+  mounted() {\n+    this.timer = setInterval(() => {\n+      this.now = new Date().toLocaleTimeString();\n+    }, 1000);\n+  },\n+  beforeUnmount() {\n+    clearInterval(this.timer);\n+  },\n+};\n+</script>",
+  "clean": true
+}

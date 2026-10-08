@@ -79,7 +79,11 @@ const INVALID = [
     /pr:/,
   ],
   ["a pull request with a path", valid(one({ pr: "../x/y#1" })), /pr:/],
-  ["an unknown focus", valid(one({ focus: "vue" })), /focus: must be one of/],
+  [
+    "an unknown focus",
+    valid(one({ focus: "no-such-focus" })),
+    /focus: must be one of/,
+  ],
   [
     "defects that are not a list",
     valid(one({ defects: "none" })),

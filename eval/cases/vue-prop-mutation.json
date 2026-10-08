@@ -1,0 +1,10 @@
+{
+  "description": "A component that assigns a value to one of its own props instead of emitting an event.",
+  "path": "src/components/UserPicker.vue",
+  "patch": "@@ -0,0 +1,27 @@\n+<template>\n+  <ul class=\"picker\">\n+    <li\n+      v-for=\"user in users\"\n+      :key=\"user.id\"\n+      :class=\"{ active: user.id === selectedId }\"\n+      @click=\"select(user.id)\"\n+    >\n+      {{ user.name }}\n+    </li>\n+  </ul>\n+</template>\n+\n+<script>\n+export default {\n+  name: \"UserPicker\",\n+  props: {\n+    users: { type: Array, required: true },\n+    selectedId: { type: String, default: null },\n+  },\n+  methods: {\n+    select(id) {\n+      this.selectedId = id;\n+    },\n+  },\n+};\n+</script>",
+  "expect": {
+    "category": "vue",
+    "lines": [23],
+    "minSeverity": "major"
+  }
+}

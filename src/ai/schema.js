@@ -7,7 +7,13 @@ import { validate } from "./json-schema.js";
 // them equal to the table in docs/response-format.md.
 
 export const SEVERITIES = ["critical", "major", "minor", "info"];
-export const CATEGORIES = ["code-quality", "react", "efcore", "security"];
+export const CATEGORIES = [
+  "code-quality",
+  "react",
+  "vue",
+  "efcore",
+  "security",
+];
 
 // The schema is shared by the request and the check. Nothing may change it.
 function deepFreeze(value) {
@@ -100,7 +106,7 @@ export const REVIEW_FORMAT = deepFreeze({
  * @property {string} path
  * @property {number} line
  * @property {"critical" | "major" | "minor" | "info"} severity
- * @property {"code-quality" | "react" | "efcore" | "security"} category
+ * @property {"code-quality" | "react" | "vue" | "efcore" | "security"} category
  * @property {string} title
  * @property {string} comment
  * @property {string} suggestion
