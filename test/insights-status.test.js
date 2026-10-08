@@ -9,6 +9,7 @@ import { fingerprintLine } from "../src/github/review.js";
 import {
   readResolvedComments,
   readThreadStates,
+  resolvedOf,
 } from "../src/github/threads.js";
 import { deriveStatusUrl } from "../src/insights/config.js";
 import {
@@ -132,10 +133,10 @@ test("reads for each thread whether it is resolved and whether the comment has a
   assert.deepEqual(
     [...states],
     [
-      [1, { resolved: true, thumbsDown: false }],
-      [2, { resolved: false, thumbsDown: true }],
-      [3, { resolved: true, thumbsDown: true }],
-      [4, { resolved: false, thumbsDown: false }],
+      [1, { resolved: true, thumbsDown: false, known: true }],
+      [2, { resolved: false, thumbsDown: true, known: true }],
+      [3, { resolved: true, thumbsDown: true, known: true }],
+      [4, { resolved: false, thumbsDown: false, known: true }],
     ],
   );
 });
@@ -171,6 +172,37 @@ test("takes only a thumbs down with a count above zero, and only that reaction",
   );
 });
 
+test("marks a thread whose fields have another shape as not known", async () => {
+  const octokit = createFakeOctokit([], {
+    threads: [
+      apiThread(1, true),
+      {
+        isResolved: "true",
+        comments: { nodes: [{ databaseId: 2, reactionGroups: [] }] },
+      },
+      { isResolved: true, comments: { nodes: [{ databaseId: 3 }] } },
+      {
+        isResolved: false,
+        comments: { nodes: [{ databaseId: 4, reactionGroups: "none" }] },
+      },
+    ],
+  });
+
+  const states = await readThreadStates(octokit, PULL_REQUEST);
+
+  assert.deepEqual(
+    [...states].map(([id, { known }]) => [id, known]),
+    [
+      [1, true],
+      [2, false],
+      [3, false],
+      [4, false],
+    ],
+  );
+  // The count of open findings still reads them as before.
+  assert.deepEqual([...resolvedOf(states)], [1, 3]);
+});
+
 test("lets nothing but two truth values leave the thread query", async () => {
   const thread = apiThread(7, true, {
     reactionGroups: [
@@ -184,7 +216,11 @@ test("lets nothing but two truth values leave the thread query", async () => {
 
   const states = await readThreadStates(octokit, PULL_REQUEST);
 
-  assert.deepEqual(states.get(7), { resolved: true, thumbsDown: true });
+  assert.deepEqual(states.get(7), {
+    resolved: true,
+    thumbsDown: true,
+    known: true,
+  });
   assert.doesNotMatch(JSON.stringify([...states]), /someone-secret|41/);
 });
 
@@ -378,7 +414,7 @@ test("leaves out a finding whose file is in the pull request without a diff", ()
     comments: [comment(1, "a"), comment(2, "x", "", "src/secret.js")],
     unknownPaths: new Set(["src/secret.js"]),
     threads: threadsOf(
-      [1, { resolved: false, thumbsDown: false }],
+      [1, { resolved: false, thumbsDown: false, known: true }],
       [2, { resolved: false, thumbsDown: false }],
     ),
   });
@@ -392,7 +428,7 @@ test("leaves out a finding in a file that is not among the parsed ones when the 
     comments: [comment(1, "a"), comment(2, "x", "", "src/later.js")],
     listingTruncated: true,
     threads: threadsOf(
-      [1, { resolved: false, thumbsDown: false }],
+      [1, { resolved: false, thumbsDown: false, known: true }],
       [2, { resolved: false, thumbsDown: false }],
     ),
   });
@@ -402,6 +438,19 @@ test("leaves out a finding in a file that is not among the parsed ones when the 
     [fingerprintOf("a")],
   );
   assert.equal(omitted.unknown, 1);
+});
+
+test("leaves out a finding whose thread is not known", () => {
+  const { payload, omitted } = build({
+    comments: [comment(1, "a"), comment(2, "b", "a")],
+    threads: threadsOf(
+      [1, { resolved: false, thumbsDown: false, known: true }],
+      [2, { resolved: false, thumbsDown: false, known: false }],
+    ),
+  });
+
+  assert.equal(payload.findings.length, 1);
+  assert.deepEqual(omitted, { unknown: 1, overLimit: 0 });
 });
 
 test("leaves out a finding whose thread was not read", () => {

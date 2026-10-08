@@ -22,7 +22,7 @@ export const MAX_STATUS_FINDINGS = 1000;
  *   (no patch, unreadable, excluded, possible secrets), or the list of files
  *   was cut off and the file is not among the parsed ones: whether the line
  *   is unchanged is unknown;
- * - the thread of its comment was not read.
+ * - the thread of its comment was not read, or its fields have another shape.
  *
  * Findings in the text of a review have no thread and are not reported.
  * Several comments with one fingerprint make one entry: the thread counts as
@@ -39,7 +39,7 @@ export const MAX_STATUS_FINDINGS = 1000;
  * @param {Set<string>} options.unknownPaths Paths of files of the pull
  *   request whose diff is not available.
  * @param {boolean} options.listingTruncated GitHub cut the list of files.
- * @param {Map<number, { resolved: boolean, thumbsDown: boolean }>} options.threads
+ * @param {Map<number, { resolved: boolean, thumbsDown: boolean, known?: boolean }>} options.threads
  *   `readThreadStates()`.
  * @returns {{
  *   payload: object | null,
@@ -75,7 +75,10 @@ export function buildStatusPayload({
         unknownPaths.has(path) || (listingTruncated && !parsed.has(path)),
     );
     const states = group.map(({ id }) => threads.get(id));
-    if (pathUnknown || states.some((thread) => thread === undefined)) {
+    if (
+      pathUnknown ||
+      states.some((thread) => thread === undefined || thread.known === false)
+    ) {
       unknown += 1;
       continue;
     }

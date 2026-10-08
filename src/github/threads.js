@@ -65,7 +65,7 @@ const THREAD_HINTS = Object.freeze({
  *
  * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
  * @param {{ owner: string, repo: string, pullNumber: number }} pullRequest
- * @returns {Promise<Map<number, { resolved: boolean, thumbsDown: boolean }>>}
+ * @returns {Promise<Map<number, { resolved: boolean, thumbsDown: boolean, known: boolean }>>}
  *   By the id of the first comment of a thread.
  * @throws {ThreadsUnavailableError} When GitHub does not answer the query,
  *   with a message that says what to do.
@@ -95,6 +95,13 @@ export async function readThreadStates(octokit, { owner, repo, pullNumber }) {
       states.set(id, {
         resolved: thread.isResolved === true,
         thumbsDown: hasThumbsDown(comment.reactionGroups),
+        // A thread with a field of another shape is not known. It still
+        // counts as before (not resolved unless `isResolved` is `true`), but
+        // the status report leaves its finding out instead of reporting
+        // "not resolved, no thumbs down" as a fact.
+        known:
+          typeof thread.isResolved === "boolean" &&
+          Array.isArray(comment.reactionGroups),
       });
     }
 
