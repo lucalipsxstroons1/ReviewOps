@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   REFERENCE_MODEL,
   RUNS_PER_CASE,
+  evalAreas,
   evalLanguage,
   evalModelName,
   failureLines,
@@ -10,6 +11,7 @@ import {
   loadCases,
   missingKeyOutcome,
   renderExamples,
+  renderMeasurement,
   renderTable,
   requiredPasses,
   runEvaluation,
@@ -20,6 +22,8 @@ import {
   RATE_LIMIT_WAIT_MS,
 } from "../eval/lib.mjs";
 import { AiError } from "../src/ai/error.js";
+import { areasFor } from "../src/ai/focus.js";
+import { buildSystemPrompt } from "../src/ai/prompt.js";
 import { DEFAULT_MODEL, parseModel } from "../src/ai/model.js";
 import { MAX_OUTPUT_TOKENS, REVIEW_FORMAT } from "../src/ai/schema.js";
 import { fromRoot } from "./helpers/run-action.js";
@@ -797,4 +801,77 @@ test("refuses a language that is not one of the codes", () => {
       JSON.stringify(value),
     );
   }
+});
+
+// --- The areas of the prompt (#74) -----------------------------------------
+
+test("reads EVAL_AREAS: all by default, matching on request, nothing else", () => {
+  assert.equal(evalAreas({}), "all");
+  assert.equal(evalAreas({ EVAL_AREAS: "" }), "all");
+  assert.equal(evalAreas({ EVAL_AREAS: " All " }), "all");
+  assert.equal(evalAreas({ EVAL_AREAS: "matching" }), "matching");
+  assert.throws(() => evalAreas({ EVAL_AREAS: "some" }), /all or matching/);
+});
+
+test("sends the same prompt to every case with all areas", async () => {
+  const calls = [];
+
+  await runEvaluation({ cases, ai: goodModel(calls) });
+
+  assert.deepEqual(
+    new Set(calls.map((c) => c.system)),
+    new Set([buildSystemPrompt()]),
+  );
+});
+
+test("builds the prompt of a case with the areas of its file when asked", async () => {
+  const calls = [];
+
+  await runEvaluation({ cases, ai: goodModel(calls), areas: "matching" });
+
+  for (const call of calls) {
+    const { path } = byPath(call.user);
+    assert.equal(
+      call.system,
+      buildSystemPrompt({ areas: areasFor([path]) }),
+      path,
+    );
+  }
+  const vue = calls.find((c) => byPath(c.user).path.endsWith(".vue"));
+  assert.doesNotMatch(vue.system, /efcore/);
+});
+
+test("counts the findings of a case and those of a category that does not fit the file", async () => {
+  const react = cases.find((c) => c.name === "react-missing-dependency");
+  const ai = {
+    async complete(request) {
+      const testCase = byPath(request.user);
+      const category = testCase === react ? "efcore" : "security";
+      return {
+        content: JSON.stringify({
+          summary: "s",
+          findings: [finding(testCase, { category })],
+        }),
+        finishReason: "stop",
+      };
+    },
+  };
+
+  const { measurement } = await runEvaluation({ cases, ai });
+
+  const forReact = measurement.find((m) => m.name === react.name);
+  assert.deepEqual(forReact, { name: react.name, findings: 3, foreign: 3 });
+  for (const m of measurement.filter((m) => m.name !== react.name)) {
+    assert.deepEqual([m.findings, m.foreign], [3, 0], m.name);
+  }
+});
+
+test("renders the measurement as a table", () => {
+  const text = renderMeasurement(
+    [{ name: "a", findings: 4, foreign: 1 }],
+    "matching",
+  );
+
+  assert.match(text, /areas: matching/);
+  assert.match(text, /| a | 4 | 1 |/);
 });

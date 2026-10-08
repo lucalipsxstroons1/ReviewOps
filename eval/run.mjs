@@ -14,12 +14,14 @@ import { createAiClient } from "../src/ai/client.js";
 import { parseModel } from "../src/ai/model.js";
 import { PROMPT_VERSION } from "../src/ai/prompt.js";
 import {
+  evalAreas,
   evalLanguage,
   evalModelName,
   failureLines,
   loadCases,
   missingKeyOutcome,
   renderExamples,
+  renderMeasurement,
   renderTable,
   runEvaluation,
   verdict,
@@ -45,9 +47,11 @@ if (apiKey === "") {
 async function evaluate(apiKey) {
   let model;
   let language;
+  let areas;
   try {
     model = parseModel(evalModelName(process.env));
     language = evalLanguage(process.env);
+    areas = evalAreas(process.env);
   } catch (error) {
     core.setFailed(error.message);
     return;
@@ -55,10 +59,11 @@ async function evaluate(apiKey) {
   const cases = loadCases(fileURLToPath(new URL("./cases", import.meta.url)));
 
   const ai = createAiClient({ apiKey, model, core });
-  const { rows, failures, examples } = await runEvaluation({
+  const { rows, failures, examples, measurement } = await runEvaluation({
     cases,
     ai,
     language,
+    areas,
   });
   const result = verdict(rows);
 
@@ -78,7 +83,13 @@ async function evaluate(apiKey) {
     rows,
     result,
   });
-  const text = [table, renderExamples(examples)].filter(Boolean).join("\n\n");
+  const text = [
+    table,
+    renderMeasurement(measurement, areas),
+    renderExamples(examples),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);

@@ -1,8 +1,8 @@
-export const id = 164;
-export const ids = [164];
+export const id = 634;
+export const ids = [634];
 export const modules = {
 
-/***/ 7164:
+/***/ 5634:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -935,7 +935,7 @@ function check(schema, value, path) {
 // them equal to the table in docs/response-format.md.
 
 const SEVERITIES = ["critical", "major", "minor", "info"];
-const CATEGORIES = [
+const schema_CATEGORIES = [
   "code-quality",
   "react",
   "vue",
@@ -989,7 +989,7 @@ const REVIEW_SCHEMA = deepFreeze({
           },
           category: {
             type: "string",
-            enum: CATEGORIES,
+            enum: schema_CATEGORIES,
             description:
               "Focus area of the finding. If more than one fits, security wins.",
           },
@@ -1088,7 +1088,62 @@ function parseReview({ content, finishReason }) {
   return data;
 }
 
+;// CONCATENATED MODULE: ./src/ai/focus.js
+
+
+// Areas that every file gets, whatever its name.
+const ALWAYS_AREAS = Object.freeze(["code-quality", "security"]);
+
+// Which focus area belongs to which file extension. The table is fixed: a
+// path from the pull request author only looks up a key here, and what goes
+// into the prompt is the name of an area, never a part of the path.
+// An extension that is not in the table adds nothing.
+const AREA_BY_EXTENSION = new Map([
+  ["jsx", "react"],
+  ["tsx", "react"],
+  // React code often lives in plain script files.
+  ["js", "react"],
+  ["ts", "react"],
+  ["mjs", "react"],
+  ["cjs", "react"],
+  ["mts", "react"],
+  ["cts", "react"],
+  ["vue", "vue"],
+  ["cs", "efcore"],
+]);
+
+/**
+ * The extension of a path: the text after the last dot of the file name, in
+ * lower case. A name without a dot has none.
+ *
+ * @param {string} path
+ * @returns {string} Empty if there is none.
+ */
+function extensionOf(path) {
+  const file = String(path).split(/[\\/]/).pop();
+  const dot = file.lastIndexOf(".");
+  return dot === -1 ? "" : file.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * The focus areas for the files of one request: `code-quality` and
+ * `security` always, plus the area of each known extension. The result is
+ * the union over all paths, in the order of `CATEGORIES`.
+ *
+ * @param {string[]} paths The paths of the files in the request.
+ * @returns {import("./schema.js").Finding["category"][]}
+ */
+function areasFor(paths) {
+  const wanted = new Set(ALWAYS_AREAS);
+  for (const path of paths) {
+    const area = AREA_BY_EXTENSION.get(extensionOf(path));
+    if (area !== undefined) wanted.add(area);
+  }
+  return CATEGORIES.filter((category) => wanted.has(category));
+}
+
 ;// CONCATENATED MODULE: ./src/ai/prompt.js
+
 
 
 
@@ -1220,30 +1275,49 @@ const SEVERITY_MEANING = {
  * @param {object} options
  * @param {keyof typeof LANGUAGES} [options.language] A code that
  *   `parseLanguage()` returned.
+ * @param {string[]} [options.areas] The focus areas to describe, names from
+ *   `CATEGORIES` (`areasFor()` returns them). Without it, all of them.
  * @returns {string}
- * @throws {Error} When the language is not in the table.
+ * @throws {Error} When the language is not in the table, or an area is not
+ *   in `CATEGORIES`, or `code-quality` or `security` is missing.
  */
-function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
+function buildSystemPrompt({
+  language = DEFAULT_LANGUAGE,
+  areas = schema_CATEGORIES,
+} = {}) {
   if (typeof language !== "string" || !Object.hasOwn(LANGUAGES, language)) {
     throw new Error(
       "The language of the prompt is not one of the known codes.",
     );
   }
   const languageName = LANGUAGES[language];
+  if (
+    !Array.isArray(areas) ||
+    !areas.every((area) => schema_CATEGORIES.includes(area)) ||
+    !ALWAYS_AREAS.every((area) => areas.includes(area))
+  ) {
+    throw new Error(
+      "The focus areas of the prompt must be names of the schema and include code-quality and security.",
+    );
+  }
+  // In the order of the schema, each area once.
+  const chosen = schema_CATEGORIES.filter((category) => areas.includes(category));
 
-  const focus = CATEGORIES.map((category) => {
-    const { title, checks } = FOCUS_AREAS[category];
-    return [
-      `${title} (category "${category}"):`,
-      ...checks.map((check) => `- ${check}`),
-    ].join("\n");
-  }).join("\n\n");
+  const focus = chosen
+    .map((category) => {
+      const { title, checks } = FOCUS_AREAS[category];
+      return [
+        `${title} (category "${category}"):`,
+        ...checks.map((check) => `- ${check}`),
+      ].join("\n");
+    })
+    .join("\n\n");
 
   const severities = SEVERITIES.map(
     (severity) => `- ${severity}: ${SEVERITY_MEANING[severity]}`,
   ).join("\n");
 
-  const categories = CATEGORIES.map((category) => `"${category}"`).join(", ");
+  const categories = chosen.map((category) => `"${category}"`).join(", ");
 
   return [
     "You are an experienced software engineer who reviews the diff of a pull request. Be factual and concrete. Give no praise and no general remarks. Do not comment on style that a linter or a formatter covers, such as indentation, quotes, semicolons, import order, line length or naming conventions.",

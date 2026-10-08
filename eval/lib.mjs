@@ -6,6 +6,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AiError, isFatal } from "../src/ai/error.js";
+import { areasFor } from "../src/ai/focus.js";
 import {
   DEFAULT_LANGUAGE,
   LANGUAGES,
@@ -73,6 +74,23 @@ export function evalModelName(env) {
  */
 export function evalLanguage(env) {
   return parseLanguage(env.EVAL_LANGUAGE ?? "");
+}
+
+/**
+ * Which focus areas the prompt of a case describes: `EVAL_AREAS`. `all`
+ * (the default, empty too) is the prompt of the action up to now;
+ * `matching` builds it with the areas of the file of the case, as chosen by
+ * `areasFor()`. Used to measure whether the choice helps (#74).
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {"all" | "matching"}
+ * @throws {Error} When the value is neither.
+ */
+export function evalAreas(env) {
+  const value = (env.EVAL_AREAS ?? "").trim().toLowerCase();
+  if (value === "" || value === "all") return "all";
+  if (value === "matching") return "matching";
+  throw new Error("EVAL_AREAS must be all or matching.");
 }
 
 // "info" is the lowest, "critical" the highest of the schema.
@@ -373,6 +391,8 @@ async function completeWithPatience(ai, wait, request) {
  * @param {{ complete: (request: object) => Promise<{ content: string, finishReason: string | null }> }} options.ai
  * @param {keyof typeof LANGUAGES} [options.language] A code that
  *   `evalLanguage()` returned.
+ * @param {"all" | "matching"} [options.areas] Which focus areas the prompt
+ *   of a case describes (`evalAreas()`).
  * @param {number} [options.concurrency] Requests at the same time.
  * @param {(milliseconds: number) => Promise<void>} [options.wait] Waits
  *   before a request that hit the rate limit is sent again. Tests replace it.
@@ -380,16 +400,22 @@ async function completeWithPatience(ai, wait, request) {
  *   rows: ({ name: string, clean: boolean } & ReturnType<typeof tally>)[],
  *   examples: { name: string, finding: import("../src/ai/schema.js").Finding }[],
  *   failures: { name: string, lines: string[] }[],
+ *   measurement: { name: string, findings: number, foreign: number }[],
  * }>}
  */
 export async function runEvaluation({
   cases,
   ai,
   language = DEFAULT_LANGUAGE,
+  areas = "all",
   concurrency = MAX_PARALLEL_EVAL_REQUESTS,
   wait = sleep,
 }) {
-  const system = buildSystemPrompt({ language });
+  const systemFor = (testCase) =>
+    buildSystemPrompt({
+      language,
+      ...(areas === "matching" && { areas: areasFor([testCase.path]) }),
+    });
 
   const jobs = [];
   for (const testCase of cases) {
@@ -410,7 +436,7 @@ export async function runEvaluation({
       }
       try {
         const answer = await completeWithPatience(ai, wait, {
-          system,
+          system: systemFor(job.testCase),
           user: job.testCase.user,
           responseFormat: REVIEW_FORMAT,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -473,7 +499,22 @@ export async function runEvaluation({
     examples.push({ name: testCase.name, finding });
   }
 
-  return { rows, failures, examples };
+  // For the comparison of the prompts (#74): all findings of a case over its
+  // runs, and those whose category does not belong to the file by
+  // `areasFor()`. A finding is counted once.
+  const measurement = cases.map((testCase) => {
+    const own = areasFor([testCase.path]);
+    const findings = jobs
+      .filter((job) => job.testCase === testCase && job.review)
+      .flatMap((job) => job.review.findings);
+    return {
+      name: testCase.name,
+      findings: findings.length,
+      foreign: findings.filter((f) => !own.includes(f.category)).length,
+    };
+  });
+
+  return { rows, failures, examples, measurement };
 }
 
 /**
@@ -532,4 +573,22 @@ export function failureLines(failures) {
     `${name}: a run missed its expectation. Findings:`,
     ...lines.map((line) => `- ${line}`),
   ]);
+}
+
+/**
+ * The numbers for the comparison of the prompts, as a Markdown table: all
+ * findings of a case and those of a category that does not fit its file.
+ *
+ * @param {{ name: string, findings: number, foreign: number }[]} measurement
+ * @param {"all" | "matching"} areas
+ * @returns {string}
+ */
+export function renderMeasurement(measurement, areas) {
+  return [
+    `## Findings per case (areas: ${areas})`,
+    "",
+    "| Case | Findings | Of a foreign category |",
+    "|---|---|---|",
+    ...measurement.map((m) => `| ${m.name} | ${m.findings} | ${m.foreign} |`),
+  ].join("\n");
 }

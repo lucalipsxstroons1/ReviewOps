@@ -1,5 +1,6 @@
 import { printable } from "../printable.js";
 import { SECRET_PLACEHOLDER } from "../secrets.js";
+import { ALWAYS_AREAS } from "./focus.js";
 import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
@@ -129,30 +130,49 @@ const SEVERITY_MEANING = {
  * @param {object} options
  * @param {keyof typeof LANGUAGES} [options.language] A code that
  *   `parseLanguage()` returned.
+ * @param {string[]} [options.areas] The focus areas to describe, names from
+ *   `CATEGORIES` (`areasFor()` returns them). Without it, all of them.
  * @returns {string}
- * @throws {Error} When the language is not in the table.
+ * @throws {Error} When the language is not in the table, or an area is not
+ *   in `CATEGORIES`, or `code-quality` or `security` is missing.
  */
-export function buildSystemPrompt({ language = DEFAULT_LANGUAGE } = {}) {
+export function buildSystemPrompt({
+  language = DEFAULT_LANGUAGE,
+  areas = CATEGORIES,
+} = {}) {
   if (typeof language !== "string" || !Object.hasOwn(LANGUAGES, language)) {
     throw new Error(
       "The language of the prompt is not one of the known codes.",
     );
   }
   const languageName = LANGUAGES[language];
+  if (
+    !Array.isArray(areas) ||
+    !areas.every((area) => CATEGORIES.includes(area)) ||
+    !ALWAYS_AREAS.every((area) => areas.includes(area))
+  ) {
+    throw new Error(
+      "The focus areas of the prompt must be names of the schema and include code-quality and security.",
+    );
+  }
+  // In the order of the schema, each area once.
+  const chosen = CATEGORIES.filter((category) => areas.includes(category));
 
-  const focus = CATEGORIES.map((category) => {
-    const { title, checks } = FOCUS_AREAS[category];
-    return [
-      `${title} (category "${category}"):`,
-      ...checks.map((check) => `- ${check}`),
-    ].join("\n");
-  }).join("\n\n");
+  const focus = chosen
+    .map((category) => {
+      const { title, checks } = FOCUS_AREAS[category];
+      return [
+        `${title} (category "${category}"):`,
+        ...checks.map((check) => `- ${check}`),
+      ].join("\n");
+    })
+    .join("\n\n");
 
   const severities = SEVERITIES.map(
     (severity) => `- ${severity}: ${SEVERITY_MEANING[severity]}`,
   ).join("\n");
 
-  const categories = CATEGORIES.map((category) => `"${category}"`).join(", ");
+  const categories = chosen.map((category) => `"${category}"`).join(", ");
 
   return [
     "You are an experienced software engineer who reviews the diff of a pull request. Be factual and concrete. Give no praise and no general remarks. Do not comment on style that a linter or a formatter covers, such as indentation, quotes, semicolons, import order, line length or naming conventions.",

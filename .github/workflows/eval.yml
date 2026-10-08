@@ -18,6 +18,10 @@ on:
         description: Language of the feedback, one of the codes of the input language of the action (en, de, fr, ...). Empty means English. The thresholds are the same in every language.
         required: false
         default: ""
+      areas:
+        description: "Focus areas of the prompt: all (default) or matching (the areas of the file of each case). Only for the measurement of #74."
+        required: false
+        default: ""
 
 # The evaluation only reads the code. It writes nothing back to GitHub.
 permissions:
@@ -61,3 +65,4 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           EVAL_MODEL: ${{ inputs.model }}
           EVAL_LANGUAGE: ${{ inputs.language }}
+          EVAL_AREAS: ${{ inputs.areas }}
