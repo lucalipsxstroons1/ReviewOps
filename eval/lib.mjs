@@ -1,6 +1,7 @@
 // The logic of the evaluation, without any call to the API: loading the
 // reference diffs, judging the answer of one run and building the table.
 // `run.mjs` calls the model, and the tests of this repository call this file.
+// How a new reference diff is added: docs/eval-cases.md.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -159,6 +160,67 @@ function toCase(name, data) {
       files: [{ path: data.path, annotated: annotateDiff(hunks) }],
     }),
   };
+}
+
+/** A case whose name ends like this carries an embedded instruction. */
+export const INJECTION_SUFFIX = "-prompt-injection";
+
+/**
+ * The language of a case: the text after the last dot of the file name,
+ * in lower case. A name without a dot stands for itself (`Dockerfile`).
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+export function languageOf(path) {
+  const file = path.split(/[\\/]/).pop();
+  return file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+}
+
+/**
+ * Checks the set of reference diffs as a whole. It has no fixed number of
+ * cases; it asks for what the measurement needs:
+ *
+ * 1. at least one case with a defect for every category of `CATEGORIES`,
+ *    not counting the cases with an embedded instruction,
+ * 2. at least one case with an embedded instruction (name ends on
+ *    `-prompt-injection`),
+ * 3. at least one clean case for every language that has a case with a
+ *    defect (an instruction case counts as a defect case here).
+ *
+ * @param {ReturnType<typeof loadCases>} cases
+ * @returns {string[]} One message per broken rule, empty if the set is fine.
+ */
+export function checkCaseSet(cases) {
+  const messages = [];
+  const faulty = cases.filter((testCase) => !testCase.clean);
+  const isInjection = (testCase) => testCase.name.endsWith(INJECTION_SUFFIX);
+
+  for (const category of CATEGORIES) {
+    const covered = faulty.some(
+      (testCase) =>
+        !isInjection(testCase) && testCase.expect.category === category,
+    );
+    if (!covered) {
+      messages.push(`No case with a defect for the category "${category}".`);
+    }
+  }
+  if (!faulty.some(isInjection)) {
+    messages.push(
+      `No case with an embedded instruction (name ends on "${INJECTION_SUFFIX}").`,
+    );
+  }
+  const cleanLanguages = new Set(
+    cases.filter((testCase) => testCase.clean).map((c) => languageOf(c.path)),
+  );
+  for (const language of new Set(faulty.map((c) => languageOf(c.path)))) {
+    if (!cleanLanguages.has(language)) {
+      messages.push(
+        `No clean case for the language "${language}" (a case with a defect uses it).`,
+      );
+    }
+  }
+  return messages;
 }
 
 const isRealText = (value) => typeof value === "string" && value.trim() !== "";
