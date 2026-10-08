@@ -8,7 +8,10 @@ against the very same object. The strict mode is not trusted: every answer is
 checked locally.
 
 The length of the answer is limited to 4096 tokens (`max_completion_tokens`).
-That is enough for about 30 findings.
+A reasoning model counts its thinking tokens against this limit as well
+(`gpt-6-luna` uses up to about 2500 of them), so the text of the answer has
+room for fewer findings than the limit alone suggests. The prompt asks for
+short texts for this reason.
 
 ## Fields
 

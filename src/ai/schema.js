@@ -24,14 +24,16 @@ function deepFreeze(value) {
   return value;
 }
 
-// About 30 findings fit in this. It also keeps one attempt below the timeout
-// of the client.
+// The limit counts the thinking tokens of a reasoning model as well (up to
+// about 2500 of it with `gpt-6-luna`, #41), so the text of the answer has
+// room for fewer findings than the limit suggests. It also keeps one attempt
+// below the timeout of the client.
 export const MAX_OUTPUT_TOKENS = 4096;
 
 /** The schema of the answer. Strict mode: every property is required. */
 export const REVIEW_SCHEMA = deepFreeze({
   type: "object",
-  description: "The review of one pull request.",
+  description: "The review of the files in this request.",
   properties: {
     summary: {
       type: "string",
