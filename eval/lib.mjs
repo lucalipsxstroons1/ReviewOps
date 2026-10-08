@@ -20,6 +20,7 @@ import {
   SEVERITIES,
   parseReview,
 } from "../src/ai/schema.js";
+import { DEFAULT_MODEL } from "../src/ai/model.js";
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
 import { printable } from "../src/printable.js";
@@ -42,23 +43,20 @@ export function requiredPasses(clean) {
   return clean ? RUNS_PER_CASE - 1 : RUNS_PER_CASE;
 }
 
-// The model the prompt is measured with. It is not the default model of the
-// action (`gpt-6-luna`, decided in #41): with `gpt-4o-mini` the prompt misses
-// the React dependency case (1 of 3 runs), with `gpt-4.1`, `gpt-6-luna` and
-// `gpt-6.1-sol` it meets every threshold.
-export const REFERENCE_MODEL = "gpt-4.1";
-
 /**
  * The name of the model for the evaluation: `EVAL_MODEL` if it is set and
- * not empty, else the reference model. An empty value is usually an input of
- * a workflow that was not filled in.
+ * not empty, else the default model of the action (`DEFAULT_MODEL`, #93). The
+ * prompt is measured with the model that users get without a choice. Another
+ * model stays possible by hand; `gpt-4.1` raises a false alarm at the clean
+ * React case in about half of the runs (see CLAUDE.md). An empty value is
+ * usually an input of a workflow that was not filled in.
  *
  * @param {Record<string, string | undefined>} env
  * @returns {string} Not yet checked, `parseModel()` does that.
  */
 export function evalModelName(env) {
   const requested = (env.EVAL_MODEL ?? "").trim();
-  return requested === "" ? REFERENCE_MODEL : requested;
+  return requested === "" ? DEFAULT_MODEL : requested;
 }
 
 /**
@@ -332,8 +330,9 @@ export function renderTable({
 }
 
 // The evaluation sends all its requests within seconds. With more than two
-// at once it went over the token limit per minute of the reference model on
-// the account of this project (#15, #47).
+// at once it went over the token limit per minute of `gpt-4.1` on the
+// account of this project (#15, #47). The model of the evaluation is now
+// `gpt-6-luna`, but `gpt-4.1` can still be chosen, so the limit stays.
 export const MAX_PARALLEL_EVAL_REQUESTS = 2;
 
 // After a rate limit the request is sent again, at most this often and after

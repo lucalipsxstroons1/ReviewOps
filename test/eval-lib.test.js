@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  REFERENCE_MODEL,
   RUNS_PER_CASE,
   evalLanguage,
   evalModelName,
@@ -626,10 +625,10 @@ test("counts invalid findings of every run and names them in the verdict", async
 
 // --- evalModelName() ---------------------------------------------------------
 
-test("measures with the reference model unless another one is asked for", () => {
-  assert.equal(REFERENCE_MODEL, "gpt-4.1");
+test("measures with the default model of the action unless another one is asked for", () => {
+  assert.equal(DEFAULT_MODEL, "gpt-6-luna");
   for (const env of [{}, { EVAL_MODEL: "" }, { EVAL_MODEL: "  \n" }]) {
-    assert.equal(evalModelName(env), REFERENCE_MODEL, JSON.stringify(env));
+    assert.equal(evalModelName(env), DEFAULT_MODEL, JSON.stringify(env));
   }
 });
 
@@ -641,9 +640,10 @@ test("takes the model of EVAL_MODEL, without surrounding white space", () => {
   );
 });
 
-test("keeps the reference model apart from the default model of the action", () => {
-  assert.equal(parseModel(REFERENCE_MODEL), REFERENCE_MODEL);
-  assert.notEqual(REFERENCE_MODEL, DEFAULT_MODEL);
+test("can still measure with another model, `gpt-4.1` included", () => {
+  assert.equal(evalModelName({ EVAL_MODEL: "gpt-4.1" }), "gpt-4.1");
+  assert.equal(parseModel(evalModelName({ EVAL_MODEL: "gpt-4.1" })), "gpt-4.1");
+  assert.equal(parseModel(evalModelName({})), DEFAULT_MODEL);
 });
 
 test("passes a run of the evaluation in which a clean diff raises one false alarm", async () => {

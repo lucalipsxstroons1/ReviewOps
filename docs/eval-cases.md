@@ -47,7 +47,7 @@ A failing test names the category or the extension that is missing.
 6. **Run `npm test`.** It checks the format, the lines, the markers, the set
    and the credential pattern.
 7. **Measure with `npm run eval`** (`OPENAI_API_KEY` in the environment, see
-   `CLAUDE.md`). A case with a defect has to be found in 3 of 3 runs, a clean
+   `CLAUDE.md`). It measures with the default model of the action. A case with a defect has to be found in 3 of 3 runs, a clean
    case may raise one false alarm in 3 runs. Fix the case or the prompt
    (and raise `PROMPT_VERSION` for a change of the wording) until the
    thresholds are met, and record the result in the pull request.
@@ -103,7 +103,8 @@ the file.
 
 Every case is sent three times, so a new case adds three calls to each run.
 Two calls run at a time (`MAX_PARALLEL_EVAL_REQUESTS`), which keeps the run
-below the token limit per minute of `gpt-4.1` on the account of the project,
+below the token limit per minute of `gpt-4.1` on the account of the project
+(the evaluation measures with `gpt-6-luna` now, but `gpt-4.1` can still be chosen),
 and the job in `.github/workflows/eval.yml` has a time limit of 15 minutes.
 There is no upper limit for the number of cases. If the run gets close to
 the limit of the job, that is the moment to raise it, in a separate change.

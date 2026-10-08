@@ -158,7 +158,7 @@ test("eval.yml: runs for changes of the prompt, the format and the cases, and by
     "src/ai/**",
     "eval/**",
     // The comparison of models (compare.yml) does not touch the prompt, and a
-    // change to it would only use up the token limit of the reference model.
+    // change to it would only use up the token limit of the model.
     "!eval/compare/**",
     ".github/workflows/eval.yml",
   ]);

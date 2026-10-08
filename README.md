@@ -246,7 +246,7 @@ The limits that keep a run small:
 | Requests at the same time | 4 |
 | Time of the job | `timeout-minutes: 15` in the example workflow |
 
-Files and findings over a limit are left out. The log and the job summary say which. The default model `gpt-6-luna` was chosen by a comparison on twelve pull requests ([#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)): it costs about a fourteenth of `gpt-6.1-sol` per review and finds nearly as many documented defects. `gpt-4o-mini` missed security defects that both newer models found and is no longer the default.
+Files and findings over a limit are left out. The log and the job summary say which. The default model `gpt-6-luna` was chosen by a comparison on twelve pull requests ([#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)): it costs about a fourteenth of `gpt-6.1-sol` per review and finds nearly as many documented defects. `gpt-4o-mini` missed security defects that both newer models found and is no longer the default. The prompt itself is measured with the default model on reference diffs; other models can report more false alarms, `gpt-4.1` for example guesses about code outside the diff more often.
 
 ## Known limitations
 
