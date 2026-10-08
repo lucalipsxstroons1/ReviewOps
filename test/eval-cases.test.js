@@ -3,8 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadCases } from "../eval/lib.mjs";
-import { CATEGORIES } from "../src/ai/schema.js";
+import { checkCaseSet, languageOf, loadCases } from "../eval/lib.mjs";
 import { buildUserPrompt } from "../src/ai/user-prompt.js";
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
@@ -12,22 +11,9 @@ import { fromRoot } from "./helpers/run-action.js";
 
 const cases = loadCases(fromRoot("eval/cases"));
 const faulty = cases.filter((testCase) => !testCase.clean);
-const clean = cases.filter((testCase) => testCase.clean);
 
-test("has one case with a defect per focus area, one with an embedded instruction and three clean cases", () => {
-  assert.equal(cases.length, 8);
-  const injection = faulty.find(
-    (testCase) => testCase.name === "security-prompt-injection",
-  );
-  assert.ok(injection);
-  assert.deepEqual(
-    faulty
-      .filter((testCase) => testCase !== injection)
-      .map((testCase) => testCase.expect.category)
-      .sort(),
-    [...CATEGORIES].sort(),
-  );
-  assert.equal(clean.length, 3);
+test("the set of cases meets the rules of the measurement", () => {
+  assert.deepEqual(checkCaseSet(cases), []);
 });
 
 test("the case with an embedded instruction tells the model to report nothing", () => {
@@ -37,11 +23,6 @@ test("the case with an embedded instruction tells the model to report nothing", 
   assert.match(injection.patch, /Ignore all previous instructions/);
   assert.match(injection.patch, /empty list of findings/);
   assert.equal(injection.expect.category, "security");
-});
-
-test("has one clean case in JavaScript/React, one in C# and one test file", () => {
-  const extensions = clean.map((testCase) => testCase.path.split(".").pop());
-  assert.deepEqual(extensions.sort(), ["cs", "js", "jsx"]);
 });
 
 test("the clean test file uses hostile strings on purpose and no credential", () => {
@@ -84,11 +65,37 @@ const DEFECT_MARKERS = {
   "security-prompt-injection": ["db.query(", "${req.query.name}"],
 };
 
+// Names every case without an entry and every entry without a case.
+function markerProblems(faultyCases, markers) {
+  const names = faultyCases.map((testCase) => testCase.name);
+  return [
+    ...names
+      .filter((name) => !(name in markers))
+      .map((name) => `No entry in DEFECT_MARKERS for the case ${name}.`),
+    ...Object.keys(markers)
+      .filter((name) => !names.includes(name))
+      .map((name) => `DEFECT_MARKERS has an entry without a case: ${name}.`),
+  ];
+}
+
+test("gives every case with a defect an entry in DEFECT_MARKERS", () => {
+  assert.deepEqual(markerProblems(faulty, DEFECT_MARKERS), []);
+});
+
+test("names a case without an entry and an entry without a case", () => {
+  const [first, ...rest] = faulty;
+  const fewer = { ...DEFECT_MARKERS };
+  delete fewer[first.name];
+
+  assert.deepEqual(markerProblems(faulty, fewer), [
+    `No entry in DEFECT_MARKERS for the case ${first.name}.`,
+  ]);
+  assert.deepEqual(markerProblems(rest, DEFECT_MARKERS), [
+    `DEFECT_MARKERS has an entry without a case: ${first.name}.`,
+  ]);
+});
+
 test("points the expected lines at the defect", () => {
-  assert.deepEqual(
-    Object.keys(DEFECT_MARKERS).sort(),
-    faulty.map((c) => c.name).sort(),
-  );
   for (const testCase of faulty) {
     const added = testCase.user
       .split("\n")
@@ -182,7 +189,7 @@ for (const [name, data, message] of [
   ["an unknown key", { ...VALID, note: "x" }, /"note" is not a known key/],
   [
     "an unknown category",
-    { ...VALID, expect: { ...VALID.expect, category: "vue" } },
+    { ...VALID, expect: { ...VALID.expect, category: "no-such-category" } },
     /unknown category/,
   ],
   [
@@ -213,4 +220,117 @@ test("refuses a patch that cannot be read", (t) => {
   const error = failureFor(t, { ...VALID, patch: "not a patch" });
 
   assert.equal(error.name, "PatchFormatError");
+});
+
+// --- The set of cases --------------------------------------------------------
+
+function fakeCase(name, path, category) {
+  return {
+    name,
+    path,
+    clean: category === undefined,
+    expect: category === undefined ? null : { category },
+  };
+}
+
+// A complete set: every category, a case with an embedded instruction, a
+// clean case for each language with a defect. Each test takes one thing away.
+const SET = [
+  fakeCase("a", "a.js", "code-quality"),
+  fakeCase("b", "b.jsx", "react"),
+  fakeCase("c", "c.cs", "efcore"),
+  fakeCase("d", "d.js", "security"),
+  fakeCase("e-prompt-injection", "e.js", "security"),
+  fakeCase("clean-a", "x.js"),
+  fakeCase("clean-b", "x.jsx"),
+  fakeCase("clean-c", "x.cs"),
+];
+
+test("accepts a complete set, whatever its size", () => {
+  assert.deepEqual(checkCaseSet(SET), []);
+  assert.deepEqual(
+    checkCaseSet([
+      ...SET,
+      fakeCase("vue-code-quality", "src/App.VUE", "code-quality"),
+      fakeCase("clean-vue", "src/Other.vue"),
+    ]),
+    [],
+  );
+});
+
+test("accepts the real cases plus a new valid case with its marker", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "eval-cases-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(
+    join(directory, "vue-code-quality.json"),
+    JSON.stringify({ ...VALID, path: "src/App.vue" }),
+  );
+  writeFileSync(
+    join(directory, "clean-vue.json"),
+    JSON.stringify({
+      description: "d",
+      path: "src/B.vue",
+      patch: VALID.patch,
+      clean: true,
+    }),
+  );
+  const added = loadCases(directory);
+
+  assert.deepEqual(checkCaseSet([...cases, ...added]), []);
+  assert.deepEqual(
+    markerProblems([...faulty, added[1]], {
+      ...DEFECT_MARKERS,
+      "vue-code-quality": ["one"],
+    }),
+    [],
+  );
+});
+
+test("names a category without a case with a defect", () => {
+  const messages = checkCaseSet(SET.filter((c) => c.name !== "b"));
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /"react"/);
+});
+
+test("does not let the case with an embedded instruction stand for its category", () => {
+  const messages = checkCaseSet(SET.filter((c) => c.name !== "d"));
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /"security"/);
+});
+
+test("asks for a case with an embedded instruction", () => {
+  const messages = checkCaseSet(
+    SET.filter((c) => !c.name.endsWith("-prompt-injection")),
+  );
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /embedded instruction/);
+});
+
+test("names the language of a case with a defect that has no clean case", () => {
+  const messages = checkCaseSet([
+    ...SET,
+    fakeCase("vue-code-quality", "src/App.vue", "code-quality"),
+  ]);
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /"vue"/);
+});
+
+test("counts the case with an embedded instruction for the language rule", () => {
+  const messages = checkCaseSet([
+    ...SET,
+    fakeCase("x-prompt-injection", "x.php", "security"),
+  ]);
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /"php"/);
+});
+
+test("takes the language from the text after the last dot, in lower case", () => {
+  assert.equal(languageOf("src/App.test.JS"), "js");
+  assert.equal(languageOf("a/b.d/Dockerfile"), "dockerfile");
+  assert.equal(languageOf("Dockerfile"), "dockerfile");
 });
