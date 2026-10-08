@@ -122,6 +122,17 @@ const CHECKPOINTS = {
     "cleanup",
     "dangerouslySetInnerHTML",
   ],
+  vue: [
+    "`v-html`",
+    "props changed",
+    "lost reactivity",
+    "`.value`",
+    "beforeUnmount",
+    "onUnmounted",
+    "onWatcherCleanup",
+    "`:key`",
+    "`v-if` together with `v-for`",
+  ],
   efcore: [
     "N+1",
     "AsNoTracking()",
@@ -142,7 +153,7 @@ const CHECKPOINTS = {
   ],
 };
 
-test("covers all four focus areas", () => {
+test("covers every focus area", () => {
   assert.deepEqual(Object.keys(CHECKPOINTS), CATEGORIES);
 });
 
@@ -325,6 +336,7 @@ const PROMPT_HASHES = {
   7: "6f2c536387791ed4a61ec371a5f27bfaa4d3531aeae0316e46bc58a837d132c7",
   8: "117abf81c7b37ef4a96b4d3c1bbaccc7d81b1287d0d8526423ffcf8b32d4bc25",
   9: "418bbb35719e173293cdb1c82a692e11a12e47007fb669021651a36d85a395cb",
+  10: "92a160747ab60ea4124a3601c92fadb32f7ca71706000010332a475f9d688d39",
 };
 
 test("changes the version whenever the wording of the prompt changes", () => {

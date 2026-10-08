@@ -55,7 +55,7 @@ a built report.
 | `githubReviewId` | integer or `null` | from 1 | ID of the review that was posted at GitHub; `null` if no review was posted |
 | `findings` | array of objects | 0 to 500 entries | The findings the review of this run shows |
 | `findings[].severity` | string | `critical`, `major`, `minor` or `info` | Severity |
-| `findings[].category` | string | `[a-z][a-z0-9-]{0,39}`; today `code-quality`, `react`, `efcore`, `security` | Focus area |
+| `findings[].category` | string | `[a-z][a-z0-9-]{0,39}`; today `code-quality`, `react`, `vue`, `efcore`, `security` | Focus area |
 | `findings[].path` | string | 1 to 1024 characters | Path of the file, as GitHub names it |
 | `findings[].line` | integer or `null` | from 1 | Line in the new file; `null` if the diff does not show the line |
 | `findings[].fingerprint` | string or `null` | 16 lower case hex characters | Fingerprint of the line from `lineFingerprint()`; `null` exactly when `line` is `null` |
@@ -135,7 +135,7 @@ report from a prepared run.
   "durationMs": 48211,
   "mode": "full",
   "actionVersion": "0.1.0",
-  "promptVersion": 9,
+  "promptVersion": 10,
   "githubReviewId": 2817345012,
   "findings": [
     {

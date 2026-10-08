@@ -4,7 +4,7 @@ import { CATEGORIES, SEVERITIES } from "./schema.js";
 
 // The prompt is versioned so that a measurement of the model can be matched
 // to one state of the text. Raise it with every change of the wording.
-export const PROMPT_VERSION = 9;
+export const PROMPT_VERSION = 10;
 
 // The same value is written into action.yml. A test keeps them equal.
 export const DEFAULT_LANGUAGE = "en";
@@ -69,6 +69,17 @@ const FOCUS_AREAS = {
       "lists rendered without a stable `key`, or with the array index as key where the list changes",
       "effects that start a subscription, timer or request without cleanup",
       "`dangerouslySetInnerHTML` with content that is not sanitized",
+    ],
+  },
+  vue: {
+    title: "Vue 3",
+    checks: [
+      "`v-html` with content that is not sanitized",
+      "props changed by the component: assigning to a prop (`this.<prop> = value`, `props.<prop> = value`) or changing an object or array prop in place, instead of emitting an event or working on a copy",
+      "lost reactivity: destructuring a `reactive()` object, or reading or writing a `ref` without `.value` in the script",
+      "timers, event listeners, subscriptions or watchers started without cleanup when the component is removed (`beforeUnmount` or `unmounted` in the Options API, `onUnmounted` or `onWatcherCleanup` in the Composition API)",
+      "`v-for` without a stable `:key`, or with the array index as key where the list changes",
+      "`v-if` together with `v-for` on the same element",
     ],
   },
   efcore: {

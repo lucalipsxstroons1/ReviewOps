@@ -22,7 +22,7 @@ keeps this table equal to the schema.
 | `findings[].path` | string | Path of the file, exactly as in the request. |
 | `findings[].line` | integer | Line number in the new file, one of the numbers shown in the annotated diff. |
 | `findings[].severity` | string: `critical`, `major`, `minor`, `info` | How serious the problem is. |
-| `findings[].category` | string: `code-quality`, `react`, `efcore`, `security` | Focus area of the finding. If more than one fits, security wins. |
+| `findings[].category` | string: `code-quality`, `react`, `vue`, `efcore`, `security` | Focus area of the finding. If more than one fits, security wins. |
 | `findings[].title` | string | Headline of the finding in one sentence. |
 | `findings[].comment` | string | What the problem is and why it matters. |
 | `findings[].suggestion` | string | What to change, with a short code example if needed. |

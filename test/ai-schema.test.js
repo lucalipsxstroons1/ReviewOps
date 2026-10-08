@@ -42,7 +42,13 @@ function failure(fn) {
 
 test("defines the values of severity and category", () => {
   assert.deepEqual(SEVERITIES, ["critical", "major", "minor", "info"]);
-  assert.deepEqual(CATEGORIES, ["code-quality", "react", "efcore", "security"]);
+  assert.deepEqual(CATEGORIES, [
+    "code-quality",
+    "react",
+    "vue",
+    "efcore",
+    "security",
+  ]);
   const finding = REVIEW_SCHEMA.properties.findings.items.properties;
   assert.deepEqual(finding.severity.enum, SEVERITIES);
   assert.deepEqual(finding.category.enum, CATEGORIES);
@@ -245,7 +251,10 @@ const INVALID = [
   ],
   [
     "a category that is not defined",
-    { ...REVIEW, findings: [FINDING, { ...FINDING, category: "vue" }] },
+    {
+      ...REVIEW,
+      findings: [FINDING, { ...FINDING, category: "no-such-category" }],
+    },
     "findings[1].category",
   ],
   [

@@ -56,6 +56,7 @@ test("expects a line that the model can comment on, in every case with a defect"
 const DEFECT_MARKERS = {
   "code-quality-off-by-one": ["i <= items.length", "items[i].price"],
   "react-missing-dependency": ["useEffect(", "fetchProfile(userId)", "}, []);"],
+  "vue-prop-mutation": ["this.selectedId = id"],
   "efcore-n-plus-one": [
     "foreach (var order in orders)",
     "_db.OrderItems",
@@ -238,12 +239,14 @@ function fakeCase(name, path, category) {
 const SET = [
   fakeCase("a", "a.js", "code-quality"),
   fakeCase("b", "b.jsx", "react"),
+  fakeCase("f", "f.vue", "vue"),
   fakeCase("c", "c.cs", "efcore"),
   fakeCase("d", "d.js", "security"),
   fakeCase("e-prompt-injection", "e.js", "security"),
   fakeCase("clean-a", "x.js"),
   fakeCase("clean-b", "x.jsx"),
   fakeCase("clean-c", "x.cs"),
+  fakeCase("clean-f", "x.vue"),
 ];
 
 test("accepts a complete set, whatever its size", () => {
@@ -251,8 +254,8 @@ test("accepts a complete set, whatever its size", () => {
   assert.deepEqual(
     checkCaseSet([
       ...SET,
-      fakeCase("vue-code-quality", "src/App.VUE", "code-quality"),
-      fakeCase("clean-vue", "src/Other.vue"),
+      fakeCase("svelte-code-quality", "src/App.SVELTE", "code-quality"),
+      fakeCase("clean-svelte", "src/Other.svelte"),
     ]),
     [],
   );
@@ -262,14 +265,14 @@ test("accepts the real cases plus a new valid case with its marker", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "eval-cases-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   writeFileSync(
-    join(directory, "vue-code-quality.json"),
-    JSON.stringify({ ...VALID, path: "src/App.vue" }),
+    join(directory, "svelte-code-quality.json"),
+    JSON.stringify({ ...VALID, path: "src/App.svelte" }),
   );
   writeFileSync(
-    join(directory, "clean-vue.json"),
+    join(directory, "clean-svelte.json"),
     JSON.stringify({
       description: "d",
-      path: "src/B.vue",
+      path: "src/B.svelte",
       patch: VALID.patch,
       clean: true,
     }),
@@ -280,7 +283,7 @@ test("accepts the real cases plus a new valid case with its marker", (t) => {
   assert.deepEqual(
     markerProblems([...faulty, added[1]], {
       ...DEFECT_MARKERS,
-      "vue-code-quality": ["one"],
+      "svelte-code-quality": ["one"],
     }),
     [],
   );
@@ -312,11 +315,11 @@ test("asks for a case with an embedded instruction", () => {
 test("names the language of a case with a defect that has no clean case", () => {
   const messages = checkCaseSet([
     ...SET,
-    fakeCase("vue-code-quality", "src/App.vue", "code-quality"),
+    fakeCase("svelte-code-quality", "src/App.svelte", "code-quality"),
   ]);
 
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /"vue"/);
+  assert.match(messages[0], /"svelte"/);
 });
 
 test("counts the case with an embedded instruction for the language rule", () => {

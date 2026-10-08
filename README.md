@@ -4,7 +4,7 @@ ReviewOps is a GitHub Action that reviews pull requests with an AI model. It sta
 
 ![An inline comment of ReviewOps at a useEffect hook with a missing dependency](docs/images/inline-comment.png)
 
-- **Focus areas:** code quality, React, EF Core and security. Each finding has a severity (`critical`, `major`, `minor`, `info`) and a category.
+- **Focus areas:** code quality, React, Vue, EF Core and security. Each finding has a severity (`critical`, `major`, `minor`, `info`) and a category.
 - **Only the added lines get comments.** The action calculates the line numbers itself. A line number from the model counts only if the diff shows that line.
 - **Repeated runs stay quiet.** A new push reviews only what is new and never repeats a comment.
 - **It never decides about a merge.** The review has the type `COMMENT`, never `APPROVE` or `REQUEST_CHANGES`. You can let the step fail on open findings with `fail-on`.
