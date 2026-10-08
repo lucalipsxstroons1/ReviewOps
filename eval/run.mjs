@@ -3,8 +3,8 @@
 // command fails when a threshold of the issue is missed. It costs a few cents
 // at most and is not part of `npm test`.
 //
-//   OPENAI_API_KEY=... npm run eval                       (reference model)
-//   EVAL_MODEL=gpt-4o-mini OPENAI_API_KEY=... npm run eval  (another model)
+//   OPENAI_API_KEY=... npm run eval                       (default model of the action)
+//   EVAL_MODEL=gpt-4.1 OPENAI_API_KEY=... npm run eval      (another model)
 //   EVAL_LANGUAGE=de OPENAI_API_KEY=... npm run eval        (German feedback)
 
 import * as core from "@actions/core";
