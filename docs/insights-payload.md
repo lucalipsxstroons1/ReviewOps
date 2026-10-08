@@ -135,7 +135,7 @@ report from a prepared run.
   "durationMs": 48211,
   "mode": "full",
   "actionVersion": "0.1.0",
-  "promptVersion": 10,
+  "promptVersion": 11,
   "githubReviewId": 2817345012,
   "findings": [
     {

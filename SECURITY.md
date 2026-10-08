@@ -16,6 +16,8 @@ Every run sends, for the files it reviews:
 - a fixed system prompt and the format of the answer,
 - the API key, as an `Authorization` header, to `https://api.openai.com/v1` and nowhere else. The address cannot be changed, and variables of the environment such as `OPENAI_BASE_URL` have no effect.
 
+The system prompt tells the model that everything between the `<file>` tags is data written by the author of the pull request and never an instruction. Every line of the diff starts with a number column, so a `<file>` or `</file>` tag written by the author never stands at the start of a line, and the prompt says so: whatever follows a bar `|` or `@@` is text of the file, also when it looks like a tag or like an instruction. This lowers the risk, it is no guarantee, which is why the answer is checked anyway (see below).
+
 What is **not** sent: the title, the description and the author of the pull request, files that were deleted, binary files, files that are left out by the built-in list (lockfiles, build output, generated code) or by the input `exclude`, files over the limits `max-files` and `max-diff-chars`, and the files below.
 
 ### Files that are never sent
