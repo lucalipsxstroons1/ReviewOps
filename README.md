@@ -162,7 +162,9 @@ name: ReviewOps
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
+    # "closed" lets the action send the final state of the findings (merged or
+    # not). A run on a closed pull request reviews nothing.
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled, closed]
 
 permissions:
   contents: read
@@ -192,6 +194,16 @@ jobs:
 - **It never breaks the run.** If the report does not arrive (wrong secret, server down, redirect), the step shows a warning with the status and ends as it would have ended without Insights, also with `fail-on`. The action tries up to three times, with the same report each time, so Insights stores it once.
 - **Forks and Dependabot.** GitHub passes them no repository secrets. The review still takes place, and the log says that no report was sent.
 
+### What became of the findings
+
+A second, smaller report tells Insights what became of the findings of earlier runs, so that it can show how useful the reviews are. For each earlier inline comment of the action it holds the fingerprint of the line and three truth values: whether the line is unchanged, whether the thread is resolved, and whether the comment has a 👎. It never holds a text, a name, a number of reactions or code.
+
+- **A 👎 on a comment counts as a false alarm.** Insights shows such findings as false positives. Anyone who may react to the pull request can set it; in a public repository that is every GitHub user.
+- **When.** At the end of every run that has an earlier finding to report, and, if the workflow also runs on `closed` (as in the example above), when the pull request is merged or closed. That run asks no model, needs no OpenAI key, posts nothing and changes no comment: it only sends the final state. A closed pull request is never reviewed, whichever event started the run.
+- **Address.** Derived from `insights-url`: a path that ends on `/review` becomes `/status`. For any other path no status report is sent, and the log says so.
+- **Limits.** Findings in the text of a review (without a line) are not reported, and a finding whose state cannot be determined (a file without a text diff, an unreadable thread) is left out. Insights then shows it as open. The state follows at the next run or when the pull request closes: there is no event for a resolved thread or a 👎.
+- **Without `insights-url`** nothing changes, and the action makes no additional request to GitHub.
+
 ## How it works
 
 1. The action reads the changed files of the pull request through the GitHub API and leaves out files that are not worth a review (lockfiles, build output, generated code, binary files) and every file that may hold secrets.
@@ -206,7 +218,7 @@ jobs:
 - **Never sent:** files that may hold secrets (`.env*`, key and certificate files, `id_rsa*`, `.npmrc`, `.netrc`, `credentials.json`, `secrets.*` and a few more), under their new and their old name. The list is fixed, and no input can change it. The title, the description and the author of the pull request are not sent either.
 - **Masked before sending:** strings that look like GitHub tokens, OpenAI keys, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private keys. This is a safety net, not a guarantee. If a pull request contains a real secret, treat it as leaked.
 - **Rights:** the workflow needs `contents: read` and `pull-requests: write`, nothing else.
-- **Insights, only if you switch it on:** with `insights-url`, a report with key figures (never code, never a text of the model) goes to the address you set. Without it, nothing leaves the runner except the requests to GitHub and OpenAI.
+- **Insights, only if you switch it on:** with `insights-url`, a report with key figures (never code, never a text of the model) goes to the address you set, and a second, smaller report with the fingerprint of each earlier finding and three truth values (line unchanged, thread resolved, 👎). Without it, nothing leaves the runner except the requests to GitHub and OpenAI.
 - **Forks and Dependabot:** GitHub passes no secrets to workflows of pull requests from forks, and runs started by Dependabot get only the Dependabot secrets. The run then ends green with a notice and no review. A green run does not mean that the pull request was reviewed.
 - **The answer of the model is untrusted.** It is checked, cut to a fixed length and made safe for Markdown before it is posted: no link, image, HTML or mention gets through. The action never approves a pull request and never requests changes.
 - **Not in the log:** the prompt, the answer of the model, the content of a diff, the title of the pull request and every key.

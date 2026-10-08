@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "repository": "octo-org/shop-api",
+  "prNumber": 42,
+  "runId": 18234599012,
+  "runAttempt": 1,
+  "pullRequestState": "merged",
+  "findings": [
+    {
+      "fingerprint": "5a1f0c9e3b7d2a46",
+      "lineUnchanged": false,
+      "threadResolved": true,
+      "thumbsDown": false
+    },
+    {
+      "fingerprint": "c04e7a91d2b85f36",
+      "lineUnchanged": true,
+      "threadResolved": false,
+      "thumbsDown": false
+    },
+    {
+      "fingerprint": "7e22b1d09a4c5f83",
+      "lineUnchanged": true,
+      "threadResolved": null,
+      "thumbsDown": true
+    }
+  ]
+}

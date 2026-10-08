@@ -23,10 +23,30 @@ export function apiFile(filename, fields = {}) {
  *
  * @param {number} id The id of the comment that opened the thread.
  * @param {boolean} [isResolved]
+ * @param {object} [options]
+ * @param {boolean} [options.thumbsDown] The comment carries a thumbs down.
+ * @param {{ content: string, reactors: { totalCount: number } }[]} [options.reactionGroups]
+ *   Reaction groups as GitHub answers them, instead of the default ones.
  */
-export const apiThread = (id, isResolved = false) => ({
+export const apiThread = (
+  id,
+  isResolved = false,
+  { thumbsDown = false, reactionGroups } = {},
+) => ({
   isResolved,
-  comments: { nodes: [{ databaseId: id }] },
+  comments: {
+    nodes: [
+      {
+        databaseId: id,
+        // GitHub lists a group only if somebody used that reaction.
+        reactionGroups:
+          reactionGroups ??
+          (thumbsDown
+            ? [{ content: "THUMBS_DOWN", reactors: { totalCount: 3 } }]
+            : []),
+      },
+    ],
+  },
 });
 
 // Threads per page of the GraphQL answer, like GitHub.

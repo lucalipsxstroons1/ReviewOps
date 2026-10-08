@@ -101,3 +101,18 @@ function parseSecret(secret) {
   }
   return secret;
 }
+
+/**
+ * The address for the status report (#77), derived from the address of the
+ * review report: a path that ends on `/review` becomes `/status`. Any other
+ * path gives `null`, and the action sends no status report.
+ *
+ * @param {string} url `url` of `parseInsightsConfig()`, in its normal form.
+ * @returns {string | null}
+ */
+export function deriveStatusUrl(url) {
+  const address = new URL(url);
+  if (!address.pathname.endsWith("/review")) return null;
+  address.pathname = `${address.pathname.slice(0, -"/review".length)}/status`;
+  return address.href;
+}

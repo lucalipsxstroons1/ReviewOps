@@ -65,18 +65,20 @@ export const REVIEW_TIMEOUT_MINUTES = 15;
  *
  * Requests are filled in the order of GitHub, so two neighbouring requests
  * always hold more than one budget: a pull request of the default size needs
- * about eight requests at most. The report for Insights (#76) comes on top
- * in the worst case: every attempt runs into its time limit, and the pauses
- * between the attempts are as long as they may be.
+ * about eight requests at most. The two reports for Insights (#76, #77) come
+ * on top in the worst case: every attempt runs into its time limit, and the
+ * pauses between the attempts are as long as they may be.
  */
 export function assertTimeoutForRequests(job) {
   const requests = 2 * Math.ceil(DEFAULT_MAX_DIFF_CHARS / MAX_REQUEST_CHARS);
   const rounds = Math.ceil(requests / MAX_PARALLEL_REQUESTS);
   // Three attempts of 120 seconds and the waits of the SDK between them.
   const minutesPerRequest = (3 * 120 + 30) / 60;
+  const reports = 2;
   const insightsMinutes =
-    (MAX_ATTEMPTS * (ATTEMPT_TIMEOUT_MS / 1000) +
-      (MAX_ATTEMPTS - 1) * MAX_PAUSE_SECONDS) /
+    (reports *
+      (MAX_ATTEMPTS * (ATTEMPT_TIMEOUT_MS / 1000) +
+        (MAX_ATTEMPTS - 1) * MAX_PAUSE_SECONDS)) /
     60;
 
   assert.equal(job["timeout-minutes"], REVIEW_TIMEOUT_MINUTES);
@@ -90,8 +92,17 @@ export function assertTimeoutForRequests(job) {
  * requests, a draft that is marked ready, and a label that is taken off (the
  * skip label starts the review again when it goes). Every other event type
  * would review as before, so nothing else is listed.
+ *
+ * The one named variant (#77) is the workflow that reports to ReviewOps
+ * Insights: it also runs on `closed`, because the final state of the
+ * findings (merged or not) can only be sent then. Such a run reviews nothing.
+ * The workflow of this repository and the plain example have no `closed`.
+ *
+ * @param {object} config
+ * @param {object} [options]
+ * @param {boolean} [options.closed] The variant with `closed`.
  */
-export function assertReviewTriggers(config) {
+export function assertReviewTriggers(config, { closed = false } = {}) {
   assert.deepEqual(config.on, {
     pull_request: {
       types: [
@@ -100,6 +111,7 @@ export function assertReviewTriggers(config) {
         "reopened",
         "ready_for_review",
         "unlabeled",
+        ...(closed ? ["closed"] : []),
       ],
     },
   });

@@ -94,7 +94,9 @@ test("names every field of the report that goes to Insights", () => {
 });
 
 test("names no field that the report does not have", () => {
-  const section = sectionOf("What is sent to ReviewOps Insights");
+  const whole = sectionOf("What is sent to ReviewOps Insights");
+  // The status report has its own list and its own test below.
+  const section = whole.slice(0, whole.indexOf("### The status report"));
   const known = new Set([
     ...Object.keys(report),
     ...Object.keys(report.tokens),
@@ -298,4 +300,58 @@ test("the only dynamic import loads the action itself", () => {
   }
 
   assert.deepEqual(found, ['src/index.js: "./main.js"']);
+});
+
+// --- The status report (#77) ------------------------------------------------
+
+const statusReport = JSON.parse(
+  readFileSync(fromRoot("test/fixtures/insights-status-v1.json"), "utf8"),
+);
+
+test("names every field of the status report that goes to Insights", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+  const fields = [
+    ...Object.keys(statusReport),
+    ...Object.keys(statusReport.findings[0]),
+  ];
+
+  assert.ok(fields.length >= 10);
+  for (const field of new Set(fields)) {
+    assert.ok(section.includes(`\`${field}\``), `${field} is not named`);
+  }
+});
+
+test("names no field of the status report that it does not have", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+  const status = section.slice(section.indexOf("### The status report"));
+  const known = new Set([
+    ...Object.keys(statusReport),
+    ...Object.keys(statusReport.findings[0]),
+  ]);
+  const listed = status
+    .split("\n")
+    .filter((line) => line.startsWith("- the "))
+    .flatMap((line) => [...line.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]));
+  const fieldLike = listed.filter((name) => /^[a-z][A-Za-z]*$/.test(name));
+
+  assert.ok(fieldLike.length >= 6);
+  for (const name of fieldLike) {
+    // The values of `pullRequestState` are values, not fields.
+    const values = ["open", "merged", "closed"];
+    assert.ok(known.has(name) || values.includes(name), `${name} is no field`);
+  }
+});
+
+test("says how the status report is addressed, when it is sent and what it never holds", () => {
+  const section = sectionOf("What is sent to ReviewOps Insights");
+
+  assert.match(section, /### The status report/);
+  assert.match(section, /a path that ends on `\/review` becomes `\/status`/);
+  assert.match(section, /at most 1000/);
+  assert.match(section, /never a count and never a name/);
+  assert.match(section, /who resolved a thread or set a thumbs down/);
+  assert.match(section, /the workflow must run on the `closed` event/);
+  assert.match(section, /makes no request to GitHub/);
+  assert.match(section, /no additional request to GitHub/);
+  assert.match(section, /every GitHub user/);
 });

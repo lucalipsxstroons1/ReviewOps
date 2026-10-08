@@ -179,3 +179,105 @@ export function validateInsightsPayload(payload) {
   });
   return errors;
 }
+
+/**
+ * Validator for contract v1 of the status report (docs/insights-payload.md,
+ * "Status report v1"). Like the one above, it knows exactly the fields of the
+ * contract: nothing is converted, an extra field is an error.
+ *
+ * @param {unknown} payload
+ * @returns {string[]} The violations, empty for a valid report.
+ */
+export function validateStatusPayload(payload) {
+  const errors = [];
+  const check = (ok, place, rule) => {
+    if (!ok) errors.push(`${place}: ${rule}`);
+  };
+  const keys = (value, expected, place) => {
+    if (!isObject(value)) {
+      errors.push(`${place}: must be an object`);
+      return false;
+    }
+    check(
+      Object.keys(value).sort().join(",") === [...expected].sort().join(","),
+      place,
+      `fields must be exactly ${expected.join(", ")}`,
+    );
+    return true;
+  };
+  const isBoolean = (value) => value === true || value === false;
+
+  const top = [
+    "schemaVersion",
+    "repository",
+    "prNumber",
+    "runId",
+    "runAttempt",
+    "pullRequestState",
+    "findings",
+  ];
+  if (!keys(payload, top, "report")) return errors;
+
+  check(payload.schemaVersion === 1, "schemaVersion", "must be 1");
+  check(
+    isText(payload.repository, REPOSITORY) && payload.repository.length <= 140,
+    "repository",
+    "must be owner/name, at most 140 characters",
+  );
+  for (const name of ["prNumber", "runId", "runAttempt"]) {
+    check(isSafe(payload[name], 1), name, "must be a safe integer from 1");
+  }
+  check(
+    ["open", "merged", "closed"].includes(payload.pullRequestState),
+    "pullRequestState",
+    "must be open, merged or closed",
+  );
+
+  if (!Array.isArray(payload.findings)) {
+    errors.push("findings: must be a list");
+    return errors;
+  }
+  check(
+    payload.findings.length >= 1 && payload.findings.length <= 1000,
+    "findings",
+    "1 to 1000 entries",
+  );
+  const seen = new Set();
+  payload.findings.forEach((finding, index) => {
+    const place = `findings[${index}]`;
+    const fields = [
+      "fingerprint",
+      "lineUnchanged",
+      "threadResolved",
+      "thumbsDown",
+    ];
+    if (!keys(finding, fields, place)) return;
+    check(
+      isText(finding.fingerprint, /^[0-9a-f]{16}$/),
+      `${place}.fingerprint`,
+      "must be 16 lower case hex characters",
+    );
+    check(
+      !seen.has(finding.fingerprint),
+      `${place}.fingerprint`,
+      "occurs more than once",
+    );
+    seen.add(finding.fingerprint);
+    check(
+      isBoolean(finding.lineUnchanged),
+      `${place}.lineUnchanged`,
+      "must be true or false",
+    );
+    check(
+      finding.threadResolved === null || isBoolean(finding.threadResolved),
+      `${place}.threadResolved`,
+      "must be true, false or null",
+    );
+    check(
+      isBoolean(finding.thumbsDown),
+      `${place}.thumbsDown`,
+      "must be true or false",
+    );
+  });
+  return errors;
+}

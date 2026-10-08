@@ -133,3 +133,18 @@ function readCounter(value, name) {
   }
   return value;
 }
+
+/**
+ * Reads whether the pull request of the event is open, merged or closed
+ * without a merge: `state` and `merged` of the payload. Anything that is not
+ * exactly `closed` counts as open, so an odd payload never switches a review
+ * off. Only fixed words come out, never a value of the payload.
+ *
+ * @param {{ payload?: object }} context
+ * @returns {"open" | "merged" | "closed"}
+ */
+export function readPullRequestState(context) {
+  const pullRequest = context.payload?.pull_request;
+  if (!isObject(pullRequest) || pullRequest.state !== "closed") return "open";
+  return pullRequest.merged === true ? "merged" : "closed";
+}

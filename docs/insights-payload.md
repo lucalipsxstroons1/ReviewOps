@@ -165,3 +165,118 @@ report from a prepared run.
   ]
 }
 ```
+
+## Status report (v1)
+
+The report above says what a run found. The status report says what became of
+the findings of earlier runs, so that Insights can show whether they were
+acted on. The action reports facts; Insights derives the state of a finding
+(`open`, `addressed`, `dismissed`, `ignored`, `false_positive`, `abandoned`)
+from them. Insights has no access to the code and cannot tell whether a
+commented line was changed.
+
+`buildStatusPayload()` in `src/insights/status.js` builds the report and
+`sendInsightsReport()` sends it (#77). It goes to the same Insights instance as
+the report above, if the workflow sets `insights-url`; without it, nothing is
+sent and the action makes no additional request to GitHub.
+
+### Transport
+
+- `POST` to the address derived from `insights-url`: a path that ends on
+  `/review` becomes `/status`, so `…/api/v1/ingest/review` becomes
+  `…/api/v1/ingest/status`. For any other path the action sends no status
+  report and says so in a notice. There is no extra input.
+- Body, header, signature, `https` rule, redirects and attempts are those of
+  the report above. The status report has no `deliveryId`. Insights answers
+  `200` with the counters `matched`, `unknown` and `changed`; the action does
+  not read them. `200` is the normal answer, not a duplicate.
+
+### Fields
+
+All fields are required. Integers are safe integers. Insights removes unknown
+fields. A test keeps this table equal to the fields of a built report.
+
+| Field | Type | Rule | Meaning |
+|---|---|---|---|
+| `schemaVersion` | integer | `1` | Version of this contract |
+| `repository` | string | `owner/name`, at most 140 characters | Repository of the pull request |
+| `prNumber` | integer | from 1 | Number of the pull request |
+| `runId` | integer | from 1 | `GITHUB_RUN_ID` of the workflow run |
+| `runAttempt` | integer | from 1 | `GITHUB_RUN_ATTEMPT`. Insights applies the report with the larger `(runId, runAttempt)` |
+| `pullRequestState` | string | `open`, `merged` or `closed` | State of the pull request at the run; `closed` means closed without a merge |
+| `findings` | array of objects | 1 to 1000 entries | One entry per fingerprint |
+| `findings[].fingerprint` | string | 16 lower case hex characters, at most once per report | Fingerprint of the line, as in the second line of the inline comment |
+| `findings[].lineUnchanged` | boolean | | The fingerprint is still among the added lines of the pull request |
+| `findings[].threadResolved` | boolean or `null` | | `true` if every thread with this fingerprint is resolved. The action never sends `null`: findings in the text of a review have no thread and are not reported |
+| `findings[].thumbsDown` | boolean | | At least one comment with this fingerprint carries a 👎 |
+
+### Meaning
+
+- A finding is an inline comment of this action with a fingerprint, from any
+  earlier run, including old and resolved ones. Several comments with one
+  fingerprint make one entry.
+- `lineUnchanged` uses the same calculation as the count of open findings: the
+  fingerprint of the commented line is looked up among the fingerprints of all
+  added lines of the pull request.
+- A finding whose state cannot be determined safely is left out instead of
+  being reported with a wrong value: its file is part of the pull request but
+  its diff is not available (no text diff, unreadable, excluded, possible
+  secrets, or the list of files was cut off at 3000), or the thread of its
+  comment was not read. The log names the number of findings left out. More
+  than 1000 findings: the oldest 1000 are reported.
+- The report is sent at every regular end of a run that has at least one
+  finding to report: after posting a review, without findings, with nothing
+  new to review, and when the review is skipped. A run that fails sends none.
+  It goes after the outputs and after the report above.
+- A run on a pull request that is **merged or closed** asks no model, posts
+  nothing, needs no OpenAI key and sets no outputs besides `0`, `0` and empty.
+  It reads the files, the earlier comments and the threads, and sends the final
+  state. For this the workflow must run on `closed` (see the README). A failure
+  to read is a warning there, and the run stays green.
+- Forks and Dependabot get no repository secrets: without `insights-secret`,
+  nothing is sent and a notice says so.
+
+### What never leaves the runner
+
+Who resolved a thread or set a 👎, the number of reactions, other reactions,
+texts of comments, code, the diff and names of people. The thread query reads
+the reaction groups of the first comment of each thread and returns two truth
+values per comment, nothing else. Anyone who may react on the pull request can
+set a 👎; in a public repository that is every GitHub user, so Insights should
+treat it as a signal and not as proof.
+
+### Example
+
+The same file is `test/fixtures/insights-status-v1.json`, and it is the example
+file of the contract at Insights (`docs/examples/status-v1.json`).
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "octo-org/shop-api",
+  "prNumber": 42,
+  "runId": 18234599012,
+  "runAttempt": 1,
+  "pullRequestState": "merged",
+  "findings": [
+    {
+      "fingerprint": "5a1f0c9e3b7d2a46",
+      "lineUnchanged": false,
+      "threadResolved": true,
+      "thumbsDown": false
+    },
+    {
+      "fingerprint": "c04e7a91d2b85f36",
+      "lineUnchanged": true,
+      "threadResolved": false,
+      "thumbsDown": false
+    },
+    {
+      "fingerprint": "7e22b1d09a4c5f83",
+      "lineUnchanged": true,
+      "threadResolved": null,
+      "thumbsDown": true
+    }
+  ]
+}
+```
