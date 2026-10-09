@@ -23,6 +23,13 @@ public class OrdersController : ControllerBase
         return order is null ? NotFound() : Ok(order);
     }
 
+    [HttpGet("customer/{customerId}/export")]
+    public async Task<IActionResult> Export(int customerId)
+    {
+        var orders = await _orders.ListForCustomerAsync(customerId);
+        return Ok(orders.Select(o => new { o.Number, o.Total }));
+    }
+
     [HttpGet("customer/{customerId}")]
     [Authorize]
     public async Task<IActionResult> ListForCustomer(int customerId)
