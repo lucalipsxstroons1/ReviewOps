@@ -191,7 +191,7 @@ jobs:
 - **Where it goes.** The report goes to the address you set, and nowhere else. A wrong address would hand repository names and file paths to a stranger, so the action checks it before the first request: `https` only, no credentials, no query, no fragment. The log names the host.
 - **Signed.** The report is signed with the secret (HMAC-SHA256). The secret itself is never sent.
 - **When.** After every run that asked the model, also when it found nothing. A run that leaves out the review, finds nothing new or fails sends nothing.
-- **It never breaks the run.** If the report does not arrive (wrong secret, server down, redirect), the step shows a warning with the status and ends as it would have ended without Insights, also with `fail-on`. The action tries up to three times, with the same report each time, so Insights stores it once.
+- **It never breaks the run.** If the report does not arrive (wrong secret, server down, redirect), the step shows a warning with the status and ends as it would have ended without Insights, also with `fail-on`. The action tries up to three times, with the same report each time, so Insights stores it once. A report that does not arrive is never sent again later: the findings of that run are missing at Insights for good, and no later run reports them.
 - **Forks and Dependabot.** GitHub passes them no repository secrets. The review still takes place, and the log says that no report was sent.
 
 ### What became of the findings
@@ -201,7 +201,7 @@ A second, smaller report tells Insights what became of the findings of earlier r
 - **A 👎 on a comment counts as a false alarm.** Insights shows such findings as false positives. Anyone who may react to the pull request can set it; in a public repository that is every GitHub user.
 - **When.** At the end of every run that has an earlier finding to report, and, if the workflow also runs on `closed` (as in the example above), when the pull request is merged or closed. That run asks no model, needs no OpenAI key, posts nothing and changes no comment: it only sends the final state. A closed pull request is never reviewed, whichever event started the run.
 - **Address.** Derived from `insights-url`: a path that ends on `/review` becomes `/status`. For any other path no status report is sent, and the log says so.
-- **Limits.** Findings in the text of a review (without a line) are not reported, and a finding whose state cannot be determined (a file without a text diff, an unreadable thread) is left out. Insights then shows it as open. The state follows at the next run or when the pull request closes: there is no event for a resolved thread or a 👎.
+- **Limits.** Findings in the text of a review are never reported, with or without a line, and also when GitHub rejected the inline comments and all findings went into the text. Insights keeps them as `open` and counts them as `untracked` in the acceptance rate. A finding whose state cannot be determined (a file without a text diff, an unreadable thread) is an inline comment that the action leaves out of this report. Insights shows it as `open` until a later run or the closing of the pull request reports it: there is no event for a resolved thread or a 👎.
 - **Without `insights-url`** nothing changes, and the action makes no additional request to GitHub.
 
 ## How it works
