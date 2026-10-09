@@ -122,9 +122,12 @@ still name their fingerprints; the receiver does not know them and counts them a
 `unknown` in its answer, which the action does not read. What `unknown` means is
 described in `docs/payload.md` of ReviewOps Insights.
 
-The status report below is different: each one carries the whole state, so the
-next one replaces a lost one. Only the final state when the pull request closes
-has no successor; a re-run of that job (higher `runAttempt`) sends it again.
+The status report below is different: each one names the state of every finding
+it contains, so the next one replaces a lost one for those findings. It does not
+contain findings over the limit of 1000 (the oldest 1000 are reported) and
+findings whose state cannot be determined; see "Status report (v1)", "Meaning".
+Only the final state when the pull request closes has no successor; a re-run of
+that job (higher `runAttempt`) sends it again.
 
 ## Versioning
 
