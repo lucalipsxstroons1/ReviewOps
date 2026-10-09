@@ -33,7 +33,7 @@ public class OrderRepository
         var customers = await _db.Customers.ToListAsync();
         foreach (var customer in customers)
         {
-            var orders = await _db.Orders.Where(o => o.CustomerId == customer.Id).ToListAsync();
+            var orders = await _db.Orders.Where(o => o.CustomerIasdd == customer.Id).ToListAsync();
             totals[customer.Name] = orders.Sum(o => o.Total);
         }
 
