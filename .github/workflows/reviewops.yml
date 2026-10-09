@@ -3,8 +3,9 @@ name: ReviewOps
 on:
   pull_request:
     # ready_for_review starts the review of a draft that is finished. unlabeled
-    # starts it when the skip label is taken off.
-    types: [opened, synchronize, reopened, ready_for_review, unlabeled]
+    # starts it when the skip label is taken off. closed lets the action send
+    # the final state of the findings to ReviewOps Insights (end-to-end test).
+    types: [opened, synchronize, reopened, ready_for_review, unlabeled, closed]
 
 # The token of this workflow may read the code and write reviews, nothing else.
 permissions:
@@ -41,6 +42,10 @@ jobs:
         uses: ./
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # End-to-end test with ReviewOps Insights: the address is a
+          # repository variable, the secret a repository secret.
+          insights-url: ${{ vars.INSIGHTS_URL }}
+          insights-secret: ${{ secrets.INSIGHTS_SECRET }}
 
       # Shows that later steps can use the outputs. The values reach the shell
       # through the environment, never as an expression inside the command.
