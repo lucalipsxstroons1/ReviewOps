@@ -63,7 +63,8 @@ a built report.
 
 The length of a path is counted in UTF-16 code units (`String.length`). That is
 never less than the number of Unicode code points, so a path that fits here also
-fits the limit of 1024 code points. A receiver should count the same way.
+fits the limit of 1024 code points. A receiver may count in code points: that is
+never stricter, so every path of the action passes.
 
 ## Meaning
 
@@ -83,7 +84,8 @@ fits the limit of 1024 code points. A receiver should count the same way.
   failed requests the numbers are a lower bound.
 - If GitHub rejected the inline comments (HTTP 422) and all findings are in the
   text of the review, `placement` is `body` everywhere. Line and fingerprint
-  stay.
+  stay. Such findings are in no status report either (see "Status report (v1)",
+  "Meaning").
 
 ## What is never sent
 
@@ -109,6 +111,21 @@ After the third attempt a report that did not arrive ends in a warning, and the
 run ends as it would have ended without Insights. A report over 1 MiB is not
 sent at all.
 
+A report that did not arrive is never made up for. It is made once, in the run
+that asked the model. A later run, and a re-run of the same job, find the head
+already reviewed or the fingerprints already known, and report nothing for them.
+The same holds if the run ends after the review was posted and before the report
+was sent: `cancel-in-progress` after a new push (with the `closed` trigger of the
+example workflow also a closed pull request), or the time limit of the job. The
+findings of that run are missing at the receiver for good. Later status reports
+still name their fingerprints; the receiver does not know them and counts them as
+`unknown` in its answer, which the action does not read. What `unknown` means is
+described in `docs/payload.md` of ReviewOps Insights.
+
+The status report below is different: each one carries the whole state, so the
+next one replaces a lost one. Only the final state when the pull request closes
+has no successor; a re-run of that job (higher `runAttempt`) sends it again.
+
 ## Versioning
 
 - New fields and new categories come without a new version: the receiver
@@ -119,7 +136,10 @@ sent at all.
 ## Example
 
 The same file is `test/fixtures/insights-review-v1.json`; a test builds this
-report from a prepared run.
+report from a prepared run. ReviewOps Insights compares its copy of the example
+with the fixture on `main` of this repository. `promptVersion` is left out of
+that comparison, because it follows `PROMPT_VERSION` and changes with every
+prompt; every other change to the fixture needs the copy there updated.
 
 ```json
 {
@@ -215,6 +235,18 @@ fields. A test keeps this table equal to the fields of a built report.
 - A finding is an inline comment of this action with a fingerprint, from any
   earlier run, including old and resolved ones. Several comments with one
   fingerprint make one entry.
+- **Findings in the text of a review are never reported.** The builder reads
+  inline comments only. That covers a finding without a line, a finding at a
+  line that the diff shows only as context (it has a fingerprint, but no
+  comment), and every finding of a review after the fallback for HTTP 422.
+  Insights keeps such a finding as `open` and counts it as `untracked` in the
+  acceptance rate, with or without a fingerprint; it never counts toward
+  `states.open` or the rate. See "Grenzen" in `docs/payload.md` and ADR 0001
+  (`docs/adr/0001-feedback-loop.md`) of ReviewOps Insights.
+- **A finding whose state cannot be determined is another case.** It is an
+  inline comment that the action leaves out of this report (see below). Insights
+  shows it as `open` and counts it under `states.open`, until a later run or the
+  closing of the pull request reports it.
 - `lineUnchanged` uses the same calculation as the count of open findings: the
   fingerprint of the commented line is looked up among the fingerprints of all
   added lines of the pull request.
@@ -248,7 +280,9 @@ treat it as a signal and not as proof.
 ### Example
 
 The same file is `test/fixtures/insights-status-v1.json`, and it is the example
-file of the contract at Insights (`docs/examples/status-v1.json`).
+file of the contract at Insights (`docs/examples/status-v1.json`). Insights
+compares its copy with the fixture on `main` of this repository; every change to
+the fixture needs the copy there updated.
 
 ```json
 {
