@@ -229,7 +229,7 @@ fields. A test keeps this table equal to the fields of a built report.
 | `pullRequestState` | string | `open`, `merged` or `closed` | State of the pull request at the run; `closed` means closed without a merge |
 | `findings` | array of objects | 1 to 1000 entries | One entry per fingerprint |
 | `findings[].fingerprint` | string | 16 lower case hex characters, at most once per report | Fingerprint of the line, as in the second line of the inline comment |
-| `findings[].lineUnchanged` | boolean | | The fingerprint is still among the added lines of the pull request |
+| `findings[].lineUnchanged` | boolean | | The code of the commented line is still among the added lines of the pull request: its fingerprint is, or its text is (a renamed file or a changed line above does not change it) |
 | `findings[].threadResolved` | boolean or `null` | | `true` if every thread with this fingerprint is resolved. The action never sends `null`: findings in the text of a review have no thread and are not reported |
 | `findings[].thumbsDown` | boolean | | At least one comment with this fingerprint carries a 👎 |
 
@@ -252,7 +252,10 @@ fields. A test keeps this table equal to the fields of a built report.
   closing of the pull request reports it.
 - `lineUnchanged` uses the same calculation as the count of open findings: the
   fingerprint of the commented line is looked up among the fingerprints of all
-  added lines of the pull request.
+  added lines of the pull request, and, for a comment that carries the text
+  fingerprint of its line, the text is looked up among the added lines of its
+  file (of all files when the file has no diff any more). A rename or a change
+  of the line above leaves it `true`; the text fingerprint is never sent.
 - A finding whose state cannot be determined safely is left out instead of
   being reported with a wrong value: its file is part of the pull request but
   its diff is not available (no text diff, unreadable, excluded, possible

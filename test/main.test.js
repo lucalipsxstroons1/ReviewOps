@@ -19,10 +19,11 @@ import {
   apiFailure,
   apiFile,
   apiFiles,
+  apiThread,
   createFakeOctokit,
   OWN_ACCOUNT,
 } from "./helpers/github-api.js";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
 import { REVIEWING_LINE } from "./helpers/run-action.js";
 
@@ -2416,4 +2417,192 @@ test("a first run does not ask for the account", async () => {
 
   assert.deepEqual(octokit.viewerQueries, []);
   assert.deepEqual(core.messages("setFailed"), []);
+});
+
+// --- Open findings after a rename or a change of the line above (#107) -------
+
+const TEXT_B = "let b = 2;";
+
+/** An inline comment at `let b = 2;` of a file, as a run of #107 writes it. */
+const commentAtB = (
+  id,
+  path,
+  previous,
+  severity = "critical",
+  fields = {},
+) => ({
+  id,
+  path,
+  body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint(path, TEXT_B, previous), severity, textFingerprint(TEXT_B))}\n\ntext`,
+  user: OWN_ACCOUNT,
+  ...fields,
+});
+
+const fileWith = (path, ...lines) =>
+  apiFile(path, {
+    additions: lines.length,
+    deletions: 0,
+    patch: `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+  });
+
+test("a changed line above keeps the finding open and a full run does not post it again", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit(
+    [fileWith("src/app.js", "let a2 = 1;", TEXT_B)],
+    { existingComments: [commentAtB(7, "src/app.js", "let a = 1;")] },
+  );
+  // The model reports the finding at the old line again.
+  const ai = createFakeAi(findingAtLine2("critical"));
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 1);
+  assert.deepEqual(octokit.reviews, []);
+  assert.match(
+    core.messages("info").join("\n"),
+    /1 at lines that were commented before/,
+  );
+  // Counted once: the comment, not the finding of this run.
+  assert.equal(core.outputs["findings-count"], "1");
+  assert.equal(core.outputs["critical-count"], "1");
+  assert.match(core.messages("setFailed")[0], /found 1 open findings/);
+});
+
+test("a changed line above still lets a different finding of the model through", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit(
+    [fileWith("src/app.js", "let a2 = 1;", TEXT_B)],
+    { existingComments: [commentAtB(7, "src/app.js", "let a = 1;")] },
+  );
+  const ai = createFakeAi(() =>
+    modelAnswer([modelFinding("src/app.js", "major", "x", 1)]),
+  );
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(octokit.reviews.length, 1);
+  assert.equal(octokit.reviews[0].comments.length, 1);
+  assert.equal(octokit.reviews[0].comments[0].line, 1);
+  assert.equal(core.outputs["findings-count"], "2");
+});
+
+test("a renamed file keeps the finding open and fail-on stays red", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const renamed = apiFile("src/renamed.js", {
+    status: "renamed",
+    previous_filename: "src/app.js",
+    additions: 2,
+    deletions: 0,
+    patch: "@@ -0,0 +1,2 @@\n+let a = 1;\n+let b = 2;",
+  });
+  const octokit = createFakeOctokit([renamed], {
+    existingReviews: [earlierReview()],
+    existingComments: [commentAtB(7, "src/app.js", "let a = 1;")],
+    // A pure rename: no new line since the earlier review.
+    compare: () => ({
+      status: "ahead",
+      files: [
+        {
+          filename: "src/renamed.js",
+          previous_filename: "src/app.js",
+          status: "renamed",
+          changes: 0,
+        },
+      ],
+    }),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.deepEqual(octokit.reviews, []);
+  assert.equal(core.outputs["findings-count"], "1");
+  assert.equal(core.outputs["critical-count"], "1");
+  assert.match(core.messages("setFailed")[0], /found 1 open findings/);
+});
+
+test("a changed line itself still takes the finding out of the count", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit(
+    [fileWith("src/app.js", "let a = 1;", "let b = 3;")],
+    { existingComments: [commentAtB(7, "src/app.js", "let a = 1;")] },
+  );
+
+  await runWith(core, { octokit });
+
+  assert.equal(core.outputs["findings-count"], "0");
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("a resolved thread takes the finding out of the count after a changed line above", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit(
+    [fileWith("src/app.js", "let a2 = 1;", TEXT_B)],
+    {
+      existingComments: [commentAtB(7, "src/app.js", "let a = 1;")],
+      threads: [apiThread(7, true)],
+    },
+  );
+
+  await runWith(core, { octokit });
+
+  assert.equal(core.outputs["findings-count"], "0");
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("a finding whose file has no diff any more counts as open and the log says so", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit(
+    [
+      fileWith("src/app.js", "let a = 1;", "let c = 3;"),
+      // GitHub gives no patch for this file.
+      apiFile("src/big.js", { patch: undefined }),
+    ],
+    { existingComments: [commentAtB(7, "src/big.js", "let a = 1;")] },
+  );
+
+  await runWith(core, { octokit });
+
+  assert.equal(core.outputs["findings-count"], "1");
+  assert.match(
+    core.messages("info").join("\n"),
+    /^1 earlier findings count as open because the diff of their file is not available\.$/m,
+  );
+  assert.match(core.messages("setFailed")[0], /found 1 open findings/);
+});
+
+test("a comment from before the text fingerprint follows the old rule", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const old = {
+    id: 7,
+    path: "src/app.js",
+    body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint("src/app.js", TEXT_B, "let a = 1;"), "critical")}\n\ntext`,
+    user: OWN_ACCOUNT,
+  };
+  const octokit = createFakeOctokit(
+    [fileWith("src/app.js", "let a2 = 1;", TEXT_B)],
+    { existingComments: [old] },
+  );
+
+  await runWith(core, { octokit });
+
+  assert.equal(core.outputs["findings-count"], "0");
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("an inline comment of this run carries the text fingerprint of its line", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE]);
+
+  await runWith(core, {
+    octokit,
+    ai: createFakeAi(findingAtLine2("major")),
+  });
+
+  const [comment] = octokit.reviews[0].comments;
+  assert.equal(
+    comment.body.split("\n")[1],
+    fingerprintLine(APP_LINE_2, "major", textFingerprint("let b = 2;")),
+  );
 });

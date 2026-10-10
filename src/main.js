@@ -43,7 +43,7 @@ import {
 } from "./insights/deliver.js";
 import { sendInsightsReport as insightsSend } from "./insights/send.js";
 import { applyLimits, parseLimits } from "./limits.js";
-import { countOpenFindings, currentEarlierFindings } from "./open-findings.js";
+import { countOpenFindings, openEarlierFindings } from "./open-findings.js";
 import { setOutputs } from "./outputs.js";
 import { printable } from "./printable.js";
 import { createRedactor } from "./redact.js";
@@ -286,12 +286,28 @@ export async function run({
     if (history.mode === "incremental") report.since = history.since;
 
     // Earlier findings whose line is still an added line of the pull request
-    // stay open until the code changes or a person resolves their thread.
+    // stay open until the code changes or a person resolves their thread. A
+    // renamed file and a changed line above do not change the code of the
+    // line (the text fingerprint, #107), and a finding whose file has no
+    // diff any more stays open: nothing says that its line changed.
     // Only GraphQL knows the resolved threads, and it is asked when an earlier
     // finding is still current, or when a status report can go to Insights
     // (`statusWanted`) and there are earlier comments to report. Both happen
     // before anything costs money.
-    const earlier = currentEarlierFindings(history.earlierFindings, diffs);
+    const unknownPaths = unknownPathsOf(listing, diffs);
+    const {
+      open: earlier,
+      commented,
+      unknown: openWithoutDiff,
+    } = openEarlierFindings(history.earlierFindings, diffs, {
+      unknownPaths,
+      listingTruncated: listing.truncated,
+    });
+    if (openWithoutDiff > 0) {
+      core.info(
+        `${openWithoutDiff} earlier findings count as open because the diff of their file is not available.`,
+      );
+    }
     const reportStatus = statusWanted && history.inlineComments.length > 0;
     let threadStates = null;
     if (earlier.length > 0 || reportStatus) {
@@ -362,7 +378,7 @@ export async function run({
               state,
               comments: history.inlineComments,
               diffs,
-              unknownPaths: unknownPathsOf(listing, diffs),
+              unknownPaths,
               listingTruncated: listing.truncated,
               threads: threadStates,
             },
@@ -567,6 +583,7 @@ export async function run({
     const {
       inline,
       fingerprints,
+      textFingerprints,
       unplaced,
       unplacedFingerprints,
       dropped,
@@ -575,7 +592,7 @@ export async function run({
       reviews: review.reviews,
       maxComments: limits.maxComments,
       newLines,
-      known: history.fingerprints,
+      known: new Set([...history.fingerprints, ...commented]),
     });
     const shown = [...inline, ...unplaced];
     // A later run does not start at a review whose gaps a new run can fill: a
@@ -647,6 +664,7 @@ export async function run({
       selection: {
         inline,
         fingerprints,
+        textFingerprints,
         unplaced,
         unplacedFingerprints,
         dropped,

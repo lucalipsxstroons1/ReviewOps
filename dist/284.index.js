@@ -1734,6 +1734,51 @@ function lineFingerprintsOf(file) {
   return result;
 }
 
+// A line needs a letter or a digit to be told apart from other lines by its
+// text alone: `}` or `);` stand all over a file.
+const HAS_SUBSTANCE = /[\p{L}\p{N}]/u;
+
+/**
+ * The text fingerprint of one line of code: the first 16 hex characters of
+ * the SHA-256 hash over the text of the line alone, with runs of white space
+ * reduced to one space. It has no path and no line before it, so it survives
+ * what changes `lineFingerprint()`: a renamed file and a changed line above.
+ *
+ * A line without a letter or a digit has none (`null`): its text says too
+ * little about which line is meant.
+ *
+ * @param {string} content The text of the line, without the leading `+`.
+ * @returns {string | null}
+ */
+function textFingerprint(content) {
+  const text = normalize(content);
+  if (!HAS_SUBSTANCE.test(text)) return null;
+  return (0,external_node_crypto_.createHash)("sha256")
+    .update(JSON.stringify(["text", text]))
+    .digest("hex")
+    .slice(0, FINGERPRINT_LENGTH);
+}
+
+/**
+ * The text fingerprint of every line of a file that has a number in the new
+ * file and a text that tells it apart, by line number.
+ *
+ * @param {{ hunks?: { lines: { line: number | null, content: string }[] }[] }} file
+ *   A parsed and masked file.
+ * @returns {Map<number, string>}
+ */
+function textFingerprintsOf(file) {
+  const result = new Map();
+  for (const hunk of file.hunks ?? []) {
+    for (const { line, content } of hunk.lines) {
+      if (line === null) continue;
+      const print = textFingerprint(content);
+      if (print !== null) result.set(line, print);
+    }
+  }
+  return result;
+}
+
 ;// CONCATENATED MODULE: ./src/findings.js
 
 
@@ -1789,6 +1834,7 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * @returns {{
  *   inline: import("./ai/schema.js").Finding[],
  *   fingerprints: (string | null)[],
+ *   textFingerprints: (string | null)[],
  *   unplaced: import("./ai/schema.js").Finding[],
  *   unplacedFingerprints: (string | null)[],
  *   dropped: {
@@ -1803,9 +1849,11 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * }} `inline` and `unplaced` together hold at most `maxComments` findings,
  *   each list sorted by severity. A fingerprint belongs to the finding at the
  *   same place of its list and is `null` when the diff does not show the
- *   line. `counts` holds the findings of every severity after step 5 and
- *   before the limit of step 7, so the limit for the review never hides a
- *   finding from the count.
+ *   line. A text fingerprint (#107) is `null` when the text of the line has
+ *   no letter and no digit; it is written to the inline comment only.
+ *   `counts` holds the findings of every severity after step 5 and before
+ *   the limit of step 7, so the limit for the review never hides a finding
+ *   from the count.
  */
 function selectFindings({
   reviews,
@@ -1831,6 +1879,14 @@ function selectFindings({
     const printsOf = new Map(
       files.map((file) => [file.path, lineFingerprintsOf(file)]),
     );
+    // Only a finding at an added line gets one, so most files never need it.
+    const textsOf = new Map();
+    const textPrintOf = (file, line) => {
+      if (!textsOf.has(file.path))
+        textsOf.set(file.path, textFingerprintsOf(file));
+      return textsOf.get(file.path).get(line) ?? null;
+    };
+    const fileOf = new Map(files.map((file) => [file.path, file]));
 
     for (const finding of findings) {
       if (isBlank(finding.title, finding.comment, finding.suggestion)) {
@@ -1856,6 +1912,9 @@ function selectFindings({
           finding,
           commentable,
           fingerprint: printsOf.get(finding.path).get(finding.line) ?? null,
+          textFingerprint: commentable
+            ? textPrintOf(fileOf.get(finding.path), finding.line)
+            : null,
         });
         continue;
       }
@@ -1898,6 +1957,7 @@ function selectFindings({
   return {
     inline: inline.map(({ finding }) => finding),
     fingerprints: inline.map(({ fingerprint }) => fingerprint),
+    textFingerprints: inline.map(({ textFingerprint }) => textFingerprint),
     unplaced: listed.map(({ finding }) => finding),
     unplacedFingerprints: listed.map(({ fingerprint }) => fingerprint),
     dropped,
@@ -2644,16 +2704,23 @@ function aiLabel(model) {
  *
  * An inline comment adds the severity of its finding, so a later run can
  * count the findings that are still open without reading the text of the
- * model. Only one of `SEVERITIES` is written.
+ * model. Only one of `SEVERITIES` is written. An inline comment adds the
+ * text fingerprint of its line as well (#107), so a later run can tell that
+ * the line is unchanged after a rename or a change of the line above. It
+ * only ever follows a severity.
  *
  * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
  * @param {string | null} [severity] The severity of the finding.
+ * @param {string | null} [text] 16 hex characters from `textFingerprint()`.
  * @returns {string}
  */
-const fingerprintLine = (fingerprint, severity = null) =>
-  SEVERITIES.includes(severity)
-    ? `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity} -->`
-    : `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+const fingerprintLine = (fingerprint, severity = null, text = null) => {
+  if (!SEVERITIES.includes(severity)) {
+    return `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+  }
+  const textPart = text ? ` text: ${text}` : "";
+  return `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity}${textPart} -->`;
+};
 
 /**
  * The line that marks a review as not complete: files were left out or a
@@ -2685,12 +2752,20 @@ function reviewHead({ incomplete, fingerprints }) {
  * @param {import("../ai/schema.js").Finding} finding
  * @param {string} model
  * @param {string | null} [fingerprint] Fingerprint of the commented line.
+ * @param {string | null} [textFingerprint] Text fingerprint of that line.
  * @returns {string}
  */
-function commentBody(finding, model, fingerprint = null) {
+function commentBody(
+  finding,
+  model,
+  fingerprint = null,
+  textFingerprint = null,
+) {
   const head = [
     REVIEW_MARKER,
-    ...(fingerprint ? [fingerprintLine(fingerprint, finding.severity)] : []),
+    ...(fingerprint
+      ? [fingerprintLine(fingerprint, finding.severity, textFingerprint)]
+      : []),
   ].join("\n");
   return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
@@ -2846,6 +2921,7 @@ function prefixLengths(blocks) {
  * @param {{
  *   inline: import("../ai/schema.js").Finding[],
  *   fingerprints?: (string | null)[],
+ *   textFingerprints?: (string | null)[],
  *   unplaced: import("../ai/schema.js").Finding[],
  *   unplacedFingerprints?: (string | null)[],
  *   dropped: { overLimit: number },
@@ -2876,6 +2952,7 @@ async function postReview({
     unplaced,
     dropped,
     fingerprints = [],
+    textFingerprints = [],
     unplacedFingerprints = [],
   } = selection;
   const common = {
@@ -2904,7 +2981,12 @@ async function postReview({
     path: finding.path,
     line: finding.line,
     side: "RIGHT",
-    body: commentBody(finding, model, fingerprints[index] ?? null),
+    body: commentBody(
+      finding,
+      model,
+      fingerprints[index] ?? null,
+      textFingerprints[index] ?? null,
+    ),
   }));
 
   try {
@@ -3055,9 +3137,10 @@ const history_COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
 // is read; anything else in a comment is ignored. An inline comment adds the
-// severity of its finding; the line in the text of a review has none.
+// severity of its finding and, after it, the text fingerprint of its line
+// (#107); the line in the text of a review has neither.
 const FINGERPRINT_LINE = new RegExp(
-  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")}))? -->$`,
+  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")})(?: text: ([0-9a-f]{${FINGERPRINT_LENGTH}}))?)? -->$`,
 );
 
 // A comparison lists at most this many files, 100 per request.
@@ -3134,10 +3217,23 @@ const hasMarker = (item) =>
  *   fingerprints: Set<string>,
  *   ownReviews: number,
  *   ownComments: number,
- *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
- *   inlineComments: { id: number, path: string, fingerprint: string }[],
+ *   earlierFindings: {
+ *     id: number,
+ *     path: string | null,
+ *     fingerprint: string,
+ *     severity: string,
+ *     textFingerprint: string | null,
+ *   }[],
+ *   inlineComments: {
+ *     id: number,
+ *     path: string,
+ *     fingerprint: string,
+ *     textFingerprint: string | null,
+ *   }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
- *   of their finding, with the id GitHub gave them. In `incremental` mode,
+ *   of their finding, with the id GitHub gave them and the path GitHub names
+ *   for the comment. `textFingerprint` is `null` for a comment from before
+ *   it was written. In `incremental` mode,
  *   `since` is the last reviewed commit and `newLines` holds the added lines
  *   of the comparison by path. `null` as the value of a path stands for every
  *   line of that file. A path that is missing has no new line. In `full`
@@ -3201,7 +3297,16 @@ async function readHistory(
   for (const comment of ownComments) {
     const [head] = readHead(comment.body).fingerprints;
     if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
-      earlierFindings.push({ id: comment.id, ...head });
+      earlierFindings.push({
+        id: comment.id,
+        path:
+          typeof comment.path === "string" && comment.path !== ""
+            ? comment.path
+            : null,
+        fingerprint: head.fingerprint,
+        severity: head.severity,
+        textFingerprint: head.text,
+      });
     }
   }
 
@@ -3221,6 +3326,7 @@ async function readHistory(
         id: comment.id,
         path: comment.path,
         fingerprint: head.fingerprint,
+        textFingerprint: head.text,
       });
     }
   }
@@ -3306,7 +3412,11 @@ function scopeDiffs(diffs, newLines) {
  *
  * @param {string} body
  * @returns {{
- *   fingerprints: { fingerprint: string, severity: string | null }[],
+ *   fingerprints: {
+ *     fingerprint: string,
+ *     severity: string | null,
+ *     text: string | null,
+ *   }[],
  *   incomplete: boolean,
  * }}
  */
@@ -3318,6 +3428,7 @@ function readHead(body) {
       result.fingerprints.push({
         fingerprint: match[1],
         severity: match[2] ?? null,
+        text: match[3] ?? null,
       });
     } else if (line === INCOMPLETE_LINE) result.incomplete = true;
     else break;
@@ -3814,22 +3925,163 @@ function deriveStatusUrl(url) {
 const open_findings_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
 
 /**
- * The earlier findings of this action whose line is still an added line of
- * the pull request: the code it commented on has not changed since. Each one
- * stays in the list with its comment, so `countOpenFindings()` can leave out
- * resolved threads.
+ * What became of the line of each earlier inline comment of this action.
+ * One rule for the count of the open findings, for the lines that count as
+ * commented before, and for the status report. For each comment, in this
+ * order:
+ *
+ * 1. The diff of its file is not available (`unknownPaths`, or the list of
+ *    files is cut off and the file was not parsed): `unknown`. Whether the
+ *    line changed cannot be told.
+ * 2. Its fingerprint is among the fingerprints of the added lines of the pull
+ *    request: `unchanged`.
+ * 3. It has a text fingerprint (#107), and the text stands as an added line of
+ *    its file; a file without a parsed diff (renamed, deleted) is searched
+ *    in all files: `unchanged`. A rename or a change of the line above
+ *    changes the fingerprint of a line, but not its text.
+ * 4. Otherwise `changed`.
+ *
+ * Each result holds `key`, the fingerprint that names the line now: the
+ * fingerprint of the comment, or, when step 3 finds the text at exactly one
+ * line, the fingerprint of that line (`current`). With several lines of the
+ * same text the line is unclear, and `current` is `null`.
+ *
+ * The text fingerprints of the lines are computed only when a comment gets
+ * as far as step 3. This is a pure function.
+ *
+ * @template {{ fingerprint: string, path?: string | null, textFingerprint?: string | null }} C
+ * @param {C[]} comments
+ * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} diffs
+ *   The parsed and masked files of the pull request.
+ * @param {object} [options]
+ * @param {Set<string>} [options.unknownPaths] Paths of files of the pull
+ *   request whose diff is not available.
+ * @param {boolean} [options.listingTruncated] GitHub cut the list of files.
+ * @returns {{
+ *   comment: C,
+ *   state: "unchanged" | "changed" | "unknown",
+ *   key: string,
+ *   current: string | null,
+ * }[]} In the order of `comments`.
+ */
+function assessComments(
+  comments,
+  diffs,
+  { unknownPaths = new Set(), listingTruncated = false } = {},
+) {
+  const parsed = new Set(diffs.map(({ path }) => path));
+  const current = currentFingerprints(diffs);
+  let textIndex = null;
+
+  return comments.map((comment) => {
+    const { fingerprint, textFingerprint } = comment;
+    const path = comment.path ?? null;
+    const result = (state, key = fingerprint, line = null) => ({
+      comment,
+      state,
+      key,
+      current: line,
+    });
+
+    if (
+      path !== null &&
+      (unknownPaths.has(path) || (listingTruncated && !parsed.has(path)))
+    ) {
+      return result("unknown");
+    }
+    if (current.has(fingerprint)) return result("unchanged");
+    if (textFingerprint) {
+      textIndex ??= indexTextFingerprints(diffs);
+      const lines =
+        (parsed.has(path) ? textIndex.byPath.get(path) : textIndex.all).get(
+          textFingerprint,
+        ) ?? [];
+      if (lines.length === 1) return result("unchanged", lines[0], lines[0]);
+      if (lines.length > 1) return result("unchanged");
+    }
+    return result("changed");
+  });
+}
+
+/**
+ * The fingerprints of the added lines by text fingerprint: for every file
+ * and for all files together.
+ *
+ * @returns {{
+ *   byPath: Map<string, Map<string, string[]>>,
+ *   all: Map<string, string[]>,
+ * }}
+ */
+function indexTextFingerprints(diffs) {
+  const byPath = new Map();
+  const all = new Map();
+  const add = (map, text, print) => {
+    const lines = map.get(text);
+    if (lines) lines.push(print);
+    else map.set(text, [print]);
+  };
+  for (const diff of diffs) {
+    const prints = lineFingerprintsOf(diff);
+    const texts = textFingerprintsOf(diff);
+    const own = new Map();
+    byPath.set(diff.path, own);
+    for (const line of diff.commentableLines) {
+      const text = texts.get(line);
+      const print = prints.get(line);
+      if (text === undefined || print === undefined) continue;
+      add(own, text, print);
+      add(all, text, print);
+    }
+  }
+  return { byPath, all };
+}
+
+/**
+ * The earlier findings of this action that are still open on the pull
+ * request: the code it commented on has not changed since, or the question
+ * cannot be answered (see {@link assessComments}). Each one stays in the list
+ * with its comment, so `countOpenFindings()` can leave out resolved threads.
+ * `fingerprint` of a returned finding is the key of its line now.
  *
  * This is a pure function.
  *
- * @template {{ fingerprint: string }} E
+ * @template {{ fingerprint: string, path?: string | null, textFingerprint?: string | null }} E
  * @param {E[]} earlierFindings `earlierFindings` of `readHistory()`.
  * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} diffs
  *   The parsed and masked files of the pull request.
- * @returns {E[]}
+ * @param {{ unknownPaths?: Set<string>, listingTruncated?: boolean }} [options]
+ * @returns {{
+ *   open: E[],
+ *   commented: Set<string>,
+ *   unknown: number,
+ * }} `commented` holds the fingerprints of the lines that an earlier comment
+ *   is at although its own fingerprint is gone (the text was found at exactly
+ *   one line): `selectFindings()` must not post them again. `unknown` counts
+ *   the open findings whose file has no diff.
  */
-function currentEarlierFindings(earlierFindings, diffs) {
-  const current = currentFingerprints(diffs);
-  return earlierFindings.filter(({ fingerprint }) => current.has(fingerprint));
+function openEarlierFindings(earlierFindings, diffs, options) {
+  const open = [];
+  const commented = new Set();
+  let unknown = 0;
+  for (const { comment, state, key, current } of assessComments(
+    earlierFindings,
+    diffs,
+    options,
+  )) {
+    if (state === "changed") continue;
+    if (state === "unknown") unknown += 1;
+    if (current !== null) commented.add(current);
+    open.push({ ...comment, fingerprint: key });
+  }
+  return { open, commented, unknown };
+}
+
+/**
+ * The earlier findings that are still open: `open` of
+ * {@link openEarlierFindings}.
+ */
+function currentEarlierFindings(earlierFindings, diffs, options) {
+  return openEarlierFindings(earlierFindings, diffs, options).open;
 }
 
 /**
@@ -3855,8 +4107,9 @@ function currentFingerprints(diffs) {
  * Counts the findings that are open on the pull request, by severity: the
  * new findings of this run and the earlier ones that are still current.
  *
- * - An earlier finding counts once per fingerprint, even if two comments
- *   carry it, with the most serious severity of the comments that count.
+ * - An earlier finding counts once per fingerprint (the key of its line
+ *   from `openEarlierFindings()`), even if two comments carry it, with the
+ *   most serious severity of the comments that count.
  * - A comment whose thread is resolved does not count: a person decided
  *   that it needs nothing more.
  * - A new finding never has the fingerprint of an earlier comment:
@@ -3941,7 +4194,7 @@ const MAX_STATUS_FINDINGS = 1000;
  * @param {{ owner: string, repo: string, pullNumber: number }} options.pullRequest
  * @param {{ runId: number, runAttempt: number }} options.run
  * @param {"open" | "merged" | "closed"} options.state
- * @param {{ id: number, path: string, fingerprint: string }[]} options.comments
+ * @param {{ id: number, path: string, fingerprint: string, textFingerprint?: string | null }[]} options.comments
  *   `inlineComments` of `readHistory()`.
  * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} options.diffs
  *   The parsed and masked files of the pull request.
@@ -3965,25 +4218,28 @@ function buildStatusPayload({
   listingTruncated,
   threads,
 }) {
-  const current = currentFingerprints(diffs);
-  const parsed = new Set(diffs.map(({ path }) => path));
+  // The state of every comment line by the one rule of the count (#107). The
+  // text fingerprint of a comment is used here and goes no further: the report
+  // names the fingerprint of the comment, nothing else.
+  const sorted = [...comments].sort((a, b) => a.id - b.id);
+  const assessed = assessComments(sorted, diffs, {
+    unknownPaths,
+    listingTruncated,
+  });
 
   // One entry per fingerprint, in the order of the oldest comment.
   const byFingerprint = new Map();
-  for (const comment of [...comments].sort((a, b) => a.id - b.id)) {
-    const group = byFingerprint.get(comment.fingerprint) ?? [];
-    group.push(comment);
-    byFingerprint.set(comment.fingerprint, group);
+  for (const item of assessed) {
+    const group = byFingerprint.get(item.comment.fingerprint) ?? [];
+    group.push(item);
+    byFingerprint.set(item.comment.fingerprint, group);
   }
 
   const findings = [];
   let unknown = 0;
   for (const [fingerprint, group] of byFingerprint) {
-    const pathUnknown = group.some(
-      ({ path }) =>
-        unknownPaths.has(path) || (listingTruncated && !parsed.has(path)),
-    );
-    const states = group.map(({ id }) => threads.get(id));
+    const pathUnknown = group.some(({ state }) => state === "unknown");
+    const states = group.map(({ comment }) => threads.get(comment.id));
     if (
       pathUnknown ||
       states.some((thread) => thread === undefined || thread.known === false)
@@ -3993,7 +4249,7 @@ function buildStatusPayload({
     }
     findings.push({
       fingerprint,
-      lineUnchanged: current.has(fingerprint),
+      lineUnchanged: group.some(({ state }) => state === "unchanged"),
       threadResolved: states.every(({ resolved }) => resolved),
       thumbsDown: states.some(({ thumbsDown }) => thumbsDown),
     });
@@ -5771,12 +6027,28 @@ async function run({
     if (history.mode === "incremental") report.since = history.since;
 
     // Earlier findings whose line is still an added line of the pull request
-    // stay open until the code changes or a person resolves their thread.
+    // stay open until the code changes or a person resolves their thread. A
+    // renamed file and a changed line above do not change the code of the
+    // line (the text fingerprint, #107), and a finding whose file has no
+    // diff any more stays open: nothing says that its line changed.
     // Only GraphQL knows the resolved threads, and it is asked when an earlier
     // finding is still current, or when a status report can go to Insights
     // (`statusWanted`) and there are earlier comments to report. Both happen
     // before anything costs money.
-    const earlier = currentEarlierFindings(history.earlierFindings, diffs);
+    const unknownPaths = unknownPathsOf(listing, diffs);
+    const {
+      open: earlier,
+      commented,
+      unknown: openWithoutDiff,
+    } = openEarlierFindings(history.earlierFindings, diffs, {
+      unknownPaths,
+      listingTruncated: listing.truncated,
+    });
+    if (openWithoutDiff > 0) {
+      core.info(
+        `${openWithoutDiff} earlier findings count as open because the diff of their file is not available.`,
+      );
+    }
     const reportStatus = statusWanted && history.inlineComments.length > 0;
     let threadStates = null;
     if (earlier.length > 0 || reportStatus) {
@@ -5847,7 +6119,7 @@ async function run({
               state,
               comments: history.inlineComments,
               diffs,
-              unknownPaths: unknownPathsOf(listing, diffs),
+              unknownPaths,
               listingTruncated: listing.truncated,
               threads: threadStates,
             },
@@ -6052,6 +6324,7 @@ async function run({
     const {
       inline,
       fingerprints,
+      textFingerprints,
       unplaced,
       unplacedFingerprints,
       dropped,
@@ -6060,7 +6333,7 @@ async function run({
       reviews: review.reviews,
       maxComments: limits.maxComments,
       newLines,
-      known: history.fingerprints,
+      known: new Set([...history.fingerprints, ...commented]),
     });
     const shown = [...inline, ...unplaced];
     // A later run does not start at a review whose gaps a new run can fill: a
@@ -6132,6 +6405,7 @@ async function run({
       selection: {
         inline,
         fingerprints,
+        textFingerprints,
         unplaced,
         unplacedFingerprints,
         dropped,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
 import { apiFile, OWN_ACCOUNT, startGitHubApi } from "./helpers/github-api.js";
 import { reviewCompletion, startOpenAiApi } from "./helpers/openai-api.js";
@@ -168,7 +168,7 @@ test("a new commit with a new problem gets one comment at the new line", async (
   );
   assert.equal(
     review.body.comments[0].body.split("\n")[1],
-    fingerprintLine(fingerprintOf("c", "b"), "major"),
+    fingerprintLine(fingerprintOf("c", "b"), "major", textFingerprint("c")),
   );
   assert.match(
     review.body.body,

@@ -39,7 +39,7 @@ inputs:
     required: false
     default: "10"
   fail-on:
-    description: Lets the step fail when open findings reach this severity, as one of none, critical and major. major includes critical. The step fails only after the review is posted. Open findings are the findings of this run and earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. The default is none, so no finding fails the workflow.
+    description: Lets the step fail when open findings reach this severity, as one of none, critical and major. major includes critical. The step fails only after the review is posted. Open findings are the findings of this run and earlier comments of ReviewOps whose line has not changed (also after a rename of the file or a change of the line above) and whose thread is not resolved. The default is none, so no finding fails the workflow.
     required: false
     default: none
   review-drafts:
@@ -64,7 +64,7 @@ inputs:
 
 outputs:
   findings-count:
-    description: Number of open findings, the findings of this run and the earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. Set on every run that does not fail with an error, also when fail-on lets the step fail.
+    description: Number of open findings, the findings of this run and the earlier comments of ReviewOps whose line has not changed (also after a rename of the file or a change of the line above) and whose thread is not resolved. Set on every run that does not fail with an error, also when fail-on lets the step fail.
   critical-count:
     description: Number of open findings with the severity critical, counted like findings-count.
   review-url:

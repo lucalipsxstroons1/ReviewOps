@@ -1,4 +1,4 @@
-import { currentFingerprints } from "../open-findings.js";
+import { assessComments } from "../open-findings.js";
 
 /** The version of the contract of the status report. */
 export const STATUS_SCHEMA_VERSION = 1;
@@ -32,7 +32,7 @@ export const MAX_STATUS_FINDINGS = 1000;
  * @param {{ owner: string, repo: string, pullNumber: number }} options.pullRequest
  * @param {{ runId: number, runAttempt: number }} options.run
  * @param {"open" | "merged" | "closed"} options.state
- * @param {{ id: number, path: string, fingerprint: string }[]} options.comments
+ * @param {{ id: number, path: string, fingerprint: string, textFingerprint?: string | null }[]} options.comments
  *   `inlineComments` of `readHistory()`.
  * @param {{ path: string, commentableLines: number[], hunks: object[] }[]} options.diffs
  *   The parsed and masked files of the pull request.
@@ -56,25 +56,28 @@ export function buildStatusPayload({
   listingTruncated,
   threads,
 }) {
-  const current = currentFingerprints(diffs);
-  const parsed = new Set(diffs.map(({ path }) => path));
+  // The state of every comment line by the one rule of the count (#107). The
+  // text fingerprint of a comment is used here and goes no further: the report
+  // names the fingerprint of the comment, nothing else.
+  const sorted = [...comments].sort((a, b) => a.id - b.id);
+  const assessed = assessComments(sorted, diffs, {
+    unknownPaths,
+    listingTruncated,
+  });
 
   // One entry per fingerprint, in the order of the oldest comment.
   const byFingerprint = new Map();
-  for (const comment of [...comments].sort((a, b) => a.id - b.id)) {
-    const group = byFingerprint.get(comment.fingerprint) ?? [];
-    group.push(comment);
-    byFingerprint.set(comment.fingerprint, group);
+  for (const item of assessed) {
+    const group = byFingerprint.get(item.comment.fingerprint) ?? [];
+    group.push(item);
+    byFingerprint.set(item.comment.fingerprint, group);
   }
 
   const findings = [];
   let unknown = 0;
   for (const [fingerprint, group] of byFingerprint) {
-    const pathUnknown = group.some(
-      ({ path }) =>
-        unknownPaths.has(path) || (listingTruncated && !parsed.has(path)),
-    );
-    const states = group.map(({ id }) => threads.get(id));
+    const pathUnknown = group.some(({ state }) => state === "unknown");
+    const states = group.map(({ comment }) => threads.get(comment.id));
     if (
       pathUnknown ||
       states.some((thread) => thread === undefined || thread.known === false)
@@ -84,7 +87,7 @@ export function buildStatusPayload({
     }
     findings.push({
       fingerprint,
-      lineUnchanged: current.has(fingerprint),
+      lineUnchanged: group.some(({ state }) => state === "unchanged"),
       threadResolved: states.every(({ resolved }) => resolved),
       thumbsDown: states.some(({ thumbsDown }) => thumbsDown),
     });

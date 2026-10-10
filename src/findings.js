@@ -1,5 +1,5 @@
 import { SEVERITIES } from "./ai/schema.js";
-import { lineFingerprintsOf } from "./fingerprint.js";
+import { lineFingerprintsOf, textFingerprintsOf } from "./fingerprint.js";
 
 // A text made of nothing but white space and invisible format characters
 // (such as a zero-width space) cannot become a comment.
@@ -52,6 +52,7 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * @returns {{
  *   inline: import("./ai/schema.js").Finding[],
  *   fingerprints: (string | null)[],
+ *   textFingerprints: (string | null)[],
  *   unplaced: import("./ai/schema.js").Finding[],
  *   unplacedFingerprints: (string | null)[],
  *   dropped: {
@@ -66,9 +67,11 @@ const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
  * }} `inline` and `unplaced` together hold at most `maxComments` findings,
  *   each list sorted by severity. A fingerprint belongs to the finding at the
  *   same place of its list and is `null` when the diff does not show the
- *   line. `counts` holds the findings of every severity after step 5 and
- *   before the limit of step 7, so the limit for the review never hides a
- *   finding from the count.
+ *   line. A text fingerprint (#107) is `null` when the text of the line has
+ *   no letter and no digit; it is written to the inline comment only.
+ *   `counts` holds the findings of every severity after step 5 and before
+ *   the limit of step 7, so the limit for the review never hides a finding
+ *   from the count.
  */
 export function selectFindings({
   reviews,
@@ -94,6 +97,14 @@ export function selectFindings({
     const printsOf = new Map(
       files.map((file) => [file.path, lineFingerprintsOf(file)]),
     );
+    // Only a finding at an added line gets one, so most files never need it.
+    const textsOf = new Map();
+    const textPrintOf = (file, line) => {
+      if (!textsOf.has(file.path))
+        textsOf.set(file.path, textFingerprintsOf(file));
+      return textsOf.get(file.path).get(line) ?? null;
+    };
+    const fileOf = new Map(files.map((file) => [file.path, file]));
 
     for (const finding of findings) {
       if (isBlank(finding.title, finding.comment, finding.suggestion)) {
@@ -119,6 +130,9 @@ export function selectFindings({
           finding,
           commentable,
           fingerprint: printsOf.get(finding.path).get(finding.line) ?? null,
+          textFingerprint: commentable
+            ? textPrintOf(fileOf.get(finding.path), finding.line)
+            : null,
         });
         continue;
       }
@@ -161,6 +175,7 @@ export function selectFindings({
   return {
     inline: inline.map(({ finding }) => finding),
     fingerprints: inline.map(({ fingerprint }) => fingerprint),
+    textFingerprints: inline.map(({ textFingerprint }) => textFingerprint),
     unplaced: listed.map(({ finding }) => finding),
     unplacedFingerprints: listed.map(({ fingerprint }) => fingerprint),
     dropped,

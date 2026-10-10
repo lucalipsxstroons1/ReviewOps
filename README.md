@@ -128,7 +128,7 @@ jobs:
 
 | Name | Description |
 |---|---|
-| `findings-count` | Number of open findings: the findings of this run and the earlier comments of ReviewOps whose line has not changed and whose thread is not resolved. |
+| `findings-count` | Number of open findings: the findings of this run and the earlier comments of ReviewOps whose line has not changed (also after a rename of the file or a change of the line above) and whose thread is not resolved. |
 | `critical-count` | Number of open findings with the severity `critical`, counted like `findings-count`. |
 | `review-url` | Address of the review that this run posted. Empty when the run posted no review. |
 
@@ -255,6 +255,7 @@ Files and findings over a limit are left out. The log and the job summary say wh
 - The model finds only part of the real defects. In the comparison of #41, the default model found 4 of 12 documented defects in at least two of three runs, and 7 of 9 defects in real projects were found by no model. Treat the review as a help, not as a check.
 - The action recognises its earlier reviews and comments by the account of the token. After you change `github-token` to another account, the earlier ones are not recognised: the whole pull request is reviewed again and the earlier comments repeat. All workflows that use the `GITHUB_TOKEN` share the account `github-actions[bot]`.
 - A run without findings posts no review, so it leaves the starting point of the next run where it was.
+- A finding stays open after a rename or a change of the line above because the text of its line is found again. If the same text stands in the file twice, it can stay open although its line changed, and a run over the whole pull request can post it a second time. Resolve the thread to end such a finding. Comments of earlier versions, and lines without a letter or a digit, end with the change.
 
 ## License
 

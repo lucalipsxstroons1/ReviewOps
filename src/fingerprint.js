@@ -52,3 +52,48 @@ export function lineFingerprintsOf(file) {
   }
   return result;
 }
+
+// A line needs a letter or a digit to be told apart from other lines by its
+// text alone: `}` or `);` stand all over a file.
+const HAS_SUBSTANCE = /[\p{L}\p{N}]/u;
+
+/**
+ * The text fingerprint of one line of code: the first 16 hex characters of
+ * the SHA-256 hash over the text of the line alone, with runs of white space
+ * reduced to one space. It has no path and no line before it, so it survives
+ * what changes `lineFingerprint()`: a renamed file and a changed line above.
+ *
+ * A line without a letter or a digit has none (`null`): its text says too
+ * little about which line is meant.
+ *
+ * @param {string} content The text of the line, without the leading `+`.
+ * @returns {string | null}
+ */
+export function textFingerprint(content) {
+  const text = normalize(content);
+  if (!HAS_SUBSTANCE.test(text)) return null;
+  return createHash("sha256")
+    .update(JSON.stringify(["text", text]))
+    .digest("hex")
+    .slice(0, FINGERPRINT_LENGTH);
+}
+
+/**
+ * The text fingerprint of every line of a file that has a number in the new
+ * file and a text that tells it apart, by line number.
+ *
+ * @param {{ hunks?: { lines: { line: number | null, content: string }[] }[] }} file
+ *   A parsed and masked file.
+ * @returns {Map<number, string>}
+ */
+export function textFingerprintsOf(file) {
+  const result = new Map();
+  for (const hunk of file.hunks ?? []) {
+    for (const { line, content } of hunk.lines) {
+      if (line === null) continue;
+      const print = textFingerprint(content);
+      if (print !== null) result.set(line, print);
+    }
+  }
+  return result;
+}
