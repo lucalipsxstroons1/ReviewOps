@@ -79,15 +79,13 @@ export const REST_OF_THE_JOB_MINUTES = 5;
  * `run()` checks before the first request: 7 with the default budget, so two
  * rounds of at most four at once. In the worst case, every attempt of a
  * request runs into its time limit and the SDK waits as long as it may
- * between the attempts: 3 * 120 + 2 * 60 = 480 seconds. The default model
- * refuses `temperature`, so the first request of a run is sent twice. The
- * assumption is that the refusal comes at once, after one attempt that ran
- * into its limit: 120 seconds more. (If OpenAI hangs twice and refuses only
- * in the third attempt, the first round takes 16 minutes and the job runs out
- * of time; a refusal is an answer of the API that comes at once in practice.)
- * The two reports for Insights (#76, #77) come on top, with every attempt at
- * its time limit and the pauses as long as they may be, and 5 minutes for the
- * rest: checkout, loading the action, reading from GitHub.
+ * between the attempts: 3 * 120 + 2 * 60 = 480 seconds. A call of the client
+ * is exactly one call of the SDK for every model (#122): `temperature` only
+ * goes to the models that take it, so no request is repeated after a refusal
+ * and the sum needs no assumption about when OpenAI refuses. The two reports
+ * for Insights (#76, #77) come on top, with every attempt at its time limit
+ * and the pauses as long as they may be, and 5 minutes for the rest:
+ * checkout, loading the action, reading from GitHub.
  */
 export function assertTimeoutForRequests(job) {
   const requests = maxRequestsFor(DEFAULT_MAX_DIFF_CHARS);
@@ -96,8 +94,6 @@ export function assertTimeoutForRequests(job) {
   // The attempts of one request and the waits of the SDK between them.
   const minutesPerRequest =
     (attempts * (TIMEOUT_MS / 1000) + MAX_RETRIES * SDK_MAX_WAIT_SECONDS) / 60;
-  // The refused first attempt of the first request of the run.
-  const refusalMinutes = TIMEOUT_MS / 1000 / 60;
   const reports = 2;
   const insightsMinutes =
     (reports *
@@ -107,10 +103,7 @@ export function assertTimeoutForRequests(job) {
 
   assert.equal(job["timeout-minutes"], REVIEW_TIMEOUT_MINUTES);
   const worstCase =
-    rounds * minutesPerRequest +
-    refusalMinutes +
-    insightsMinutes +
-    REST_OF_THE_JOB_MINUTES;
+    rounds * minutesPerRequest + insightsMinutes + REST_OF_THE_JOB_MINUTES;
   assert.ok(
     worstCase <= REVIEW_TIMEOUT_MINUTES,
     `the worst case takes ${worstCase} minutes`,

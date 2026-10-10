@@ -290,6 +290,28 @@ function parseModel(value = "") {
   return name;
 }
 
+// The models that take `temperature`: `gpt-4.1` and `gpt-4o` with their
+// variants (`-mini`, `-nano`, a date) and as a fine-tune (`ft:`). Both
+// families ran with a temperature of 0.1 in the measurements of this project.
+// Every other model gets none: the reasoning models (the default among them)
+// refuse it, and an unknown model is not asked in a way that could be refused.
+// The name goes on with `-` or `:`, or it ends, so that `gpt-4.10` or
+// `gpt-4omni` are not taken for these.
+const TAKES_TEMPERATURE = /^(?:ft:)?(?:gpt-4\.1|gpt-4o)(?:[-:]|$)/;
+
+/**
+ * Whether the request to a model carries `temperature`. A model that refuses
+ * it would need a second request, and a second request is a second wait for
+ * an answer that may never come (#122): so the list names the models that
+ * take it, and the client sends one request for every model.
+ *
+ * @param {unknown} model The name of the model, as `parseModel()` returns it.
+ * @returns {boolean}
+ */
+function acceptsTemperature(model) {
+  return typeof model === "string" && TAKES_TEMPERATURE.test(model);
+}
+
 ;// CONCATENATED MODULE: ./src/ai/client.js
 
 
@@ -304,7 +326,8 @@ const BASE_URL = "https://api.openai.com/v1";
 const TIMEOUT_MS = 120_000;
 const MAX_RETRIES = 2;
 
-// Low, so that a second run over the same diff gives similar findings.
+// Low, so that a second run over the same diff gives similar findings. Only
+// the models of `acceptsTemperature()` get it.
 const TEMPERATURE = 0.1;
 
 // Values that come from the answer of the API are shown only if they look
@@ -355,36 +378,19 @@ function client_createAiClient({ apiKey, model, core, OpenAIClass = openai/* def
     maxRetries: MAX_RETRIES,
   });
 
-  // Some models do not accept `temperature`. Once one has refused it, the
-  // following requests leave it out right away.
-  let sendTemperature = true;
+  // One call of the client is one call of the SDK, for every model (#122).
+  // A request that is repeated without `temperature` after a refusal would
+  // wait for OpenAI a second time, and the time limit of the job could not
+  // cover that. So `temperature` only goes to the models that take it.
+  const sendTemperature = acceptsTemperature(modelName);
 
-  async function send(messages, extra) {
-    // Several requests can be on their way at once, and each of them is
-    // refused on its own. So the refusal is matched to what this request
-    // carried, not to what the flag says by now.
-    const withTemperature = sendTemperature;
-    try {
-      return await sdk.chat.completions.create({
-        model: modelName,
-        messages,
-        ...extra,
-        ...(withTemperature ? { temperature: TEMPERATURE } : {}),
-      });
-    } catch (error) {
-      if (!(withTemperature && rejectsTemperature(error))) throw error;
-      if (sendTemperature) {
-        sendTemperature = false;
-        core.info(
-          "The model does not accept `temperature`. The request is repeated without it.",
-        );
-      }
-      return sdk.chat.completions.create({
-        model: modelName,
-        messages,
-        ...extra,
-      });
-    }
+  function send(messages, extra) {
+    return sdk.chat.completions.create({
+      model: modelName,
+      messages,
+      ...extra,
+      ...(sendTemperature ? { temperature: TEMPERATURE } : {}),
+    });
   }
 
   return {
@@ -427,12 +433,6 @@ function client_createAiClient({ apiKey, model, core, OpenAIClass = openai/* def
       return read(response, modelName, core);
     },
   };
-}
-
-function rejectsTemperature(error) {
-  return (
-    error instanceof openai/* default.BadRequestError */.Ay.BadRequestError && error.param === "temperature"
-  );
 }
 
 /** Checks the answer and turns it into the result of the client. */
@@ -589,6 +589,16 @@ function byStatus(error, model) {
     return new AiError(
       "server",
       `OpenAI could not answer (${http}), also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+      status,
+    );
+  }
+  // A model of the list refuses `temperature`, for example a new variant. A
+  // second request without it would be a second wait, so the run fails and
+  // says what to do.
+  if (status === 400 && error.param === "temperature") {
+    return new AiError(
+      "model",
+      `The model "${model}" does not accept the setting \`temperature\` that the action sends to it (${http}). Set the input \`openai-model\` to another model, such as "gpt-4.1".`,
       status,
     );
   }

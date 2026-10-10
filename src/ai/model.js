@@ -28,3 +28,25 @@ export function parseModel(value = "") {
   }
   return name;
 }
+
+// The models that take `temperature`: `gpt-4.1` and `gpt-4o` with their
+// variants (`-mini`, `-nano`, a date) and as a fine-tune (`ft:`). Both
+// families ran with a temperature of 0.1 in the measurements of this project.
+// Every other model gets none: the reasoning models (the default among them)
+// refuse it, and an unknown model is not asked in a way that could be refused.
+// The name goes on with `-` or `:`, or it ends, so that `gpt-4.10` or
+// `gpt-4omni` are not taken for these.
+const TAKES_TEMPERATURE = /^(?:ft:)?(?:gpt-4\.1|gpt-4o)(?:[-:]|$)/;
+
+/**
+ * Whether the request to a model carries `temperature`. A model that refuses
+ * it would need a second request, and a second request is a second wait for
+ * an answer that may never come (#122): so the list names the models that
+ * take it, and the client sends one request for every model.
+ *
+ * @param {unknown} model The name of the model, as `parseModel()` returns it.
+ * @returns {boolean}
+ */
+export function acceptsTemperature(model) {
+  return typeof model === "string" && TAKES_TEMPERATURE.test(model);
+}

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { AiError } from "./error.js";
-import { parseModel } from "./model.js";
+import { acceptsTemperature, parseModel } from "./model.js";
 
 export { AiError };
 
@@ -11,7 +11,8 @@ const BASE_URL = "https://api.openai.com/v1";
 export const TIMEOUT_MS = 120_000;
 export const MAX_RETRIES = 2;
 
-// Low, so that a second run over the same diff gives similar findings.
+// Low, so that a second run over the same diff gives similar findings. Only
+// the models of `acceptsTemperature()` get it.
 const TEMPERATURE = 0.1;
 
 // Values that come from the answer of the API are shown only if they look
@@ -62,36 +63,19 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
     maxRetries: MAX_RETRIES,
   });
 
-  // Some models do not accept `temperature`. Once one has refused it, the
-  // following requests leave it out right away.
-  let sendTemperature = true;
+  // One call of the client is one call of the SDK, for every model (#122).
+  // A request that is repeated without `temperature` after a refusal would
+  // wait for OpenAI a second time, and the time limit of the job could not
+  // cover that. So `temperature` only goes to the models that take it.
+  const sendTemperature = acceptsTemperature(modelName);
 
-  async function send(messages, extra) {
-    // Several requests can be on their way at once, and each of them is
-    // refused on its own. So the refusal is matched to what this request
-    // carried, not to what the flag says by now.
-    const withTemperature = sendTemperature;
-    try {
-      return await sdk.chat.completions.create({
-        model: modelName,
-        messages,
-        ...extra,
-        ...(withTemperature ? { temperature: TEMPERATURE } : {}),
-      });
-    } catch (error) {
-      if (!(withTemperature && rejectsTemperature(error))) throw error;
-      if (sendTemperature) {
-        sendTemperature = false;
-        core.info(
-          "The model does not accept `temperature`. The request is repeated without it.",
-        );
-      }
-      return sdk.chat.completions.create({
-        model: modelName,
-        messages,
-        ...extra,
-      });
-    }
+  function send(messages, extra) {
+    return sdk.chat.completions.create({
+      model: modelName,
+      messages,
+      ...extra,
+      ...(sendTemperature ? { temperature: TEMPERATURE } : {}),
+    });
   }
 
   return {
@@ -134,12 +118,6 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
       return read(response, modelName, core);
     },
   };
-}
-
-function rejectsTemperature(error) {
-  return (
-    error instanceof OpenAI.BadRequestError && error.param === "temperature"
-  );
 }
 
 /** Checks the answer and turns it into the result of the client. */
@@ -296,6 +274,16 @@ function byStatus(error, model) {
     return new AiError(
       "server",
       `OpenAI could not answer (${http}), also after ${MAX_RETRIES} retries. Run the workflow again later.`,
+      status,
+    );
+  }
+  // A model of the list refuses `temperature`, for example a new variant. A
+  // second request without it would be a second wait, so the run fails and
+  // says what to do.
+  if (status === 400 && error.param === "temperature") {
+    return new AiError(
+      "model",
+      `The model "${model}" does not accept the setting \`temperature\` that the action sends to it (${http}). Set the input \`openai-model\` to another model, such as "gpt-4.1".`,
       status,
     );
   }

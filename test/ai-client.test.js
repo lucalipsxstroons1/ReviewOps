@@ -86,7 +86,7 @@ test("returns the answer of the model with its numbers", async (t) => {
   });
 });
 
-test("sends the prompt, the model and a low temperature with the key", async (t) => {
+test("sends the prompt and the model with the key, and no temperature to the default model", async (t) => {
   const api = await startOpenAiApi(t);
   const { client } = clientFor(api);
 
@@ -99,7 +99,6 @@ test("sends the prompt, the model and a low temperature with the key", async (t)
   assert.equal(request.authorization, `Bearer ${KEY}`);
   assert.deepEqual(request.body, {
     model: "gpt-6-luna",
-    temperature: 0.1,
     messages: [
       { role: "system", content: "SYSTEM-MARKER-1" },
       { role: "user", content: "USER-MARKER-2" },
@@ -648,7 +647,7 @@ test("reports an answer that is not JSON as an error of the API", async (t) => {
   assert.ok(error instanceof AiError);
 });
 
-// --- temperature -------------------------------------------------------------
+// --- temperature (#122) ------------------------------------------------------
 
 const TEMPERATURE_REFUSED = apiError(400, {
   code: "unsupported_parameter",
@@ -657,53 +656,7 @@ const TEMPERATURE_REFUSED = apiError(400, {
     "Unsupported parameter: 'temperature' is not supported with this model.",
 });
 
-test("repeats the request without temperature when the model refuses it", async (t) => {
-  const api = await startOpenAiApi(t, [TEMPERATURE_REFUSED, completion()]);
-  const { client, core } = clientFor(api, { model: "o3-mini" });
-
-  const answer = await client.complete(PROMPT);
-
-  assert.equal(answer.content, "the answer");
-  assert.equal(api.requests.length, 2);
-  assert.equal(api.requests[0].body.temperature, 0.1);
-  assert.equal("temperature" in api.requests[1].body, false);
-  assert.deepEqual(
-    api.requests.map((request) => request.body.model),
-    ["o3-mini", "o3-mini"],
-  );
-  assert.equal(
-    core.messages("info")[0],
-    "The model does not accept `temperature`. The request is repeated without it.",
-  );
-});
-
-test("leaves temperature out of the later requests right away", async (t) => {
-  const api = await startOpenAiApi(t, [TEMPERATURE_REFUSED, completion()]);
-  const { client } = clientFor(api);
-
-  await client.complete(PROMPT);
-  await client.complete(PROMPT);
-  await client.complete(PROMPT);
-
-  assert.equal(
-    api.requests.length,
-    4,
-    "one refused request, then one per call",
-  );
-  assert.equal("temperature" in api.requests[3].body, false);
-});
-
-test("reports the failure when the repeated request fails as well", async (t) => {
-  const api = await startOpenAiApi(t, [TEMPERATURE_REFUSED, apiError(401)]);
-  const { client } = clientFor(api);
-
-  const error = await failure(client.complete(PROMPT));
-
-  assert.equal(error.kind, "auth");
-  assert.equal(api.requests.length, 2);
-});
-
-test("repeats a refused request only for temperature", async (t) => {
+test("sends one request for a refusal that is not about temperature", async (t) => {
   const api = await startOpenAiApi(
     t,
     apiError(400, { code: "unsupported_parameter", param: "max_tokens" }),
@@ -716,37 +669,168 @@ test("repeats a refused request only for temperature", async (t) => {
   assert.equal(api.requests.length, 1);
 });
 
-// --- Fixed options ------------------------------------------------------------
+for (const model of [
+  "gpt-4.1",
+  "gpt-4o-mini",
+  "gpt-4o-2024-08-06",
+  "ft:gpt-4o-mini:my-org::abc123",
+]) {
+  test(`sends a temperature of 0.1 to ${model}`, async (t) => {
+    const api = await startOpenAiApi(t);
+    const { client } = clientFor(api, { model });
 
-test("lets every one of several simultaneous requests repeat without temperature", async (t) => {
-  // Each request that carries a temperature is refused on its own, also the
-  // ones that were already on their way when the first refusal came back.
-  const api = await startOpenAiApi(t, (request) =>
-    "temperature" in request.body
-      ? { ...TEMPERATURE_REFUSED, delay: 50 }
-      : completion(),
-  );
-  const { client, core } = clientFor(api);
+    await client.complete(PROMPT);
 
-  const answers = await Promise.all([
-    client.complete(PROMPT),
-    client.complete(PROMPT),
-    client.complete(PROMPT),
-  ]);
+    assert.equal(api.requests.length, 1);
+    assert.equal(api.requests[0].body.temperature, 0.1);
+    assert.equal(api.requests[0].body.model, model);
+  });
+}
 
-  assert.deepEqual(
-    answers.map((answer) => answer.content),
-    ["the answer", "the answer", "the answer"],
-  );
-  assert.equal(api.requests.length, 6, "three refused, three repeated");
-  assert.deepEqual(
-    core.messages("info").filter((line) => line.includes("temperature")),
-    [
-      "The model does not accept `temperature`. The request is repeated without it.",
-    ],
-    "the refusal is reported once",
-  );
+for (const model of ["gpt-6-luna", "gpt-6.1-sol", "o3-mini", "something-new"]) {
+  test(`sends no temperature to ${model}`, async (t) => {
+    const api = await startOpenAiApi(t);
+    const { client } = clientFor(api, { model });
+
+    await client.complete(PROMPT);
+
+    assert.equal(api.requests.length, 1);
+    assert.equal("temperature" in api.requests[0].body, false);
+  });
+}
+
+test("sends no temperature to the default model, with a response format and an output limit as well", async (t) => {
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api);
+
+  await client.complete({
+    ...PROMPT,
+    responseFormat: FORMAT,
+    maxOutputTokens: 100,
+  });
+
+  const [{ body }] = api.requests;
+  assert.equal("temperature" in body, false);
+  assert.deepEqual(body.response_format, FORMAT);
+  assert.equal(body.max_completion_tokens, 100);
 });
+
+test("the request to the default model is the one that was answered before", async (t) => {
+  // Before #122, the client sent a temperature first and, after the refusal,
+  // this request. So the answers of the review do not change.
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api);
+
+  await client.complete({ ...PROMPT, responseFormat: FORMAT });
+
+  assert.deepEqual(api.requests[0].body, {
+    model: "gpt-6-luna",
+    messages: [
+      { role: "system", content: "SYSTEM-MARKER-1" },
+      { role: "user", content: "USER-MARKER-2" },
+    ],
+    response_format: FORMAT,
+  });
+});
+
+/**
+ * A stand-in for the SDK that counts how often the client calls it and
+ * answers every call as `answer` says: a result, or an error to throw.
+ */
+function countingSdk(answer) {
+  const calls = [];
+  class Counting {
+    chat = {
+      completions: {
+        create: async (body) => {
+          calls.push(body);
+          const result = answer(calls.length);
+          if (result instanceof Error) throw result;
+          return result;
+        },
+      },
+    };
+  }
+  return { calls, OpenAIClass: Counting };
+}
+
+const answerOf = {
+  success: () => completion().body,
+  badRequest: () =>
+    OpenAI.APIError.generate(
+      400,
+      { error: { param: "temperature", code: "unsupported_parameter" } },
+      "refused",
+      new Headers(),
+    ),
+  unauthorized: () => OpenAI.APIError.generate(401, {}, "no", new Headers()),
+  rateLimit: () => OpenAI.APIError.generate(429, {}, "slow", new Headers()),
+  server: () => OpenAI.APIError.generate(503, {}, "down", new Headers()),
+  timeout: () => new OpenAI.APIConnectionTimeoutError(),
+  network: () => new OpenAI.APIConnectionError({ message: "gone" }),
+  defect: () => new TypeError("a defect"),
+};
+
+for (const model of ["gpt-6-luna", "gpt-4.1", "gpt-4o-mini", "o3-mini"]) {
+  for (const [name, answer] of Object.entries(answerOf)) {
+    test(`one call of the client is one call of the SDK: ${model}, ${name}`, async () => {
+      const { calls, OpenAIClass } = countingSdk(answer);
+      const client = createAiClient({
+        apiKey: KEY,
+        model,
+        core: createFakeCore(),
+        OpenAIClass,
+      });
+
+      await client.complete(PROMPT).catch(() => {});
+
+      assert.equal(calls.length, 1);
+    });
+  }
+}
+
+test("a model of the list that refuses temperature fails the run with a message of the kind model", async (t) => {
+  const api = await startOpenAiApi(t, TEMPERATURE_REFUSED);
+  const { client, core } = clientFor(api, { model: "gpt-4.1" });
+
+  const error = await failure(client.complete(PROMPT));
+
+  assert.ok(error instanceof AiError);
+  assert.equal(error.kind, "model");
+  assert.equal(isFatal(error), true);
+  assert.equal(api.requests.length, 1, "no second request");
+  assert.match(error.message, /"gpt-4\.1"/);
+  assert.match(error.message, /`temperature`/);
+  assert.match(error.message, /`openai-model`/);
+  assertNoKey(error, core);
+  // The text of OpenAI stays out.
+  assert.doesNotMatch(error.message, /Unsupported parameter/);
+});
+
+test("a model that does not take temperature and is not asked cannot refuse it", async (t) => {
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api, { model: "o3-mini" });
+
+  await client.complete(PROMPT);
+  await client.complete(PROMPT);
+
+  assert.equal(api.requests.length, 2);
+  assert.ok(api.requests.every((request) => !("temperature" in request.body)));
+});
+
+test("the client no longer repeats a request or keeps a state between calls", async (t) => {
+  const api = await startOpenAiApi(t);
+  const { client } = clientFor(api, { model: "gpt-4.1" });
+
+  await client.complete(PROMPT);
+  await client.complete(PROMPT);
+  await client.complete(PROMPT);
+
+  assert.equal(api.requests.length, 3);
+  assert.ok(api.requests.every((request) => request.body.temperature === 0.1));
+});
+
+// --- Fixed options ------------------------------------------------------------
 
 test("passes fixed options to the SDK", () => {
   const received = [];
@@ -919,7 +1003,6 @@ test("sends the response format and the output limit when they are given", async
 
   assert.deepEqual(api.requests[0].body, {
     model: "gpt-6-luna",
-    temperature: 0.1,
     messages: [
       { role: "system", content: "SYSTEM-MARKER-1" },
       { role: "user", content: "USER-MARKER-2" },
@@ -927,22 +1010,6 @@ test("sends the response format and the output limit when they are given", async
     response_format: FORMAT,
     max_completion_tokens: 4096,
   });
-});
-
-test("keeps the response format and the output limit when the request is repeated without temperature", async (t) => {
-  const api = await startOpenAiApi(t, [TEMPERATURE_REFUSED, completion()]);
-  const { client } = clientFor(api, { model: "o3-mini" });
-
-  await client.complete({
-    ...PROMPT,
-    responseFormat: FORMAT,
-    maxOutputTokens: 100,
-  });
-
-  assert.equal(api.requests.length, 2);
-  assert.equal(api.requests[1].body.temperature, undefined);
-  assert.deepEqual(api.requests[1].body.response_format, FORMAT);
-  assert.equal(api.requests[1].body.max_completion_tokens, 100);
 });
 
 test("refuses an output limit that is not a positive whole number", async (t) => {
@@ -1098,21 +1165,6 @@ test("does not repeat a request for a model without Structured Outputs", async (
   await failure(client.complete({ ...PROMPT, responseFormat: FORMAT }));
 
   assert.equal(api.requests.length, 1);
-});
-
-test("reports the missing Structured Outputs also after temperature was refused", async (t) => {
-  const api = await startOpenAiApi(t, [
-    TEMPERATURE_REFUSED,
-    NO_STRUCTURED_OUTPUTS,
-  ]);
-  const { client } = clientFor(api);
-
-  const error = await failure(
-    client.complete({ ...PROMPT, responseFormat: FORMAT }),
-  );
-
-  assert.equal(error.kind, "model");
-  assert.equal(api.requests.length, 2);
 });
 
 test("does not take a defect of the schema for a model without Structured Outputs", async (t) => {
