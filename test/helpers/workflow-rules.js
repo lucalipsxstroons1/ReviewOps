@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { MAX_REQUEST_CHARS } from "../../src/ai/batch.js";
+import { maxRequestsFor } from "../../src/ai/batch.js";
+import { MAX_RETRIES, TIMEOUT_MS } from "../../src/ai/client.js";
 import {
   ATTEMPT_TIMEOUT_MS,
   MAX_ATTEMPTS,
@@ -58,22 +59,45 @@ export function assertCheckoutWithoutCredentials(config) {
 }
 
 /** The time limit of a job that runs the action with the default limits. */
-export const REVIEW_TIMEOUT_MINUTES = 15;
+export const REVIEW_TIMEOUT_MINUTES = 25;
+
+/**
+ * The longest the SDK of OpenAI waits between two attempts when the answer
+ * asks for it (`Retry-After`). It takes a longer value as an error and
+ * works out its own wait, which is shorter. `test/workflow.test.js` checks
+ * the installed SDK for this rule, so an update cannot change it unseen.
+ */
+export const SDK_MAX_WAIT_SECONDS = 60;
+
+/** Minutes for everything that is not a request to the model or a report. */
+export const REST_OF_THE_JOB_MINUTES = 5;
 
 /**
  * The job has enough time for the requests to the model.
  *
- * Requests are filled in the order of GitHub, so two neighbouring requests
- * always hold more than one budget: a pull request of the default size needs
- * about eight requests at most. The two reports for Insights (#76, #77) come
- * on top in the worst case: every attempt runs into its time limit, and the
- * pauses between the attempts are as long as they may be.
+ * The number of requests is the limit of `maxRequestsFor()` (#108), the one
+ * `run()` checks before the first request: 7 with the default budget, so two
+ * rounds of at most four at once. In the worst case, every attempt of a
+ * request runs into its time limit and the SDK waits as long as it may
+ * between the attempts: 3 * 120 + 2 * 60 = 480 seconds. The default model
+ * refuses `temperature`, so the first request of a run is sent twice. The
+ * assumption is that the refusal comes at once, after one attempt that ran
+ * into its limit: 120 seconds more. (If OpenAI hangs twice and refuses only
+ * in the third attempt, the first round takes 16 minutes and the job runs out
+ * of time; a refusal is an answer of the API that comes at once in practice.)
+ * The two reports for Insights (#76, #77) come on top, with every attempt at
+ * its time limit and the pauses as long as they may be, and 5 minutes for the
+ * rest: checkout, loading the action, reading from GitHub.
  */
 export function assertTimeoutForRequests(job) {
-  const requests = 2 * Math.ceil(DEFAULT_MAX_DIFF_CHARS / MAX_REQUEST_CHARS);
+  const requests = maxRequestsFor(DEFAULT_MAX_DIFF_CHARS);
   const rounds = Math.ceil(requests / MAX_PARALLEL_REQUESTS);
-  // Three attempts of 120 seconds and the waits of the SDK between them.
-  const minutesPerRequest = (3 * 120 + 30) / 60;
+  const attempts = MAX_RETRIES + 1;
+  // The attempts of one request and the waits of the SDK between them.
+  const minutesPerRequest =
+    (attempts * (TIMEOUT_MS / 1000) + MAX_RETRIES * SDK_MAX_WAIT_SECONDS) / 60;
+  // The refused first attempt of the first request of the run.
+  const refusalMinutes = TIMEOUT_MS / 1000 / 60;
   const reports = 2;
   const insightsMinutes =
     (reports *
@@ -82,8 +106,14 @@ export function assertTimeoutForRequests(job) {
     60;
 
   assert.equal(job["timeout-minutes"], REVIEW_TIMEOUT_MINUTES);
+  const worstCase =
+    rounds * minutesPerRequest +
+    refusalMinutes +
+    insightsMinutes +
+    REST_OF_THE_JOB_MINUTES;
   assert.ok(
-    rounds * minutesPerRequest + insightsMinutes <= REVIEW_TIMEOUT_MINUTES,
+    worstCase <= REVIEW_TIMEOUT_MINUTES,
+    `the worst case takes ${worstCase} minutes`,
   );
 }
 

@@ -9,6 +9,7 @@ import {
   assertReviewTriggers,
   assertPermissionsAtTop,
   assertPinnedToCommits,
+  SDK_MAX_WAIT_SECONDS,
   assertTimeoutForRequests,
 } from "./helpers/workflow-rules.js";
 
@@ -62,6 +63,20 @@ test("reviewops.yml: cancels the older run of the same pull request, but not for
 
 test("reviewops.yml: gives the requests to the model enough time", () => {
   assertTimeoutForRequests(reviewops.jobs.review);
+});
+
+test("the SDK of OpenAI still waits at most 60 seconds between two attempts", () => {
+  // The worst case of assertTimeoutForRequests() counts two waits of
+  // SDK_MAX_WAIT_SECONDS per request. The SDK discards a longer wait that the
+  // answer asks for (`Retry-After`) and works out a shorter one. If an update
+  // of the SDK changes that rule, the worst case changes: check the sum in
+  // assertTimeoutForRequests() and the value of `timeout-minutes` before you
+  // adjust this test.
+  const sdk = readFileSync(fromRoot("node_modules/openai/client.js"), "utf8");
+  assert.ok(
+    sdk.includes(`timeoutMillis > ${SDK_MAX_WAIT_SECONDS} * 1000`),
+    "the rule of the SDK for the wait between attempts has changed: check the worst case of the job time",
+  );
 });
 
 test("reviewops.yml: loads the action from the checked-out repository", () => {

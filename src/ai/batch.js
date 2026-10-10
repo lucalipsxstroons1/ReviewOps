@@ -17,6 +17,40 @@ export function requestSize(file) {
 }
 
 /**
+ * What a file costs against the budget `max-diff-chars`: its block in the
+ * user message and the separator that comes with it. With this cost, the
+ * budget counts what is sent, the paths included, and the user messages of a
+ * whole run together stay within it.
+ *
+ * @param {{ path: string, annotated: string }} file
+ * @returns {number}
+ */
+export function budgetCostOf(file) {
+  return requestSize(file) + SEPARATOR.length;
+}
+
+/**
+ * The most requests a run can need for a budget, when the files were chosen
+ * with {@link budgetCostOf}: `2 * ceil(budget / maxChars) - 1`, 7 with the
+ * defaults.
+ *
+ * Why: `planBatches()` begins a new request only when the next file no
+ * longer fits. So two requests that follow each other hold more than
+ * `maxChars` together, counted with the separator that would join them. With
+ * `n` requests there are `floor(n / 2)` such pairs, they are disjoint, and
+ * all files together cost at most the budget. That gives
+ * `floor(n / 2) * maxChars < budget`, and so `n < 2 * budget / maxChars + 1`.
+ * No limit of its own is needed, and a larger budget keeps its effect.
+ *
+ * @param {number} maxDiffChars The budget `max-diff-chars`.
+ * @param {number} [maxChars] The largest user message of one request.
+ * @returns {number} At least 1.
+ */
+export function maxRequestsFor(maxDiffChars, maxChars = MAX_REQUEST_CHARS) {
+  return Math.max(1, 2 * Math.ceil(maxDiffChars / maxChars) - 1);
+}
+
+/**
  * Splits the files into requests, in the order they are given.
  *
  * A request takes files until the next one no longer fits, then the next

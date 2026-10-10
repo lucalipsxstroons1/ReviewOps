@@ -3,7 +3,13 @@ import {
   context as actionsContext,
   getOctokit as actionsGetOctokit,
 } from "@actions/github";
-import { MAX_REQUEST_CHARS, planBatches, requestSize } from "./ai/batch.js";
+import {
+  MAX_REQUEST_CHARS,
+  budgetCostOf,
+  maxRequestsFor,
+  planBatches as aiPlanBatches,
+  requestSize,
+} from "./ai/batch.js";
 import { createAiClient as aiCreateClient } from "./ai/client.js";
 import { parseModel } from "./ai/model.js";
 import { buildSystemPrompt, parseLanguage } from "./ai/prompt.js";
@@ -88,6 +94,7 @@ const NO_NEW_FINDINGS = Object.freeze(
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
+ * @param {typeof import("./ai/batch.js").planBatches} [deps.planBatches]
  * @param {typeof import("./insights/send.js").sendInsightsReport} [deps.sendInsightsReport]
  */
 export async function run({
@@ -96,6 +103,7 @@ export async function run({
   getOctokit = actionsGetOctokit,
   parsePatch = diffParsePatch,
   createAiClient = aiCreateClient,
+  planBatches = aiPlanBatches,
   sendInsightsReport = insightsSend,
 } = {}) {
   // The clock of the report: its duration runs from here (#75).
@@ -412,12 +420,15 @@ export async function run({
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
+    // The budget counts what a file costs in a request (block and separator),
+    // so a run has a bounded number of requests (#108).
     const { selected, overLimit, tooLarge, usedChars } = applyLimits(
       scoped,
       limits,
       {
         maxChars: MAX_REQUEST_CHARS,
         sizeOf: requestSize,
+        costOf: budgetCostOf,
       },
     );
 
@@ -518,6 +529,14 @@ export async function run({
     core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
 
     const batches = planBatches({ files: selected });
+    // More requests than the budget allows would outlast `timeout-minutes`
+    // of the example workflow. With the cost above this cannot happen, so it
+    // is a defect, found before the first request that costs money.
+    if (batches.length > maxRequestsFor(limits.maxDiffChars)) {
+      throw new Error(
+        "The files were split into more requests than the budget allows.",
+      );
+    }
     core.info(
       `Sending ${selected.length} files to ${model} in ${batches.length} requests.`,
     );

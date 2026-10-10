@@ -468,3 +468,79 @@ test("depends only on the annotation and on printable()", () => {
   assert.deepEqual(imports.sort(), ["./diff/annotate.js", "./printable.js"]);
   assert.doesNotMatch(source, /\b(process|globalThis|fetch|Date|require)\b/);
 });
+
+// --- The budget counts what a request costs (#108) ---------------------------
+
+/** One request, with a cost of the annotated diff plus a fixed `extra`. */
+const requestWithCost = (extra) => ({
+  maxChars: 100000,
+  sizeOf: (file) => file.annotated.length,
+  costOf: (file) => file.annotated.length + extra,
+});
+
+test("counts what costOf says against the budget, and reports it as used", () => {
+  const diffs = [diffOf("a.js"), diffOf("b.js"), diffOf("c.js")];
+  const size = sizeOf(diffs[0]);
+
+  const { selected, overLimit, usedChars } = applyLimits(
+    diffs,
+    { maxFiles: 50, maxDiffChars: 2 * (size + 30) },
+    requestWithCost(30),
+  );
+
+  assert.deepEqual(
+    selected.map(({ path }) => path),
+    ["a.js", "b.js"],
+  );
+  assert.equal(usedChars, 2 * (size + 30));
+  assert.deepEqual(overLimit, [
+    { path: "c.js", reason: OVER_LIMIT_REASONS.chars(2 * (size + 30)) },
+  ]);
+});
+
+test("without costOf the length of the annotated diff counts, as before", () => {
+  const diffs = [diffOf("a.js"), diffOf("b.js")];
+  const size = sizeOf(diffs[0]);
+
+  const { selected, usedChars } = applyLimits(
+    diffs,
+    { maxFiles: 50, maxDiffChars: 2 * size },
+    { maxChars: 100000, sizeOf: () => 1 },
+  );
+
+  assert.equal(selected.length, 2);
+  assert.equal(usedChars, 2 * size);
+});
+
+test("a file that is too large for one request is checked by its size, not by its cost", () => {
+  const diff = diffOf("a.js");
+  const size = sizeOf(diff);
+
+  // The size just fits one request; the cost with the separator is above it.
+  const { selected, tooLarge } = applyLimits(
+    [diff],
+    { maxFiles: 50, maxDiffChars: 1000 },
+    { ...requestWithCost(5), maxChars: size },
+  );
+
+  assert.equal(selected.length, 1);
+  assert.deepEqual(tooLarge, []);
+});
+
+test("a file that is too large still counts against neither limit with costOf", () => {
+  const diffs = [diffOf("big.js", 50), diffOf("a.js")];
+  const budget = sizeOf(diffs[1]) + 7;
+
+  const { selected, tooLarge, usedChars } = applyLimits(
+    diffs,
+    { maxFiles: 1, maxDiffChars: budget },
+    { ...requestWithCost(7), maxChars: sizeOf(diffs[1]) },
+  );
+
+  assert.deepEqual(
+    selected.map(({ path }) => path),
+    ["a.js"],
+  );
+  assert.equal(tooLarge.length, 1);
+  assert.equal(usedChars, budget);
+});
