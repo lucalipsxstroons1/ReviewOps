@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MAX_REQUEST_CHARS } from "../src/ai/batch.js";
 import { AiError } from "../src/ai/error.js";
+import { budgetCostOf } from "../src/ai/batch.js";
 import { buildSystemPrompt } from "../src/ai/prompt.js";
 import { SENSITIVE_REASON } from "../src/exclude.js";
 import { MAX_OUTPUT_TOKENS, REVIEW_FORMAT } from "../src/ai/schema.js";
@@ -74,6 +75,7 @@ function runWith(
     context = createFakeContext(),
     octokit,
     parsePatch,
+    planBatches,
     ai = createFakeAi(),
   } = {},
 ) {
@@ -88,6 +90,7 @@ function runWith(
     context,
     getOctokit,
     parsePatch,
+    planBatches,
     createAiClient: ai.createAiClient,
   }).then(() => ({
     tokens,
@@ -113,10 +116,19 @@ function selectionLines(core) {
   return sending === -1 ? lines : lines.slice(0, sending);
 }
 
-/** The log line about the size of the selected diffs, worked out from the patches. */
-function diffSizeLine(patches, maxDiffChars = 200000) {
-  const used = patches
-    .map((patch) => annotateDiff(parsePatch(patch).hunks).length)
+/**
+ * What a file costs against the budget (#108): its block in the request, with
+ * the path, and a separator. Worked out from the patch.
+ */
+function budgetCost(path, patch) {
+  const annotated = annotateDiff(parsePatch(patch).hunks);
+  return budgetCostOf({ path, annotated });
+}
+
+/** The log line about the size of the selected diffs, worked out from the files. */
+function diffSizeLine(files, maxDiffChars = 200000) {
+  const used = files
+    .map(({ path, patch }) => budgetCost(path, patch))
     .reduce((sum, size) => sum + size, 0);
   return `Diff size: ${used} of ${maxDiffChars} characters.`;
 }
@@ -200,7 +212,10 @@ test("logs how many files it found and why it skipped some", async () => {
     `Skipped docs/old.md: ${SKIP_REASONS.removed}.`,
     `Skipped assets/logo.png: ${SKIP_REASONS.noPatch}.`,
     "Parsed the diffs of 2 files: 2 added lines can receive comments.",
-    diffSizeLine([DEFAULT_PATCH, DEFAULT_PATCH]),
+    diffSizeLine([
+      { path: "src/file-0.js", patch: DEFAULT_PATCH },
+      { path: "src/file-1.js", patch: DEFAULT_PATCH },
+    ]),
   ]);
   assert.deepEqual(core.messages("warning"), []);
 });
@@ -232,9 +247,12 @@ test("counts the added lines of all files as comment targets", async () => {
     "Found 3 changed files: 3 to review, 0 skipped.",
     "Parsed the diffs of 3 files: 4 added lines can receive comments.",
     diffSizeLine([
-      "@@ -0,0 +1,3 @@\n+a\n+b\n+c",
-      "@@ -4,4 +4,3 @@\n a\n-b\n-c\n+d\n e",
-      "@@ -7,3 +7,2 @@\n a\n-b\n c",
+      { path: "src/new.js", patch: "@@ -0,0 +1,3 @@\n+a\n+b\n+c" },
+      {
+        path: "src/changed.js",
+        patch: "@@ -4,4 +4,3 @@\n a\n-b\n-c\n+d\n e",
+      },
+      { path: "src/shorter.js", patch: "@@ -7,3 +7,2 @@\n a\n-b\n c" },
     ]),
   ]);
 });
@@ -255,7 +273,7 @@ test("skips a file whose diff cannot be read and reviews the others", async () =
     "Skipped src/odd.js: the diff could not be read.",
     "Skipped src/odder.js: the diff could not be read.",
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
-    diffSizeLine([DEFAULT_PATCH]),
+    diffSizeLine([{ path: "src/good.js", patch: DEFAULT_PATCH }]),
   ]);
   assert.deepEqual(core.messages("warning"), [
     "Diffs that could not be read: 2. These files are not reviewed.",
@@ -436,7 +454,12 @@ test("reviews an EF Core migration without its generated files", async () => {
     'Skipped src/App/Migrations/20240101120000_AddUsers.Designer.cs: matches the default exclude pattern "*.Designer.cs".',
     'Skipped src/App/Migrations/AppDbContextModelSnapshot.cs: matches the default exclude pattern "*ModelSnapshot.cs".',
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
-    diffSizeLine([DEFAULT_PATCH]),
+    diffSizeLine([
+      {
+        path: "src/App/Migrations/20240101120000_AddUsers.cs",
+        patch: DEFAULT_PATCH,
+      },
+    ]),
   ]);
   assert.deepEqual(core.messages("notice"), []);
 });
@@ -462,7 +485,10 @@ test("adds the patterns of the exclude input to the default list", async () => {
     'Skipped notes/todo.txt: matches the exclude pattern "*.txt".',
     'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
     "Parsed the diffs of 2 files: 2 added lines can receive comments.",
-    diffSizeLine([DEFAULT_PATCH, DEFAULT_PATCH]),
+    diffSizeLine([
+      { path: "src/main.js", patch: DEFAULT_PATCH },
+      { path: "src/docs/kept.md", patch: DEFAULT_PATCH },
+    ]),
   ]);
 });
 
@@ -480,7 +506,7 @@ test("does not parse a file that is left out", async () => {
     "Found 2 changed files: 1 to review, 1 skipped.",
     'Skipped dist/index.js: matches the default exclude pattern "**/dist/**".',
     "Parsed the diffs of 1 files: 1 added lines can receive comments.",
-    diffSizeLine([DEFAULT_PATCH]),
+    diffSizeLine([{ path: "src/main.js", patch: DEFAULT_PATCH }]),
   ]);
 });
 
@@ -637,7 +663,10 @@ test("leaves out a file that does not fit the budget and takes later ones", asyn
     small("c.js"),
     small("d.js"),
   ]);
-  const budget = annotateDiff(parsePatch(addedPatch(1)).hunks).length * 3;
+  // a.js, c.js and d.js fit exactly: each costs its block and a separator.
+  const budget = ["a.js", "c.js", "d.js"]
+    .map((path) => budgetCost(path, addedPatch(1)))
+    .reduce((sum, cost) => sum + cost, 0);
   const core = createFakeCore({
     ...VALID_INPUTS,
     "max-diff-chars": String(budget),
@@ -1121,7 +1150,11 @@ test("leaves out a file larger than one request and reviews the others", async (
     ),
   );
   // It counts against neither limit.
-  assert.ok(selectionLines(core).includes(diffSizeLine([DEFAULT_PATCH])));
+  assert.ok(
+    selectionLines(core).includes(
+      diffSizeLine([{ path: "src/small.js", patch: DEFAULT_PATCH }]),
+    ),
+  );
   assert.deepEqual(core.messages("warning"), [
     `Files larger than one request to the model: 1. They are not reviewed. One request holds at most ${MAX_REQUEST_CHARS} characters.`,
   ]);
@@ -2605,4 +2638,56 @@ test("an inline comment of this run carries the text fingerprint of its line", a
     comment.body.split("\n")[1],
     fingerprintLine(APP_LINE_2, "major", textFingerprint("let b = 2;")),
   );
+});
+
+// --- The number of requests is bounded (#108) --------------------------------
+
+test("stops before the first request when the files were split into more requests than the budget allows", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const ai = createFakeAi();
+  // A stand-in that breaks the promise of the budget: 8 requests where the
+  // default budget allows 7.
+  const planBatches = ({ files }) =>
+    Array.from({ length: 8 }, () => ({ files, user: "x" }));
+
+  await runWith(core, {
+    octokit: createFakeOctokit(apiFiles(2)),
+    ai,
+    planBatches,
+  });
+
+  assert.deepEqual(ai.requests, []);
+  assert.deepEqual(ai.options, []);
+  assert.deepEqual(core.messages("setFailed"), [
+    "The files were split into more requests than the budget allows.",
+  ]);
+});
+
+test("accepts exactly the number of requests that the budget allows", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "max-diff-chars": "50000" });
+  const ai = createFakeAi();
+  // 50000 allows one request.
+  const one = ({ files }) => [{ files, user: "x" }];
+
+  await runWith(core, {
+    octokit: createFakeOctokit(apiFiles(2)),
+    ai,
+    planBatches: one,
+  });
+  assert.deepEqual(core.messages("setFailed"), []);
+  assert.equal(ai.requests.length, 1);
+
+  const second = createFakeCore({ ...VALID_INPUTS, "max-diff-chars": "50000" });
+  const none = createFakeAi();
+  const two = ({ files }) => [
+    { files, user: "x" },
+    { files, user: "y" },
+  ];
+  await runWith(second, {
+    octokit: createFakeOctokit(apiFiles(2)),
+    ai: none,
+    planBatches: two,
+  });
+  assert.deepEqual(none.requests, []);
+  assert.equal(second.messages("setFailed").length, 1);
 });

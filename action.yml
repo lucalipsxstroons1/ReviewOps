@@ -31,7 +31,7 @@ inputs:
     required: false
     default: "50"
   max-diff-chars:
-    description: Maximum size of the diffs that are reviewed, counted in characters of the annotated diff, a whole number of at least 1. A file that no longer fits is skipped and named in the log, later smaller files can still follow. The default is 200000, which is about 50000 to 65000 tokens.
+    description: Maximum size of what is sent to the model, counted in characters, a whole number of at least 1. It counts, for each file, its annotated diff with the path and the tags around it. A file that no longer fits is skipped and named in the log, later smaller files can still follow. The default is 200000, which is about 50000 to 65000 tokens, in at most 7 requests. If you raise it, raise timeout-minutes of the job as well.
     required: false
     default: "200000"
   max-comments:

@@ -68,8 +68,12 @@ function parseLimit(name, value, fallback) {
  * from being reviewed. Once `maxFiles` files are chosen, all others are left
  * out without being looked at.
  *
- * The size is the length of the annotated diff, the text that is later sent
- * to the model. It is created here once and kept as `annotated`.
+ * The size is what a file costs in the request (`request.costOf`: its block
+ * with the path, plus a separator), so the budget counts the characters that
+ * go to the model, and a run needs a bounded number of requests (#108). Without
+ * `costOf` it is the length of the annotated diff, the text that is later
+ * sent to the model. The annotated diff is created here once and kept as
+ * `annotated`.
  *
  * A file that is larger than one request to the model on its own lands in
  * `tooLarge`. It counts against neither limit: it could never be sent.
@@ -83,8 +87,9 @@ function parseLimit(name, value, fallback) {
  * @param {{
  *   maxChars: number,
  *   sizeOf: (file: T & { annotated: string }) => number,
- * } | null} [request] The size of one request and how large a file makes
- *   it. Without it, no file is too large.
+ *   costOf?: (file: T & { annotated: string }) => number,
+ * } | null} [request] The size of one request, how large a file makes it and
+ *   what it costs against `maxDiffChars`. Without it, no file is too large.
  * @returns {{
  *   selected: (T & { annotated: string })[],
  *   overLimit: { path: string, reason: string }[],
@@ -108,14 +113,16 @@ export function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
     }
 
     const annotated = annotateDiff(diff.hunks);
-    if (request && request.sizeOf({ ...diff, annotated }) > request.maxChars) {
+    const sized = { ...diff, annotated };
+    if (request && request.sizeOf(sized) > request.maxChars) {
       tooLarge.push({
         path: diff.path,
         reason: OVER_LIMIT_REASONS.request(request.maxChars),
       });
       continue;
     }
-    if (usedChars + annotated.length > maxDiffChars) {
+    const cost = request?.costOf ? request.costOf(sized) : annotated.length;
+    if (usedChars + cost > maxDiffChars) {
       overLimit.push({
         path: diff.path,
         reason: OVER_LIMIT_REASONS.chars(maxDiffChars),
@@ -123,8 +130,8 @@ export function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
       continue;
     }
 
-    usedChars += annotated.length;
-    selected.push({ ...diff, annotated });
+    usedChars += cost;
+    selected.push(sized);
   }
 
   return { selected, overLimit, tooLarge, usedChars };

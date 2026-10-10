@@ -8,8 +8,8 @@ export { AiError };
 // project from variables of the environment if they were left out, and it
 // would then send the key and the code to wherever the variable points.
 const BASE_URL = "https://api.openai.com/v1";
-const TIMEOUT_MS = 120_000;
-const MAX_RETRIES = 2;
+export const TIMEOUT_MS = 120_000;
+export const MAX_RETRIES = 2;
 
 // Low, so that a second run over the same diff gives similar findings.
 const TEMPERATURE = 0.1;

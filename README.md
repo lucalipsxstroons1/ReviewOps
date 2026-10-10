@@ -41,7 +41,7 @@ jobs:
   review:
     name: AI review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Review the pull request
         uses: lucalipsxstroons1/ReviewOps@v1
@@ -86,7 +86,7 @@ jobs:
   review:
     name: AI review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Review the pull request
         id: review
@@ -115,7 +115,7 @@ jobs:
 | `language` | no | `en` | Language of the feedback: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `ja`, `zh` or `ko`. Code, identifiers, file paths, severities and categories stay in English. |
 | `exclude` | no | empty | More glob patterns for files to leave out, one per line. They extend the built-in list (lockfiles, build output, generated code, binary files). A pattern without a slash applies in every directory, a pattern with a slash from the root of the repository. At most 50 patterns, and no negation, braces, parentheses or backslashes. A pattern has at most two `*` and two `**`. |
 | `max-files` | no | `50` | Maximum number of files that are reviewed, from 1. Files after the limit are skipped and named in the log. |
-| `max-diff-chars` | no | `200000` | Maximum size of the diffs that are reviewed, counted in characters of the annotated diff, from 1. A file that no longer fits is skipped. 200000 is about 50000 to 65000 tokens. |
+| `max-diff-chars` | no | `200000` | Maximum size of what is sent to the model, from 1: for each file its annotated diff with the path and the tags around it. A file that no longer fits is skipped. 200000 is about 50000 to 65000 tokens. If you raise it, raise `timeout-minutes` as well (see [Costs & limits](#costs--limits)). |
 | `max-comments` | no | `10` | Maximum number of findings the review shows, from 1. The most serious come first. Findings at a line of the diff become inline comments, the others are listed in the text of the review. |
 | `fail-on` | no | `none` | Lets the step fail when open findings reach this severity: `none`, `critical` or `major` (`major` includes `critical`). The step fails only after the review is posted. It is a reminder to deal with open findings on purpose, not a protection against the author of a pull request: see [What fail-on is, and what it is not](SECURITY.md#what-fail-on-is-and-what-it-is-not). |
 | `review-drafts` | no | `false` | Whether draft pull requests are reviewed: `true` or `false`. A draft is left out by default, and the review starts when it is marked ready for review ([Skipping pull requests](#skipping-pull-requests)). |
@@ -178,7 +178,7 @@ jobs:
   review:
     name: AI review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Review the pull request and report to Insights
         uses: lucalipsxstroons1/ReviewOps@v1
@@ -240,11 +240,14 @@ The limits that keep a run small:
 | Limit | Value |
 |---|---|
 | Files per run | `max-files`, 50 by default |
-| Diff size per run | `max-diff-chars`, 200000 characters by default |
+| Diff size per run | `max-diff-chars`, 200000 characters by default; it counts the paths and tags of the files too, so everything that is sent stays within it |
 | Findings in the review | `max-comments`, 10 by default |
 | One request to the model | at most 50000 characters; a larger file is not reviewed |
+| Requests per run | at most 7 with the default `max-diff-chars` (`2 * ceil(max-diff-chars / 50000) - 1`) |
 | Requests at the same time | 4 |
-| Time of the job | `timeout-minutes: 15` in the example workflow |
+| Time of the job | `timeout-minutes: 25` in the example workflow |
+
+The job time covers the worst case: OpenAI does not answer at all, and a request takes three attempts of 120 seconds and two waits of 60 seconds, 8 minutes, in two rounds. Each 200000 characters you add to `max-diff-chars` can add up to two rounds, up to 16 minutes, so raise `timeout-minutes` with it.
 
 Files and findings over a limit are left out. The log and the job summary say which. The default model `gpt-6-luna` was chosen by a comparison on twelve pull requests ([#41](https://github.com/lucalipsxstroons1/ReviewOps/issues/41)): it costs about a fourteenth of `gpt-6.1-sol` per review and finds nearly as many documented defects. `gpt-4o-mini` missed security defects that both newer models found and is no longer the default. The prompt itself is measured with the default model on reference diffs; other models can report more false alarms, `gpt-4.1` for example guesses about code outside the diff more often.
 

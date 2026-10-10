@@ -107,6 +107,40 @@ function requestSize(file) {
 }
 
 /**
+ * What a file costs against the budget `max-diff-chars`: its block in the
+ * user message and the separator that comes with it. With this cost, the
+ * budget counts what is sent, the paths included, and the user messages of a
+ * whole run together stay within it.
+ *
+ * @param {{ path: string, annotated: string }} file
+ * @returns {number}
+ */
+function budgetCostOf(file) {
+  return requestSize(file) + SEPARATOR.length;
+}
+
+/**
+ * The most requests a run can need for a budget, when the files were chosen
+ * with {@link budgetCostOf}: `2 * ceil(budget / maxChars) - 1`, 7 with the
+ * defaults.
+ *
+ * Why: `planBatches()` begins a new request only when the next file no
+ * longer fits. So two requests that follow each other hold more than
+ * `maxChars` together, counted with the separator that would join them. With
+ * `n` requests there are `floor(n / 2)` such pairs, they are disjoint, and
+ * all files together cost at most the budget. That gives
+ * `floor(n / 2) * maxChars < budget`, and so `n < 2 * budget / maxChars + 1`.
+ * No limit of its own is needed, and a larger budget keeps its effect.
+ *
+ * @param {number} maxDiffChars The budget `max-diff-chars`.
+ * @param {number} [maxChars] The largest user message of one request.
+ * @returns {number} At least 1.
+ */
+function maxRequestsFor(maxDiffChars, maxChars = MAX_REQUEST_CHARS) {
+  return Math.max(1, 2 * Math.ceil(maxDiffChars / maxChars) - 1);
+}
+
+/**
  * Splits the files into requests, in the order they are given.
  *
  * A request takes files until the next one no longer fits, then the next
@@ -124,7 +158,7 @@ function requestSize(file) {
  * @throws {Error} When a single file does not fit: `applyLimits()` leaves
  *   such files out before, so this is a defect.
  */
-function planBatches({ files, maxChars = MAX_REQUEST_CHARS }) {
+function batch_planBatches({ files, maxChars = MAX_REQUEST_CHARS }) {
   const batches = [];
   let current = [];
   let used = 0;
@@ -5039,8 +5073,12 @@ function parseLimit(name, value, fallback) {
  * from being reviewed. Once `maxFiles` files are chosen, all others are left
  * out without being looked at.
  *
- * The size is the length of the annotated diff, the text that is later sent
- * to the model. It is created here once and kept as `annotated`.
+ * The size is what a file costs in the request (`request.costOf`: its block
+ * with the path, plus a separator), so the budget counts the characters that
+ * go to the model, and a run needs a bounded number of requests (#108). Without
+ * `costOf` it is the length of the annotated diff, the text that is later
+ * sent to the model. The annotated diff is created here once and kept as
+ * `annotated`.
  *
  * A file that is larger than one request to the model on its own lands in
  * `tooLarge`. It counts against neither limit: it could never be sent.
@@ -5054,8 +5092,9 @@ function parseLimit(name, value, fallback) {
  * @param {{
  *   maxChars: number,
  *   sizeOf: (file: T & { annotated: string }) => number,
- * } | null} [request] The size of one request and how large a file makes
- *   it. Without it, no file is too large.
+ *   costOf?: (file: T & { annotated: string }) => number,
+ * } | null} [request] The size of one request, how large a file makes it and
+ *   what it costs against `maxDiffChars`. Without it, no file is too large.
  * @returns {{
  *   selected: (T & { annotated: string })[],
  *   overLimit: { path: string, reason: string }[],
@@ -5079,14 +5118,16 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
     }
 
     const annotated = annotateDiff(diff.hunks);
-    if (request && request.sizeOf({ ...diff, annotated }) > request.maxChars) {
+    const sized = { ...diff, annotated };
+    if (request && request.sizeOf(sized) > request.maxChars) {
       tooLarge.push({
         path: diff.path,
         reason: OVER_LIMIT_REASONS.request(request.maxChars),
       });
       continue;
     }
-    if (usedChars + annotated.length > maxDiffChars) {
+    const cost = request?.costOf ? request.costOf(sized) : annotated.length;
+    if (usedChars + cost > maxDiffChars) {
       overLimit.push({
         path: diff.path,
         reason: OVER_LIMIT_REASONS.chars(maxDiffChars),
@@ -5094,8 +5135,8 @@ function applyLimits(diffs, { maxFiles, maxDiffChars }, request = null) {
       continue;
     }
 
-    usedChars += annotated.length;
-    selected.push({ ...diff, annotated });
+    usedChars += cost;
+    selected.push(sized);
   }
 
   return { selected, overLimit, tooLarge, usedChars };
@@ -5829,6 +5870,7 @@ const NO_NEW_FINDINGS = Object.freeze(
  * @param {typeof import("@actions/github").getOctokit} [deps.getOctokit]
  * @param {typeof import("./diff/parse.js").parsePatch} [deps.parsePatch]
  * @param {typeof import("./ai/client.js").createAiClient} [deps.createAiClient]
+ * @param {typeof import("./ai/batch.js").planBatches} [deps.planBatches]
  * @param {typeof import("./insights/send.js").sendInsightsReport} [deps.sendInsightsReport]
  */
 async function run({
@@ -5837,6 +5879,7 @@ async function run({
   getOctokit = github/* getOctokit */.Q,
   parsePatch = parse_parsePatch,
   createAiClient = client_createAiClient,
+  planBatches = batch_planBatches,
   sendInsightsReport = send_sendInsightsReport,
 } = {}) {
   // The clock of the report: its duration runs from here (#75).
@@ -6153,12 +6196,15 @@ async function run({
 
     // Large pull requests are cut to the limits, in the order of GitHub. A
     // file that does not fit into one request to the model is left out too.
+    // The budget counts what a file costs in a request (block and separator),
+    // so a run has a bounded number of requests (#108).
     const { selected, overLimit, tooLarge, usedChars } = applyLimits(
       scoped,
       limits,
       {
         maxChars: MAX_REQUEST_CHARS,
         sizeOf: requestSize,
+        costOf: budgetCostOf,
       },
     );
 
@@ -6259,6 +6305,14 @@ async function run({
     core.info(`Diff size: ${usedChars} of ${limits.maxDiffChars} characters.`);
 
     const batches = planBatches({ files: selected });
+    // More requests than the budget allows would outlast `timeout-minutes`
+    // of the example workflow. With the cost above this cannot happen, so it
+    // is a defect, found before the first request that costs money.
+    if (batches.length > maxRequestsFor(limits.maxDiffChars)) {
+      throw new Error(
+        "The files were split into more requests than the budget allows.",
+      );
+    }
     core.info(
       `Sending ${selected.length} files to ${model} in ${batches.length} requests.`,
     );
