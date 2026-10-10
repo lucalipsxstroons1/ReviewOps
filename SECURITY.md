@@ -106,6 +106,7 @@ Limits you should know:
 - If the token changes (from `GITHUB_TOKEN` to an app or a personal access token, or the other way round), the earlier reviews and comments belong to another account. They are no longer recognised: the whole pull request is reviewed again, earlier findings are posted again and no longer count as open.
 - A finding for a line that the diff does not show has no fingerprint. A run that reviews only new lines drops it; a run that reviews the whole pull request can report it again.
 - The action needs `contents: read` to compare commits, which the workflow already grants.
+- What these limits mean when `fail-on` is used as a required check is in [What fail-on is, and what it is not](#what-fail-on-is-and-what-it-is-not).
 
 ## Job summary, outputs and fail-on
 
@@ -116,10 +117,37 @@ The step sets three outputs: `findings-count`, `critical-count` and `review-url`
 **Open findings** are the findings of this run and the earlier inline comments of ReviewOps whose line is still an added line of the pull request, unchanged. One rule decides, in this order: if the diff of the file of the comment is not available (no text diff from GitHub, unreadable, excluded, possible secrets, or the list of files was cut off), the finding counts as open, because nothing says that the line changed; if the fingerprint of the comment is among the added lines, it is unchanged; if the comment has a text fingerprint and the text stands as an added line of its file (of any file, when the file has no diff any more, for example after a rename), it is unchanged as well; otherwise the line changed and the finding is out. A finding counts once for each line as it is now, with the most serious severity. A run that reviews the whole pull request treats a line that an earlier comment is at in this way as commented before and does not post it again. The counts are taken before `max-comments` cuts the review, so the limit for the review never hides a finding from them. With `fail-on: critical` or `fail-on: major`, the step fails when open findings reach that severity, and only after the review is posted. A run that has nothing new, such as a second run on the same commit, counts the earlier findings as well and stays red. The default is `none`: no finding fails the workflow.
 
 - If GitHub does not answer the query for the resolved threads, a run without `fail-on` goes on with a warning and counts every earlier finding as open. With `fail-on` the count decides about the step, so the run fails before any request to the model.
-- A person who resolves the thread of an earlier comment takes its finding out of the count. Everyone who may resolve threads can do that, including the author of the pull request. The resolved thread stays visible in the pull request. The finding is still not posted again.
-- Findings in the text of a review (a line outside of the added lines, or all findings after GitHub rejected the inline comments) have no thread and are counted only in the run that found them.
-- Comments from before the severity was written, and comments of an account other than the one of the token, are not counted later. Comments from before the text fingerprint was written follow the older rule: a renamed file or a changed line above ends their finding.
-- If the same text stands in the file a second time as an added line, a finding stays open although its own line changed. When the text stands at several lines, a run over the whole pull request can post the finding again and count it twice. After a file was deleted, a line with the same text in another file keeps the finding open. A line without a letter or a digit has no text fingerprint and follows the older rule. A new file that is renamed to an excluded path counts as a deleted file. In each case, resolving the thread ends the finding.
+
+### What fail-on is, and what it is not
+
+`fail-on` is a reminder to deal with open findings on purpose: fix the code or resolve the thread. It is no protection against an author who wants to get around the check.
+
+What it does: while an open finding reaches the threshold, the step stays red. A new run on the same commit and a label do not turn it green (see "Pull requests that are left out on purpose"). Changed code or a resolved thread does. If you need a barrier, require the review of a person through the rules of the branch; this page does not describe how.
+
+The limits, in three groups. Where a limit has its own section, the text there is the full one.
+
+**A green check does not mean that the code was checked**
+
+- The model reads text that the author of the pull request wrote, so an instruction in the diff can make it report nothing. A run without findings is green. See "What happens with the answer of the model".
+- The model finds only part of the real defects. In the comparison of #41, 7 of 9 defects from real projects were found by no model.
+- Files that were left out have no findings: files over a limit (`max-files`, `max-diff-chars`), files that `exclude` or the default list leave out, files that may hold secrets, and the files of the failed requests in a run that failed in part (that run ends green with a warning). A pull request that is left out from the start (label, draft, bot) has no findings either.
+- A pull request from a fork or from Dependabot ends green without a review when GitHub passes no secrets. See "Events, forks and Dependabot".
+- The severity comes from the model and varies between runs: in the measurements of #93 and of the pull request #98, the same defect came in single runs as `minor` instead of `major`. A threshold can be missed.
+- Findings in the text of a review (a line outside of the added lines, or all findings after GitHub rejected the inline comments, HTTP 422) have no thread and are counted only in the run that found them. A new run on the same commit is green after such a finding.
+
+**A finding can leave the count without being fixed**
+
+- A person who resolves the thread of an earlier comment takes its finding out of the count. The author of the pull request can do that, and so can everyone with write access. The resolved thread stays visible in the pull request. The finding is still not posted again.
+- Every change to the commented line ends the finding, also a change that fixes nothing. It counts again only when the model reports it again.
+- A rename or a change of the line above does not end a finding. If the same text stands in the file a second time as an added line, a finding stays open although its own line changed. When the text stands at several lines, a run over the whole pull request can post the finding again and count it twice. After a file was deleted, a line with the same text in another file keeps the finding open. A new file that is renamed to an excluded path counts as a deleted file. Resolving the thread ends the finding in each case.
+- Comments from before the severity was written, and comments of an account other than the one of the token, are not counted later. Comments from before the text fingerprint was written follow the older rule: a renamed file or a changed line above ends their finding. A line without a letter or a digit has no text fingerprint, so a rename or a changed line above ends its finding as well. After you change `github-token` to another account, earlier findings no longer count. See "Repeated runs on one pull request".
+
+**Whoever may write can change the check**
+
+- The workflow file is part of the pull request. For a `pull_request` event from the same repository, GitHub runs the workflow file of the pull request. Whoever can push to the branch can change `fail-on` there or remove the step. That holds for every check of this kind.
+- Everyone with write access can edit or delete comments of ReviewOps. The count reads the fingerprint and the severity from these comments.
+- All workflows of a repository that use the `GITHUB_TOKEN` share the account `github-actions[bot]`. See "Repeated runs on one pull request".
+- The ruleset of this repository does not require a ReviewOps check (`docs/ruleset-main.json`). Whether yours does is your decision.
 
 ## Events, forks and Dependabot
 
@@ -127,7 +155,7 @@ ReviewOps runs on the `pull_request` event only. It ends with a notice on any ot
 
 GitHub passes no secrets to workflows of pull requests from forks, and runs started by Dependabot get only the Dependabot secrets. In both cases the API key is empty. ReviewOps then ends **green with a notice** and sends no request. The same pull request would end in an error if the key were missing for any other reason.
 
-**A green run does not mean that the pull request was reviewed.** If you make this check required, pull requests from forks and from Dependabot pass without a review. To review Dependabot pull requests, set the input `review-bots` to `true` (pull requests of bots are left out by default) and store the key as a Dependabot secret as well. A fork gets a review only if the owner of the repository passes secrets to workflows of forks, which is a risk of its own.
+**A green run does not mean that the pull request was reviewed.** If you make this check required, pull requests from forks and from Dependabot pass without a review. To review Dependabot pull requests, set the input `review-bots` to `true` (pull requests of bots are left out by default) and store the key as a Dependabot secret as well. A fork gets a review only if the owner of the repository passes secrets to workflows of forks, which is a risk of its own. What else a green check does not say is in [What fail-on is, and what it is not](#what-fail-on-is-and-what-it-is-not).
 
 ### Pull requests that are left out on purpose
 
@@ -135,7 +163,7 @@ Three inputs choose which pull requests are reviewed: `review-drafts` (drafts ar
 
 A run that leaves out the review sends nothing to OpenAI, posts nothing and needs no OpenAI key. It does read the files and the earlier reviews, counts the open findings, sets the outputs and applies `fail-on`, as a run with nothing new does. So a label is **no bypass** for `fail-on` used as a required check: a label can be set by anyone with the role Triage, who cannot write to the repository, and the check stays red while an open finding reaches the threshold. Only a resolved thread or changed code takes a finding out of the count.
 
-The example workflow does not cancel a running review when a label changes, so a change of labels cannot stop a review that is under way.
+The example workflow does not cancel a running review when a label changes, so a change of labels cannot stop a review that is under way. A pull request that is left out from the start has no findings, so its check is green; see [What fail-on is, and what it is not](#what-fail-on-is-and-what-it-is-not).
 
 ## What happens with the answer of the model
 
@@ -147,6 +175,7 @@ The answer is untrusted input. It comes from a model that reads text written by 
 - Nothing from the answer is executed, evaluated or loaded: no code, no URL, no file. The action makes no network request except to the GitHub API, the OpenAI API and, only if the workflow sets `insights-url`, the address of ReviewOps Insights (see above). A test over the sources keeps it that way.
 - The texts of the model reach the review only as plain text and code. Before they are posted, code blocks and inline code are written again with fences of the action, and every punctuation character outside of code is escaped; addresses, e-mail addresses, mentions and references to issues are shown as code. A review therefore contains no link, image or HTML from the model, notifies nobody and cannot forge the marker `<!-- reviewops -->` that starts every comment of the action. Every comment and every review text says that it was written by an AI model.
 - The action never approves a pull request and never requests changes.
+- An instruction in the diff can make the model report nothing, and a run without findings is green. What that means for `fail-on` is in [What fail-on is, and what it is not](#what-fail-on-is-and-what-it-is-not).
 
 ## What is not in the log
 
