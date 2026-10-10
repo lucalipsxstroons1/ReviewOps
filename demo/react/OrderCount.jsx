@@ -12,3 +12,4 @@ export function OrderCount({ customerId }) {
 
   return <span>{count} open orders</span>;
 }
+// Demo only, second run for #106.
