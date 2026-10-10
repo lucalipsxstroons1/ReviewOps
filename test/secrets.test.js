@@ -311,3 +311,192 @@ test("stays fast on very long lines", () => {
 
   assert.ok(elapsed < 1000, `masking took ${Math.round(elapsed)} ms`);
 });
+
+// --- More providers (#110) -----------------------------------------------------
+
+// The formats come from the documentation of the providers or from the list
+// of GitHub for secret scanning; the pull request names the source of each.
+// Like the others, the stand-ins are put together at run time.
+const GITLAB_KINDS = [
+  "pat",
+  "dt",
+  "rt",
+  "rtr",
+  "cbt",
+  "ptt",
+  "ft",
+  "oas",
+  "soat",
+  "imt",
+  "agent",
+  "ffct",
+  "wt",
+];
+
+/** Name, a stand-in that must be masked, and text that must stay as it is. */
+const MORE = [
+  {
+    name: "an Anthropic API key",
+    secret: `sk-${"ant"}-${"api03"}-${repeat("Ab1_-", 90)}`,
+    // A CSS class or a name that only starts the same way.
+    keep: [
+      "sk-ant-design-table-wrapper-large",
+      ".sk-ant-header { color: red; }",
+      '<div class="sk-ant-design-table-wrapper-large">',
+      `sk-${"ant"}-${"api03"}-short`,
+      `sk-${"ant"}-${"admin"}-${repeat("Ab1", 20)}`,
+    ],
+  },
+  {
+    name: "an Anthropic admin key",
+    secret: `sk-${"ant"}-${"admin01"}-${repeat("Zy9_-", 90)}`,
+    keep: [],
+  },
+  {
+    name: "an npm token",
+    secret: `npm${"_"}${repeat("Ab1", 36)}`,
+    keep: [
+      "process.env.npm_config_registry",
+      "npm_package_version",
+      "npm_lifecycle_event",
+      `npm${"_"}${repeat("Ab1", 35)}`,
+      "npm_",
+    ],
+  },
+  {
+    name: "a PyPI token",
+    secret: `pypi${"-"}AgEIcHlwaS5vcmc${repeat("Ab1_-", 200)}`,
+    keep: [
+      "pip install pypi-server",
+      "pypi-AgEI",
+      `pypi${"-"}AgEIcHlwaS5vcmc${repeat("Ab1", 10)}`,
+      "pypi-simple-index",
+    ],
+  },
+  {
+    name: "a Docker Hub personal access token",
+    secret: `dckr${"_pat_"}${repeat("Ab1_-", 40)}`,
+    keep: [`dckr${"_pat_"}`, `dckr${"_pat_"}${repeat("a", 19)}`, "dckr_pat"],
+  },
+  {
+    name: "a Docker Hub organization access token",
+    secret: `dckr${"_oat_"}${repeat("Ab1_-", 40)}`,
+    keep: [`dckr${"_oat_"}${repeat("a", 19)}`],
+  },
+  {
+    name: "a Hugging Face token",
+    secret: `hf${"_"}${repeat("Ab1", 36)}`,
+    keep: [
+      "from huggingface_hub import hf_hub_download",
+      "hf_tokenizer",
+      "hf_hub_download(repo_id)",
+      `hf${"_"}${repeat("a", 33)}`,
+      "HF_TOKEN",
+    ],
+  },
+  ...GITLAB_KINDS.map((kind) => ({
+    name: `a GitLab token with the prefix gl${kind}-`,
+    secret: `gl${kind}-${repeat("Ab1_-", 40)}`,
+    keep: [`gl${kind}-abc`, `gl${kind}-${repeat("a", 19)}`],
+  })),
+];
+
+for (const { name, secret, keep } of MORE) {
+  test(`masks ${name}, also inside quotes and after other text`, () => {
+    const { hunks } = added(
+      `const token = "${secret}";`,
+      `TOKEN=${secret} # deploy`,
+      `curl -H "Authorization: Bearer ${secret}" https://example.org`,
+    );
+
+    const result = maskSecrets(hunks);
+
+    assert.deepEqual(contents(result.hunks), [
+      `const token = "${SECRET_PLACEHOLDER}";`,
+      `TOKEN=${SECRET_PLACEHOLDER} # deploy`,
+      `curl -H "Authorization: Bearer ${SECRET_PLACEHOLDER}" https://example.org`,
+    ]);
+    assert.equal(result.masked, 3);
+  });
+
+  test(`leaves alone what only looks like ${name}`, () => {
+    const lines = keep.length > 0 ? keep : ["const x = 1;"];
+    const { hunks } = added(...lines);
+
+    const result = maskSecrets(hunks);
+
+    assert.deepEqual(contents(result.hunks), lines);
+    assert.equal(result.masked, 0);
+  });
+
+  test(`masks ${name} in a very long line, and stays fast on lines built to be slow`, () => {
+    const prefix = secret.slice(0, secret.indexOf(repeat("Ab1", 1)) || 10);
+    const lines = [
+      // The secret in the middle of a huge line.
+      `${"x ".repeat(25000)}${secret}${" x".repeat(25000)}`,
+      // The start over and over, never completed.
+      secret.slice(0, 12).repeat(8000),
+      // The start with an endless rest.
+      `${secret}${"a".repeat(100000)}`,
+      `${prefix}${"-".repeat(100000)}`,
+      `${prefix}${"_".repeat(100000)}x`,
+      "a".repeat(100000),
+    ];
+    const { hunks } = added(...lines);
+
+    const started = performance.now();
+    const result = maskSecrets(hunks);
+    const elapsed = performance.now() - started;
+
+    assert.ok(elapsed < 1000, `masking took ${Math.round(elapsed)} ms`);
+    assert.ok(contents(result.hunks)[0].includes(SECRET_PLACEHOLDER));
+  });
+}
+
+test("masks the part of a GitLab token before the first dot", () => {
+  const token = `gl${"pat"}-${repeat("Ab1_-", 40)}`;
+  const { hunks } = added(`${token}.01.abc12def`);
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), [
+    `${SECRET_PLACEHOLDER}.01.abc12def`,
+  ]);
+});
+
+test("leaves the session cookie of GitLab alone: it has no prefix of its own", () => {
+  const { hunks } = added(`_gitlab_session=${repeat("Ab1", 12)}`);
+
+  assert.equal(maskSecrets(hunks).masked, 0);
+});
+
+test("masks several of the new formats in one line and counts each", () => {
+  const first = `sk-${"ant"}-${"api03"}-${repeat("Ab1_-", 20)}`;
+  const second = `npm${"_"}${repeat("Ab1", 36)}`;
+  const { hunks } = added(`${first} ${second}`);
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), [
+    `${SECRET_PLACEHOLDER} ${SECRET_PLACEHOLDER}`,
+  ]);
+  assert.equal(result.masked, 2);
+});
+
+test("leaves a connection string with a password alone, on purpose", () => {
+  // Generic patterns hit tests and examples (see the comment at the top of
+  // src/secrets.js). The files that hold such strings for real, the
+  // appsettings*.json files, are never sent at all (src/exclude.js).
+  const lines = [
+    'var cs = "Server=db;Database=app;User Id=sa;Password=Sup3rS3cret!;";',
+    "ConnectionStrings__Default: Host=db;Username=app;Password=changeme",
+    "DATABASE_URL=postgres://user:pass@db:5432/app",
+    'password = "hunter2"',
+  ];
+  const { hunks } = added(...lines);
+
+  const result = maskSecrets(hunks);
+
+  assert.deepEqual(contents(result.hunks), lines);
+  assert.equal(result.masked, 0);
+});

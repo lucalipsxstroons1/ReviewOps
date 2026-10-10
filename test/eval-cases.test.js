@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { checkCaseSet, languageOf, loadCases } from "../eval/lib.mjs";
 import { buildUserPrompt } from "../src/ai/user-prompt.js";
+import { isSensitiveFile } from "../src/exclude.js";
+import { maskSecrets } from "../src/secrets.js";
 import { annotateDiff } from "../src/diff/annotate.js";
 import { parsePatch } from "../src/diff/parse.js";
 import { fromRoot } from "./helpers/run-action.js";
@@ -374,4 +376,26 @@ test("takes the language from the text after the last dot, in lower case", () =>
   assert.equal(languageOf("src/App.test.JS"), "js");
   assert.equal(languageOf("a/b.d/Dockerfile"), "dockerfile");
   assert.equal(languageOf("Dockerfile"), "dockerfile");
+});
+
+// --- The reference diffs and the secret filters (#110) -------------------------
+
+test("no reference diff is changed by the masking of secrets, and none has a path on the block list", () => {
+  // `eval/` masks like the action. A pattern or an entry that changes a
+  // reference diff would change a measurement without a word. If a new
+  // pattern has to hit one of these cases, measure again and say so.
+  for (const testCase of cases) {
+    const { hunks, masked } = maskSecrets(parsePatch(testCase.patch).hunks);
+    assert.equal(masked, 0, `${testCase.name}: something was masked`);
+    assert.equal(
+      JSON.stringify(hunks),
+      JSON.stringify(parsePatch(testCase.patch).hunks),
+      `${testCase.name}: the masked text differs`,
+    );
+    assert.equal(
+      isSensitiveFile(testCase.path),
+      false,
+      `${testCase.name}: the path is on the block list`,
+    );
+  }
 });

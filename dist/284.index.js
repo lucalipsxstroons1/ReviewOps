@@ -640,6 +640,24 @@ const TOKEN_PATTERNS = [
   /\b(?:sk|rk)_live_[A-Za-z0-9]{20,}\b/g,
   // Google API keys.
   /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  // Anthropic: the kind of key with a version of two digits (`api03`,
+  // `admin01`, …) after `sk-ant-`. Without the version, a CSS class such as
+  // `sk-ant-design-table-wrapper-large` would match.
+  /\bsk-ant-[a-z]{2,12}\d{2}-[A-Za-z0-9_-]{20,}/g,
+  // GitLab: the prefixes of its token table. A routable token has dots; the
+  // part before the first dot is masked, which is the secret part.
+  /\b(?:glpat|gldt|glrt|glrtr|glcbt|glptt|glft|gloas|glsoat|glimt|glagent|glffct|glwt)-[A-Za-z0-9_-]{20,}/g,
+  // npm: `npm_` and 36 characters (30 of random, 6 of checksum). The
+  // underscores of names such as `npm_config_registry` do not match.
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  // PyPI: `pypi-` and a serialized macaroon, which always starts with the
+  // same characters (the version and `pypi.org` as its location).
+  /\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}/g,
+  // Docker Hub: personal and organization access tokens.
+  /\bdckr_(?:pat|oat)_[A-Za-z0-9_-]{20,}/g,
+  // Hugging Face: `hf_` and at least 34 characters. A name such as
+  // `hf_hub_download` has underscores and does not match.
+  /\bhf_[A-Za-z0-9]{34,}\b/g,
 ];
 
 const KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
@@ -1578,6 +1596,24 @@ const SENSITIVE_FILES = Object.freeze([
   ".git-credentials",
   "credentials.json",
   "secrets.*",
+  // Configuration of .NET with connection strings and keys (#110). There is
+  // no pattern for the strings: a pattern for `Password=` would hit tests and
+  // docker-compose files, and it would miss a key such as `Jwt.Key`.
+  "appsettings*.json",
+  // Terraform: variables and state hold values in plain text.
+  "*.tfvars",
+  "*.tfvars.json",
+  "*.tfstate",
+  "*.tfstate.*",
+  // Keys, password files and stores of other tools
+  "*.ppk",
+  "*.p8",
+  "*.ovpn",
+  "*.kdbx",
+  ".htpasswd",
+  ".pgpass",
+  ".dockercfg",
+  ".vault-token",
 ]);
 
 const SENSITIVE_REASON =
