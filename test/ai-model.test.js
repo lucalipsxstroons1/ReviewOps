@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { DEFAULT_MODEL, parseModel } from "../src/ai/model.js";
+import {
+  DEFAULT_MODEL,
+  acceptsTemperature,
+  parseModel,
+} from "../src/ai/model.js";
 import { fromRoot } from "./helpers/run-action.js";
 
 const ESCAPE = String.fromCodePoint(0x1b);
@@ -83,4 +87,58 @@ test("does not load the SDK, so that run() does not pull it into the bundle", ()
     (match) => match[1],
   );
   assert.deepEqual(imports, ["../printable.js"]);
+});
+
+// --- Which models take `temperature` (#122) -----------------------------------
+
+for (const name of [
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  "gpt-4.1-2025-04-14",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4o-2024-08-06",
+  "gpt-4o-mini-2024-07-18",
+  "ft:gpt-4o-mini:my-org::abc123",
+  "ft:gpt-4.1:my-org:suffix:abc123",
+]) {
+  test(`${name} takes temperature`, () => {
+    assert.equal(acceptsTemperature(name), true);
+  });
+}
+
+for (const name of [
+  "gpt-6-luna",
+  "gpt-6.1-sol",
+  "o3-mini",
+  "o1",
+  "gpt-4",
+  "gpt-4-turbo",
+  "gpt-4.10",
+  "gpt-4.1x",
+  "gpt-4omni",
+  "gpt-4o_mini",
+  "chatgpt-4o-latest",
+  "my-gpt-4o",
+  "ft:gpt-4:my-org::abc123",
+  "ft:o3-mini:my-org::abc123",
+  "GPT-4O",
+  "something-unknown",
+  "a",
+  "",
+]) {
+  test(`${name || "an empty name"} does not take temperature`, () => {
+    assert.equal(acceptsTemperature(name), false);
+  });
+}
+
+test("the default model does not take temperature", () => {
+  assert.equal(acceptsTemperature(DEFAULT_MODEL), false);
+});
+
+test("anything that is not a name does not take temperature", () => {
+  for (const value of [undefined, null, 4, {}, ["gpt-4o"]]) {
+    assert.equal(acceptsTemperature(value), false);
+  }
 });
