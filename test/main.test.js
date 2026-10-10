@@ -2691,3 +2691,74 @@ test("accepts exactly the number of requests that the budget allows", async () =
   assert.deepEqual(none.requests, []);
   assert.equal(second.messages("setFailed").length, 1);
 });
+
+// --- Files of #110 on the block list ------------------------------------------
+
+test("never sends the configuration, state and key files of #110", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, exclude: "" });
+  const secretFiles = [
+    "backend/Api/appsettings.Development.json",
+    "appsettings.Production.json",
+    "infra/terraform.tfvars",
+    "infra/terraform.tfstate",
+    "deploy/key.ppk",
+  ];
+  const octokit = createFakeOctokit([
+    ...secretFiles.map((path) =>
+      apiFile(path, { patch: "@@ -0,0 +1 @@\n+VALUE-FROM-A-SECRET-FILE" }),
+    ),
+    apiFile("src/app.js"),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.deepEqual(ai.requests.map(pathsIn), [["src/app.js"]]);
+  assert.doesNotMatch(
+    JSON.stringify(ai.requests),
+    /VALUE-FROM|appsettings|tfstate/,
+  );
+  for (const path of secretFiles) {
+    assert.ok(
+      selectionLines(core).includes(`Skipped ${path}: ${SENSITIVE_REASON}.`),
+      `${path} is not named`,
+    );
+  }
+  assert.deepEqual(core.messages("warning"), [
+    "Files that may hold secrets: 5. They are never sent to the model and are not reviewed. Check that no real secret is part of this pull request.",
+  ]);
+});
+
+test("leaves out a file that was renamed from a name of #110", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([
+    apiFile("config/web.json", {
+      status: "renamed",
+      previous_filename: "appsettings.Production.json",
+    }),
+    apiFile("infra/state.txt", {
+      status: "renamed",
+      previous_filename: "infra/terraform.tfstate",
+    }),
+    apiFile("src/app.js"),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.deepEqual(ai.requests.map(pathsIn), [["src/app.js"]]);
+  assert.equal(core.messages("warning").length, 1);
+});
+
+test("a string of a new format is masked before it reaches the model", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const token = `sk-${"ant"}-${"api03"}-${"Ab1_-".repeat(20)}`;
+  const octokit = createFakeOctokit([
+    apiFile("src/config.js", {
+      patch: `@@ -0,0 +1,2 @@\n+const key = "${token}";\n+run(key);`,
+    }),
+  ]);
+
+  const { ai } = await runWith(core, { octokit });
+
+  assert.ok(!ai.requests[0].user.includes(token));
+  assert.match(ai.requests[0].user, /\[REDACTED SECRET\]/);
+});

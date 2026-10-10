@@ -106,6 +106,24 @@ export const SENSITIVE_FILES = Object.freeze([
   ".git-credentials",
   "credentials.json",
   "secrets.*",
+  // Configuration of .NET with connection strings and keys (#110). There is
+  // no pattern for the strings: a pattern for `Password=` would hit tests and
+  // docker-compose files, and it would miss a key such as `Jwt.Key`.
+  "appsettings*.json",
+  // Terraform: variables and state hold values in plain text.
+  "*.tfvars",
+  "*.tfvars.json",
+  "*.tfstate",
+  "*.tfstate.*",
+  // Keys, password files and stores of other tools
+  "*.ppk",
+  "*.p8",
+  "*.ovpn",
+  "*.kdbx",
+  ".htpasswd",
+  ".pgpass",
+  ".dockercfg",
+  ".vault-token",
 ]);
 
 export const SENSITIVE_REASON =

@@ -56,6 +56,12 @@ test("names the kinds of secret that are replaced", () => {
   for (const kind of [
     "GitHub tokens",
     "OpenAI keys",
+    "Anthropic API keys",
+    "GitLab tokens",
+    "npm tokens",
+    "PyPI tokens",
+    "Docker Hub access tokens",
+    "Hugging Face tokens",
     "AWS access key IDs",
     "Slack tokens",
     "Stripe live keys",

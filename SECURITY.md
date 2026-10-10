@@ -24,15 +24,17 @@ What is **not** sent: the title, the description and the author of the pull requ
 
 These file names are never sent to the model, under their new and under their old name, whatever the inputs say. The input `exclude` can only add to the list of files that are left out. It cannot remove anything from this list.
 
-`.env*`, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `credentials.json`, `secrets.*`
+`.env*`, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `credentials.json`, `secrets.*`, `appsettings*.json`, `*.tfvars`, `*.tfvars.json`, `*.tfstate`, `*.tfstate.*`, `*.ppk`, `*.p8`, `*.ovpn`, `*.kdbx`, `.htpasswd`, `.pgpass`, `.dockercfg`, `.vault-token`
+
+The `appsettings*.json` files of .NET stand on the list because they hold connection strings with passwords and keys such as a JWT key, and no pattern for strings in text could find the keys. The price is that a change of such a file is not reviewed; it shows the warning about files that may hold secrets.
 
 The log names such a file and says why it was left out.
 
 ### Strings that look like secrets
 
-Before anything is sent, strings in the diff that look like a secret are replaced with `[REDACTED SECRET]`. The action recognises GitHub tokens, OpenAI keys, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private key blocks (also a part of one that a diff shows without its begin and end lines). The log counts the replacements and names the files, never the strings.
+Before anything is sent, strings in the diff that look like a secret are replaced with `[REDACTED SECRET]`. The action recognises GitHub tokens, OpenAI keys, Anthropic API keys, GitLab tokens, npm tokens, PyPI tokens, Docker Hub access tokens, Hugging Face tokens, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private key blocks (also a part of one that a diff shows without its begin and end lines). Each format is a fixed prefix of the provider with a minimum length behind it; a name that only starts the same way, such as `npm_config_registry`, `hf_hub_download` or a CSS class that begins with `sk-ant-`, is left alone. The log counts the replacements and names the files, never the strings.
 
-This is a safety net, not a guarantee. Generic patterns such as `password = "…"` are not replaced, because they would change the code that is meant to be reviewed. A secret in another format reaches the model. If a pull request contains a real secret, treat it as leaked.
+This is a safety net, not a guarantee. Generic patterns such as `password = "…"` are not replaced, because they would change the code that is meant to be reviewed. That includes the password in a connection string (`Server=…;Password=…;`) outside of the `appsettings*.json` files, which are never sent, and a password in an address such as `postgres://user:pass@host`. A secret in another format reaches the model. If a pull request contains a real secret, treat it as leaked.
 
 ### What OpenAI does with it
 
