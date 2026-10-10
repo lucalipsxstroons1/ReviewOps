@@ -6,7 +6,12 @@ import { after, test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
 import { loadEvent } from "./helpers/fake-context.js";
-import { apiFile, apiThread, startGitHubApi } from "./helpers/github-api.js";
+import {
+  apiFile,
+  apiThread,
+  OWN_ACCOUNT,
+  startGitHubApi,
+} from "./helpers/github-api.js";
 import {
   INSIGHTS_TEST_SECRET,
   insightsError,
@@ -26,7 +31,6 @@ import {
 // counts the requests to all three.
 
 const HEAD = "1".repeat(40);
-const BOT = { type: "Bot", login: "github-actions[bot]" };
 const MARKER = "<!-- reviewops -->";
 
 // The pull request adds three lines: "a", "b" and "c".
@@ -41,14 +45,14 @@ const fingerprintOf = (content, previous = "") =>
 const ownReview = (commit_id) => ({
   id: 5,
   body: `${MARKER}\n\n### ReviewOps`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id,
 });
 const ownComment = (id, content, previous = "", severity = "major") => ({
   id,
   body: `${MARKER}\n${fingerprintLine(fingerprintOf(content, previous), severity)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
 });
 
@@ -103,8 +107,13 @@ const run = (apis, { event = PULL_REQUEST_EVENT, env = {}, on = true } = {}) =>
 /** The summary as a reader sees it: without escaping backslashes. */
 const shown = (summary) => summary.replace(/\\([!-/:-@[-`{-~])/g, "$1");
 
+// The queries for the review threads. The one for the account of the token
+// (`viewer`) is asked for apart from them.
 const graphqlRequests = (apis) =>
-  apis.github.requests.filter((request) => request.path === "/graphql");
+  apis.github.requests.filter(
+    (request) =>
+      request.path === "/graphql" && !/\bviewer\b/.test(request.body?.query),
+  );
 const statusRequests = (apis) =>
   apis.insights.requests.filter((request) => request.path.endsWith("/status"));
 
@@ -184,7 +193,7 @@ test("reports also for a comment of the run without a severity in its fingerprin
   const old = {
     id: 10,
     body: `${MARKER}\n${fingerprintLine(fingerprintOf("a"))}\n\ntext`,
-    user: BOT,
+    user: OWN_ACCOUNT,
     path: "src/app.js",
   };
   const apis = await startApis(t, {
@@ -605,4 +614,65 @@ test("a closed pull request leaves out a finding in a file whose diff is not ava
   assert.equal(result.status, 0, result.output);
   assert.equal(statusRequests(apis)[0].body.findings.length, 1);
   assert.match(result.stdout, /1 whose state is not known/);
+});
+
+// --- The account of the token (#106) -----------------------------------------
+
+test("a comment of another bot with the marker and a fingerprint is not in the status report", async (t) => {
+  const otherBot = { type: "Bot", login: "some-other-app[bot]", id: 49699333 };
+  const apis = await startApis(t, {
+    github: {
+      ...EARLIER,
+      existingComments: [
+        ownComment(10, "a"),
+        { ...ownComment(11, "b", "a"), user: otherBot },
+      ],
+      threads: [apiThread(10, false), apiThread(11, false)],
+    },
+  });
+
+  const result = await run(apis);
+
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(
+    statusRequests(apis)[0].body.findings.map(({ fingerprint }) => fingerprint),
+    [fingerprintOf("a")],
+  );
+});
+
+test("a closed pull request whose account cannot be read is a warning without a status report", async (t) => {
+  const apis = await startApis(t, {
+    github: {
+      ...EARLIER,
+      viewer: () => ({ status: 403, body: { message: "Forbidden" } }),
+    },
+  });
+
+  const result = await run(apis, {
+    event: closedEvent(true),
+    env: { "INPUT_OPENAI-API-KEY": "", "INPUT_FAIL-ON": "major" },
+  });
+
+  assert.equal(result.status, 0, result.output);
+  assert.equal(apis.insights.requests.length, 0);
+  assert.equal(apis.openai.requests.length, 0);
+  assert.match(
+    result.stdout,
+    /::warning::GitHub API request failed \(HTTP 403\)\..*The status report for ReviewOps Insights is not sent\./,
+  );
+});
+
+test("a run with a review whose account cannot be read fails and sends nothing", async (t) => {
+  const apis = await startApis(t, {
+    github: {
+      ...EARLIER,
+      viewer: () => ({ status: 403, body: { message: "Forbidden" } }),
+    },
+  });
+
+  const result = await run(apis);
+
+  assert.equal(result.status, 1);
+  assert.equal(apis.insights.requests.length, 0);
+  assert.equal(apis.openai.requests.length, 0);
 });

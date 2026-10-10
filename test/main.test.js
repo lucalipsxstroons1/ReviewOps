@@ -20,6 +20,7 @@ import {
   apiFile,
   apiFiles,
   createFakeOctokit,
+  OWN_ACCOUNT,
 } from "./helpers/github-api.js";
 import { lineFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
@@ -1710,7 +1711,7 @@ const EARLIER_SHA = "a".repeat(40);
 
 const earlierReview = (commit_id = EARLIER_SHA) => ({
   body: "<!-- reviewops -->\n\n### ReviewOps",
-  user: { type: "Bot" },
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id,
 });
@@ -1834,7 +1835,7 @@ test("does not post a comment at a line that an earlier comment is at", async ()
       existingComments: [
         {
           body: `<!-- reviewops -->\n<!-- reviewops-fingerprint: ${fingerprint} -->\n\ntext`,
-          user: { type: "Bot" },
+          user: OWN_ACCOUNT,
         },
       ],
     },
@@ -1922,7 +1923,7 @@ const APP_LINE_2 = lineFingerprint("src/app.js", "let b = 2;", "let a = 1;");
 const earlierComment = (id, severity, fingerprint = APP_LINE_2) => ({
   id,
   body: `<!-- reviewops -->\n${fingerprintLine(fingerprint, severity)}\n\ntext`,
-  user: { type: "Bot" },
+  user: OWN_ACCOUNT,
 });
 
 /** The answer of the model with one finding at line 2 of APP_FILE. */
@@ -2324,4 +2325,95 @@ test("writes a summary with the error when the run fails", async () => {
   assert.deepEqual(core.outputs, {});
   assert.match(shownSummary(core), /ReviewOps failed\./);
   assert.match(shownSummary(core), /OpenAI rejected the API key/);
+});
+
+// --- The account of the token (#106) -----------------------------------------
+
+/** An account that is no bot of this action: it has another id. */
+const OTHER_BOT = { type: "Bot", login: "some-other-app[bot]", id: 49699333 };
+
+test("a review of another bot with the marker and the head does not stop the run", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingReviews: [{ ...earlierReview(REVIEWED_HEAD), user: OTHER_BOT }],
+  });
+  const ai = createFakeAi(findingAtLine2("major"));
+
+  await runWith(core, { octokit, ai });
+
+  // As without that review: the model is asked and the review is posted.
+  assert.equal(ai.requests.length, 1);
+  assert.equal(octokit.reviews.length, 1);
+  assert.deepEqual(octokit.comparisons, []);
+  assert.deepEqual(core.messages("notice"), []);
+  assert.deepEqual(core.messages("setFailed"), []);
+});
+
+test("a comment of another bot with a fingerprint hides no finding and counts for nothing", async () => {
+  const core = createFakeCore({ ...VALID_INPUTS, "fail-on": "critical" });
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [
+      {
+        ...earlierComment(77, "critical"),
+        user: OTHER_BOT,
+        path: "src/app.js",
+      },
+    ],
+  });
+  const ai = createFakeAi(findingAtLine2("critical"));
+
+  await runWith(core, { octokit, ai });
+
+  // The finding is new, not known, and counted once: the foreign comment is
+  // not an earlier finding, so the thread query is not made either.
+  assert.equal(octokit.reviews.length, 1);
+  assert.equal(octokit.reviews[0].comments.length, 1);
+  assert.equal(core.outputs["findings-count"], "1");
+  assert.equal(octokit.queries.length, 0);
+  assert.match(core.messages("setFailed")[0], /1 open findings/);
+});
+
+test("fails before the model is asked when the account of the token cannot be read", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingReviews: [earlierReview(REVIEWED_HEAD)],
+    viewer: () => apiFailure(403),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.deepEqual(octokit.reviews, []);
+  assert.match(core.messages("setFailed")[0], /HTTP 403/);
+  assert.match(core.messages("setFailed")[0], /`github-token`/);
+});
+
+test("fails before the model is asked when the answer holds no usable id", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    existingComments: [earlierComment(77, "major")],
+    viewer: () => ({ viewer: { databaseId: null } }),
+  });
+  const ai = createFakeAi();
+
+  await runWith(core, { octokit, ai });
+
+  assert.equal(ai.requests.length, 0);
+  assert.match(
+    core.messages("setFailed")[0],
+    /did not name the account of the token/,
+  );
+});
+
+test("a first run does not ask for the account", async () => {
+  const core = createFakeCore(VALID_INPUTS);
+  const octokit = createFakeOctokit([APP_FILE], {
+    viewer: () => apiFailure(403),
+  });
+
+  await runWith(core, { octokit });
+
+  assert.deepEqual(octokit.viewerQueries, []);
+  assert.deepEqual(core.messages("setFailed"), []);
 });

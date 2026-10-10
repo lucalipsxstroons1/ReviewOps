@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parsePatch } from "../src/diff/parse.js";
 import { lineFingerprint } from "../src/fingerprint.js";
+import { IdentityUnavailableError } from "../src/github/identity.js";
 import {
   FULL_REASONS,
   readHistory,
@@ -13,7 +14,11 @@ import {
   fingerprintLine,
   INCOMPLETE_LINE,
 } from "../src/github/review.js";
-import { apiFailure, createFakeOctokit } from "./helpers/github-api.js";
+import {
+  apiFailure,
+  createFakeOctokit,
+  OWN_ACCOUNT,
+} from "./helpers/github-api.js";
 
 const HEAD = "b".repeat(40);
 const FIRST = "a".repeat(40);
@@ -25,19 +30,20 @@ const PULL_REQUEST = {
   headSha: HEAD,
 };
 
-const BOT = { type: "Bot", login: "github-actions[bot]" };
-const HUMAN = { type: "User", login: "octocat" };
+const HUMAN = { type: "User", login: "octocat", id: 583231 };
+// Another bot: it has the type of an own review, but not the id of the token.
+const OTHER_BOT = { type: "Bot", login: "some-other-app[bot]", id: 49699333 };
 
 const ownReview = (commit_id, fields = {}) => ({
   body: `${REVIEW_MARKER}\n\n### ReviewOps`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id,
   ...fields,
 });
 const ownComment = (fingerprint, fields = {}) => ({
   body: `${REVIEW_MARKER}\n${fingerprintLine(fingerprint)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   ...fields,
 });
 
@@ -205,7 +211,7 @@ test("reads back the fingerprint that commentBody() writes", async () => {
     fingerprint,
   );
   const history = await read({
-    existingComments: [{ body, user: BOT }],
+    existingComments: [{ body, user: OWN_ACCOUNT }],
   });
   assert.deepEqual([...history.fingerprints], [fingerprint]);
 });
@@ -223,7 +229,7 @@ test("ignores comments of another bot without the marker", async () => {
     existingComments: [
       {
         body: `${fingerprintLine(FP)}\n\ntext`,
-        user: { type: "Bot", login: "other[bot]" },
+        user: OTHER_BOT,
       },
     ],
   });
@@ -245,7 +251,7 @@ test("reads a fingerprint only from the second line and only in its exact shape"
     `${REVIEW_MARKER}`,
   ];
   const history = await read({
-    existingComments: bodies.map((body) => ({ body, user: BOT })),
+    existingComments: bodies.map((body) => ({ body, user: OWN_ACCOUNT })),
   });
   assert.equal(history.fingerprints.size, 0);
   assert.equal(history.ownComments, bodies.length);
@@ -256,7 +262,7 @@ test("reads a fingerprint only from the second line and only in its exact shape"
 const ownFinding = (id, fingerprint, severity, fields = {}) => ({
   id,
   body: `${REVIEW_MARKER}\n${fingerprintLine(fingerprint, severity)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   ...fields,
 });
 
@@ -289,7 +295,7 @@ test("reads back the severity that commentBody() writes", async () => {
     FP,
   );
   const history = await read({
-    existingComments: [{ id: 5, body, user: BOT }],
+    existingComments: [{ id: 5, body, user: OWN_ACCOUNT }],
   });
   assert.deepEqual(history.earlierFindings, [
     { id: 5, fingerprint: FP, severity: "major" },
@@ -309,12 +315,12 @@ test("takes no earlier finding from a person, an unknown severity or a bad id", 
       {
         id: 2,
         body: `${REVIEW_MARKER}\n<!-- reviewops-fingerprint: ${FP} severity: blocker -->`,
-        user: BOT,
+        user: OWN_ACCOUNT,
       },
       {
         id: 3,
         body: `${REVIEW_MARKER}\n<!-- reviewops-fingerprint: ${FP} severity: Critical -->`,
-        user: BOT,
+        user: OWN_ACCOUNT,
       },
       ownFinding("4", FP, "critical"),
       ownFinding(0, FP, "critical"),
@@ -347,7 +353,7 @@ test("takes only the first fingerprint line of a comment as its finding", async 
       {
         id: 21,
         body: `${REVIEW_MARKER}\n${fingerprintLine(FP, "minor")}\n${fingerprintLine(FP2, "critical")}`,
-        user: BOT,
+        user: OWN_ACCOUNT,
       },
     ],
   });
@@ -661,7 +667,7 @@ text`,
 ${fingerprintLine(FP)}
 
 text`,
-        user: BOT,
+        user: OWN_ACCOUNT,
       },
     ],
     compare: () => ahead(),
@@ -683,4 +689,162 @@ ${INCOMPLETE_LINE}
     compare: () => ahead(),
   });
   assert.equal(history.since, FIRST);
+});
+
+// --- Which account counts as own (#106) --------------------------------------
+
+test("a review of another bot with the marker and the head is no starting point", async () => {
+  const octokit = createFakeOctokit([], {
+    existingReviews: [ownReview(HEAD, { user: OTHER_BOT })],
+  });
+  const history = await readHistory(octokit, PULL_REQUEST);
+
+  assert.equal(history.mode, "full");
+  assert.equal(history.reason, FULL_REASONS.noReview);
+  assert.equal(history.ownReviews, 0);
+  assert.equal(history.newLines, null);
+  assert.equal(octokit.comparisons.length, 0);
+});
+
+test("a comment of another bot with the marker and a fingerprint is not used", async () => {
+  const history = await read({
+    existingComments: [
+      {
+        id: 8,
+        path: "a.js",
+        body: `${REVIEW_MARKER}\n${fingerprintLine(FP, "major")}\n\ntext`,
+        user: OTHER_BOT,
+      },
+    ],
+  });
+
+  assert.equal(history.fingerprints.size, 0);
+  assert.equal(history.ownComments, 0);
+  assert.deepEqual(history.earlierFindings, []);
+  assert.deepEqual(history.inlineComments, []);
+});
+
+test("a review text of another bot with a fingerprint line is not used", async () => {
+  const history = await read({
+    existingReviews: [
+      ownReview(FIRST, {
+        user: OTHER_BOT,
+        body: `${REVIEW_MARKER}\n${fingerprintLine(FP)}\n\ntext`,
+      }),
+    ],
+  });
+  assert.equal(history.fingerprints.size, 0);
+});
+
+test("an account of the type User counts as own when it has the id of the token", async () => {
+  const pat = { type: "User", login: "octocat", id: 583231 };
+  const history = await read({
+    viewer: 583231,
+    existingReviews: [ownReview(FIRST, { user: pat })],
+    existingComments: [
+      ownComment(FP, { user: pat, id: 3, path: "a.js" }),
+      // The bot of before is another account now.
+      ownComment(FP2, { user: OWN_ACCOUNT, id: 5, path: "a.js" }),
+    ],
+    compare: () => ahead(),
+  });
+
+  assert.equal(history.ownReviews, 1);
+  assert.equal(history.ownComments, 1);
+  assert.equal(history.since, FIRST);
+  assert.deepEqual([...history.fingerprints], [FP]);
+});
+
+test("an account of the type User does not count as own with another id", async () => {
+  const history = await read({
+    viewer: OWN_ACCOUNT.id,
+    existingReviews: [ownReview(FIRST, { user: HUMAN })],
+    existingComments: [ownComment(FP, { user: HUMAN })],
+  });
+
+  assert.equal(history.ownReviews, 0);
+  assert.equal(history.ownComments, 0);
+  assert.equal(history.fingerprints.size, 0);
+});
+
+test("compares ids only: the login and the type do not matter", async () => {
+  const renamed = { type: "Bot", login: "renamed[bot]", id: OWN_ACCOUNT.id };
+  const history = await read({
+    existingReviews: [ownReview(FIRST, { user: renamed })],
+    compare: () => ahead(),
+  });
+  assert.equal(history.ownReviews, 1);
+
+  for (const user of [
+    { ...OWN_ACCOUNT, id: String(OWN_ACCOUNT.id) },
+    { ...OWN_ACCOUNT, id: undefined },
+    { login: OWN_ACCOUNT.login, type: "Bot" },
+    null,
+  ]) {
+    const other = await read({ existingReviews: [ownReview(FIRST, { user })] });
+    assert.equal(other.ownReviews, 0);
+  }
+});
+
+test("does not ask for the account without a review or comment with the marker", async () => {
+  const octokit = createFakeOctokit([], {
+    existingReviews: [
+      ownReview(FIRST, { body: "Looks good." }),
+      ownReview(FIRST, { body: `text\n${REVIEW_MARKER}` }),
+      ownReview(FIRST, { body: null }),
+    ],
+    existingComments: [{ body: "A remark.", user: HUMAN }, { body: 7 }],
+  });
+  await readHistory(octokit, PULL_REQUEST);
+  await readHistory(createFakeOctokit([]), PULL_REQUEST);
+
+  assert.equal(octokit.viewerQueries.length, 0);
+});
+
+test("asks for the account once, however many items carry the marker", async () => {
+  const octokit = createFakeOctokit([], {
+    existingReviews: [ownReview(FIRST), ownReview(SECOND)],
+    existingComments: [ownComment(FP), ownComment(FP2)],
+    compare: () => ahead(),
+  });
+  await readHistory(octokit, PULL_REQUEST);
+  assert.equal(octokit.viewerQueries.length, 1);
+});
+
+test("asks for the account when only a comment carries the marker", async () => {
+  const octokit = createFakeOctokit([], {
+    existingComments: [ownComment(FP, { user: HUMAN })],
+  });
+  await readHistory(octokit, PULL_REQUEST);
+  assert.equal(octokit.viewerQueries.length, 1);
+});
+
+test("fails when the account cannot be read and something has the marker", async () => {
+  await assert.rejects(
+    read({
+      existingReviews: [ownReview(FIRST)],
+      viewer: () => apiFailure(403),
+    }),
+    (error) =>
+      error instanceof IdentityUnavailableError &&
+      /HTTP 403/.test(error.message),
+  );
+});
+
+test("fails when the answer holds no usable id", async () => {
+  await assert.rejects(
+    read({
+      existingComments: [ownComment(FP)],
+      viewer: () => ({ viewer: { databaseId: "1" } }),
+    }),
+    IdentityUnavailableError,
+  );
+});
+
+test("reads no account for a first run, even when it could not be read", async () => {
+  const history = await read({
+    viewer: () => apiFailure(403),
+    existingReviews: [],
+  });
+  assert.equal(history.mode, "full");
 });

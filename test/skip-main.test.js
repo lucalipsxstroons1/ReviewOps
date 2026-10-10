@@ -5,7 +5,12 @@ import { fingerprintLine } from "../src/github/review.js";
 import { run } from "../src/main.js";
 import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
 import { createFakeCore } from "./helpers/fake-core.js";
-import { apiFile, createFakeOctokit } from "./helpers/github-api.js";
+import {
+  apiFailure,
+  apiFile,
+  createFakeOctokit,
+  OWN_ACCOUNT,
+} from "./helpers/github-api.js";
 
 // Unit tests of `run()` for leaving out the review (#23): what the run does,
 // and what it never does, without a process.
@@ -24,18 +29,16 @@ const FILES = [
   }),
 ];
 
-const BOT = { type: "Bot", login: "github-actions[bot]" };
-
 const earlierComment = (severity) => ({
   id: 77,
   body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint("src/app.js", "let b = 2;", "let a = 1;"), severity)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
 });
 const reviewedHead = {
   id: 5,
   body: "<!-- reviewops -->\n\n### ReviewOps",
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id: "1".repeat(40),
 };
@@ -191,4 +194,37 @@ test("every other pull request is reviewed as before", async () => {
 
   assert.equal(asked, 1);
   assert.deepEqual(core.messages("notice"), []);
+});
+
+test("a left out run fails when the account of the token cannot be read", async () => {
+  const octokit = createFakeOctokit(FILES, {
+    existingReviews: [reviewedHead],
+    viewer: () => apiFailure(403),
+  });
+
+  const { core, modelAsked } = await runWith({ change: labelled, octokit });
+
+  assert.equal(modelAsked, false);
+  assert.match(core.messages("setFailed")[0], /HTTP 403/);
+});
+
+test("a left out run counts no finding of another bot", async () => {
+  const octokit = createFakeOctokit(FILES, {
+    existingReviews: [reviewedHead],
+    existingComments: [
+      {
+        ...earlierComment("critical"),
+        user: { type: "Bot", login: "other[bot]", id: 49699333 },
+      },
+    ],
+  });
+
+  const { core } = await runWith({
+    inputs: { "fail-on": "critical" },
+    change: labelled,
+    octokit,
+  });
+
+  assert.equal(core.outputs["critical-count"], "0");
+  assert.deepEqual(core.messages("setFailed"), []);
 });

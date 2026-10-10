@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
-import { apiFile, apiThread, startGitHubApi } from "./helpers/github-api.js";
+import {
+  apiFile,
+  apiThread,
+  OWN_ACCOUNT,
+  startGitHubApi,
+} from "./helpers/github-api.js";
 import { reviewCompletion, startOpenAiApi } from "./helpers/openai-api.js";
 import {
   PULL_REQUEST_EVENT,
@@ -15,7 +20,6 @@ import {
 // action runs as its own process; GitHub and OpenAI are local stand-ins.
 
 const HEAD = "1".repeat(40);
-const BOT = { type: "Bot", login: "github-actions[bot]" };
 
 const run = (api, inputs = {}) =>
   startAction(
@@ -169,13 +173,13 @@ test("says No findings in the summary when nothing was found", async (t) => {
 const earlierComment = (severity) => ({
   id: 77,
   body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint("src/app.js", "let b = 2;", "let a = 1;"), severity)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
 });
 const reviewedHead = {
   id: 5,
   body: "<!-- reviewops -->\n\n### ReviewOps",
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id: HEAD,
 };
@@ -192,7 +196,12 @@ test("a run again on the same commit stays red while a critical finding is open"
   assert.equal(result.status, 1, result.output);
   assert.equal(api.openai.requests.length, 0);
   assert.deepEqual(api.reviews, []);
-  assert.ok(api.requests.some(({ path }) => path === "/graphql"));
+  assert.ok(
+    api.requests.some(
+      ({ path, body }) =>
+        path === "/graphql" && /reviewThreads/.test(body?.query),
+    ),
+  );
   assert.equal(result.outputs["critical-count"], "1");
 });
 
