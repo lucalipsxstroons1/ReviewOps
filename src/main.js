@@ -43,7 +43,9 @@ import {
 import { assertInputs, readInputs, secretsOf } from "./inputs.js";
 import { deriveStatusUrl, parseInsightsConfig } from "./insights/config.js";
 import {
+  NOT_BUILT_TEXT,
   NO_SECRET_TEXT,
+  STATUS_NOT_BUILT_TEXT,
   deliverInsightsReport,
   deliverStatusReport,
 } from "./insights/deliver.js";
@@ -206,6 +208,35 @@ export async function run({
 
     const octokit = getOctokit(inputs.githubToken);
 
+    // The status report of this run goes out in `finish()`, after the
+    // outputs. The two places that plan it (a closed pull request, and the
+    // regular end of a review) hand over what they read and nothing else.
+    const planStatusReport = ({
+      comments,
+      diffs,
+      unknownPaths,
+      listingTruncated,
+      threads,
+    }) => {
+      statusJob = () =>
+        deliverStatusReport({
+          core,
+          redact,
+          insights: { statusUrl, secret: insights.secret },
+          send: sendInsightsReport,
+          facts: {
+            pullRequest,
+            context,
+            state,
+            comments,
+            diffs,
+            unknownPaths,
+            listingTruncated,
+            threads,
+          },
+        });
+    };
+
     if (closed) {
       // Nothing is reviewed and nothing is posted: only the final state of
       // the earlier findings is reported. A failure to read is a warning here,
@@ -225,23 +256,13 @@ export async function run({
         );
         if (earlierWork.inlineComments.length > 0) {
           const threads = await readThreadStates(octokit, pullRequest);
-          statusJob = () =>
-            deliverStatusReport({
-              core,
-              redact,
-              insights: { statusUrl, secret: insights.secret },
-              send: sendInsightsReport,
-              facts: {
-                pullRequest,
-                context,
-                state,
-                comments: earlierWork.inlineComments,
-                diffs: closedFiles.diffs,
-                unknownPaths: unknownPathsOf(files, closedFiles.diffs),
-                listingTruncated: files.truncated,
-                threads,
-              },
-            });
+          planStatusReport({
+            comments: earlierWork.inlineComments,
+            diffs: closedFiles.diffs,
+            unknownPaths: unknownPathsOf(files, closedFiles.diffs),
+            listingTruncated: files.truncated,
+            threads,
+          });
         }
       } catch (error) {
         if (!isReadingError(error)) throw error;
@@ -374,23 +395,13 @@ export async function run({
       // end, after the outputs. It reports facts and changes nothing about
       // how the run ends.
       if (reportStatus && threadStates) {
-        statusJob = () =>
-          deliverStatusReport({
-            core,
-            redact,
-            insights: { statusUrl, secret: insights.secret },
-            send: sendInsightsReport,
-            facts: {
-              pullRequest,
-              context,
-              state,
-              comments: history.inlineComments,
-              diffs,
-              unknownPaths,
-              listingTruncated: listing.truncated,
-              threads: threadStates,
-            },
-          });
+        planStatusReport({
+          comments: history.inlineComments,
+          diffs,
+          unknownPaths,
+          listingTruncated: listing.truncated,
+          threads: threadStates,
+        });
       }
 
       const reached = findingsAtThreshold(open.bySeverity, failOn);
@@ -769,20 +780,16 @@ async function finish(
     } catch {
       // `deliverInsightsReport()` catches its errors itself. This is the net
       // under it, with the same fixed text.
-      const text =
-        "The report for ReviewOps Insights could not be built or sent.";
-      core.warning(text);
-      report.insights = { text };
+      core.warning(NOT_BUILT_TEXT);
+      report.insights = { text: NOT_BUILT_TEXT };
     }
   }
   if (statusJob) {
     try {
       report.insightsStatus = await statusJob();
     } catch {
-      const text =
-        "The status report for ReviewOps Insights could not be built or sent.";
-      core.warning(text);
-      report.insightsStatus = { text };
+      core.warning(STATUS_NOT_BUILT_TEXT);
+      report.insightsStatus = { text: STATUS_NOT_BUILT_TEXT };
     }
   } else if (secretMissingNotice && !insightsJob) {
     core.notice(NO_SECRET_TEXT);
