@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
 import { loadEvent } from "./helpers/fake-context.js";
 import {
@@ -675,4 +675,59 @@ test("a run with a review whose account cannot be read fails and sends nothing",
   assert.equal(result.status, 1);
   assert.equal(apis.insights.requests.length, 0);
   assert.equal(apis.openai.requests.length, 0);
+});
+
+// --- A rename and a changed line above (#107) ---------------------------------
+
+const withTextFingerprint = (id, content, previous, path) => ({
+  id,
+  path,
+  body: `${MARKER}\n${fingerprintLine(lineFingerprint(path, content, previous), "major", textFingerprint(content))}\n\ntext`,
+  user: OWN_ACCOUNT,
+});
+
+test("the status report says the line is unchanged after a rename and after a changed line above", async (t) => {
+  const apis = await startApis(t, {
+    github: {
+      existingReviews: [ownReview(HEAD)],
+      existingComments: [
+        // Was at line 2 of src/old.js, below "a".
+        withTextFingerprint(10, "b", "a", "src/old.js"),
+        // Is at line 2 of src/app.js, below "a" that became "a2".
+        withTextFingerprint(11, "b", "a", "src/app.js"),
+        // The line itself changed.
+        withTextFingerprint(12, "c", "b", "src/app.js"),
+      ],
+      files: [
+        apiFile("src/new.js", {
+          status: "renamed",
+          previous_filename: "src/old.js",
+          additions: 3,
+          deletions: 0,
+          patch: "@@ -0,0 +1,3 @@\n+a\n+b\n+c",
+        }),
+        apiFile("src/app.js", {
+          additions: 3,
+          deletions: 0,
+          patch: "@@ -0,0 +1,3 @@\n+a2\n+b\n+C",
+        }),
+      ],
+      threads: [apiThread(10), apiThread(11), apiThread(12)],
+    },
+  });
+
+  const result = await run(apis);
+
+  assert.equal(result.status, 0, result.output);
+  const [request] = statusRequests(apis);
+  assert.deepEqual(validateStatusPayload(request.body), []);
+  assert.deepEqual(
+    request.body.findings.map(({ lineUnchanged }) => lineUnchanged),
+    [true, true, false],
+  );
+  // Only the fingerprints of the comments are named: no text fingerprint.
+  assert.ok(
+    !JSON.stringify(request.body).includes(textFingerprint("b")),
+    "the text fingerprint must not be sent",
+  );
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { selectFindings } from "../src/findings.js";
 
 const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b);
@@ -43,6 +43,7 @@ test("returns nothing for an empty list of findings", () => {
   assert.deepEqual(select([reviewOf(["a.js"], [])]), {
     inline: [],
     fingerprints: [],
+    textFingerprints: [],
     unplaced: [],
     unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
@@ -54,6 +55,7 @@ test("returns nothing when no request worked", () => {
   assert.deepEqual(select([]), {
     inline: [],
     fingerprints: [],
+    textFingerprints: [],
     unplaced: [],
     unplacedFingerprints: [],
     dropped: NOTHING_DROPPED,
@@ -694,4 +696,35 @@ test("does not count findings outside of the new lines", () => {
     newLines: new Map([["a.js", new Set([2])]]),
   });
   assert.deepEqual(result.counts, { ...NO_COUNTS, major: 1 });
+});
+
+// --- The text fingerprint (#107) --------------------------------------------
+
+test("gives every inline comment the text fingerprint of its line, parallel to the fingerprints", () => {
+  const result = select([
+    textReviewOf("a.js", [finding("a.js", 4), finding("a.js", 2, "critical")]),
+  ]);
+
+  assert.deepEqual(result.textFingerprints, [
+    textFingerprint("code 2"),
+    textFingerprint("code 4"),
+  ]);
+  assert.equal(result.textFingerprints.length, result.fingerprints.length);
+});
+
+test("has no text fingerprint for a line without a letter or a digit, or without the text", () => {
+  const brace = textReviewOf("a.js", [finding("a.js", 2)]);
+  brace.files[0].hunks[0].lines[1].content = "}";
+  assert.deepEqual(select([brace]).textFingerprints, [null]);
+
+  assert.deepEqual(
+    select([reviewOf(["a.js"], [finding("a.js", 2)])]).textFingerprints,
+    [null],
+  );
+});
+
+test("a finding in the text of a review has no text fingerprint to write", () => {
+  const result = select([textReviewOf("a.js", [finding("a.js", 9)])]);
+  assert.deepEqual(result.textFingerprints, []);
+  assert.equal(result.unplaced.length, 1);
 });

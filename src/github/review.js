@@ -62,16 +62,23 @@ export function aiLabel(model) {
  *
  * An inline comment adds the severity of its finding, so a later run can
  * count the findings that are still open without reading the text of the
- * model. Only one of `SEVERITIES` is written.
+ * model. Only one of `SEVERITIES` is written. An inline comment adds the
+ * text fingerprint of its line as well (#107), so a later run can tell that
+ * the line is unchanged after a rename or a change of the line above. It
+ * only ever follows a severity.
  *
  * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
  * @param {string | null} [severity] The severity of the finding.
+ * @param {string | null} [text] 16 hex characters from `textFingerprint()`.
  * @returns {string}
  */
-export const fingerprintLine = (fingerprint, severity = null) =>
-  SEVERITIES.includes(severity)
-    ? `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity} -->`
-    : `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+export const fingerprintLine = (fingerprint, severity = null, text = null) => {
+  if (!SEVERITIES.includes(severity)) {
+    return `<!-- reviewops-fingerprint: ${fingerprint} -->`;
+  }
+  const textPart = text ? ` text: ${text}` : "";
+  return `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity}${textPart} -->`;
+};
 
 /**
  * The line that marks a review as not complete: files were left out or a
@@ -103,12 +110,20 @@ function reviewHead({ incomplete, fingerprints }) {
  * @param {import("../ai/schema.js").Finding} finding
  * @param {string} model
  * @param {string | null} [fingerprint] Fingerprint of the commented line.
+ * @param {string | null} [textFingerprint] Text fingerprint of that line.
  * @returns {string}
  */
-export function commentBody(finding, model, fingerprint = null) {
+export function commentBody(
+  finding,
+  model,
+  fingerprint = null,
+  textFingerprint = null,
+) {
   const head = [
     REVIEW_MARKER,
-    ...(fingerprint ? [fingerprintLine(fingerprint, finding.severity)] : []),
+    ...(fingerprint
+      ? [fingerprintLine(fingerprint, finding.severity, textFingerprint)]
+      : []),
   ].join("\n");
   return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
@@ -264,6 +279,7 @@ function prefixLengths(blocks) {
  * @param {{
  *   inline: import("../ai/schema.js").Finding[],
  *   fingerprints?: (string | null)[],
+ *   textFingerprints?: (string | null)[],
  *   unplaced: import("../ai/schema.js").Finding[],
  *   unplacedFingerprints?: (string | null)[],
  *   dropped: { overLimit: number },
@@ -294,6 +310,7 @@ export async function postReview({
     unplaced,
     dropped,
     fingerprints = [],
+    textFingerprints = [],
     unplacedFingerprints = [],
   } = selection;
   const common = {
@@ -322,7 +339,12 @@ export async function postReview({
     path: finding.path,
     line: finding.line,
     side: "RIGHT",
-    body: commentBody(finding, model, fingerprints[index] ?? null),
+    body: commentBody(
+      finding,
+      model,
+      fingerprints[index] ?? null,
+      textFingerprints[index] ?? null,
+    ),
   }));
 
   try {

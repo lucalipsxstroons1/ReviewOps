@@ -342,3 +342,16 @@ test("the example in docs/insights-payload.md is the fixture", () => {
 
   assert.deepStrictEqual(JSON.parse(example), FIXTURE);
 });
+
+test("the text fingerprint of a line never reaches the report", () => {
+  const marked = preparedRun();
+  marked.selection.textFingerprints = ["TEXTFP0123456789", "TEXTFP9876543210"];
+
+  const text = JSON.stringify(buildInsightsPayload(marked).payload);
+
+  assert.ok(!text.includes("TEXTFP"));
+  assert.deepEqual(
+    validateInsightsPayload(buildInsightsPayload(marked).payload),
+    [],
+  );
+});

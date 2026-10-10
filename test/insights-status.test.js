@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parsePatch } from "../src/diff/parse.js";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { readPullRequestState } from "../src/github/context.js";
 import { readHistory } from "../src/github/history.js";
 import { fingerprintLine } from "../src/github/review.js";
@@ -290,8 +290,18 @@ test("lists every own inline comment with a fingerprint, with or without a sever
   });
 
   assert.deepEqual(history.inlineComments, [
-    { id: 1, path: "src/app.js", fingerprint: "a".repeat(16) },
-    { id: 2, path: "src/other.js", fingerprint: "b".repeat(16) },
+    {
+      id: 1,
+      path: "src/app.js",
+      fingerprint: "a".repeat(16),
+      textFingerprint: null,
+    },
+    {
+      id: 2,
+      path: "src/other.js",
+      fingerprint: "b".repeat(16),
+      textFingerprint: null,
+    },
   ]);
 });
 
@@ -768,4 +778,80 @@ test("the documentation names the derived address, the 1000 findings and the thu
   assert.match(STATUS_DOC, /`\/review` becomes `\/status`/);
   assert.match(STATUS_DOC, new RegExp(`1 to ${MAX_STATUS_FINDINGS} entries`));
   assert.match(STATUS_DOC, /👎/);
+});
+
+// --- The text fingerprint (#107) ------------------------------------------------
+
+const withText = (item, content) => ({
+  ...item,
+  textFingerprint: textFingerprint(content),
+});
+const OPEN = { resolved: false, thumbsDown: false };
+
+test("says the line is unchanged after a rename, with the fingerprint of the comment", () => {
+  const old = withText(comment(1, "b", "a", "src/old.js"), "b");
+
+  const { payload } = build({
+    comments: [old],
+    diffs: [diffOf("src/new.js", ["a", "b", "c"])],
+    threads: threadsOf([1, OPEN]),
+  });
+
+  assert.deepEqual(payload.findings, [
+    {
+      fingerprint: old.fingerprint,
+      lineUnchanged: true,
+      threadResolved: false,
+      thumbsDown: false,
+    },
+  ]);
+  assert.deepEqual(validateStatusPayload(payload), []);
+});
+
+test("says the line is unchanged after a change of the line above", () => {
+  const item = withText(comment(1, "b", "a"), "b");
+  const { payload } = build({
+    comments: [item],
+    diffs: [diffOf("src/app.js", ["a2", "b"])],
+    threads: threadsOf([1, OPEN]),
+  });
+  assert.equal(payload.findings[0].lineUnchanged, true);
+});
+
+test("says the line changed when its own text changed", () => {
+  const item = withText(comment(1, "b", "a"), "b");
+  const { payload } = build({
+    comments: [item],
+    diffs: [diffOf("src/app.js", ["a", "b2"])],
+    threads: threadsOf([1, OPEN]),
+  });
+  assert.equal(payload.findings[0].lineUnchanged, false);
+});
+
+test("a comment without a text fingerprint is judged as before", () => {
+  const { payload } = build({
+    comments: [comment(1, "b", "a")],
+    diffs: [diffOf("src/app.js", ["a2", "b"])],
+    threads: threadsOf([1, OPEN]),
+  });
+  assert.equal(payload.findings[0].lineUnchanged, false);
+});
+
+test("the report holds no text fingerprint, no path and no line text", () => {
+  const item = withText(comment(1, "b", "a", "src/old.js"), "b");
+  const { payload } = build({
+    comments: [item],
+    diffs: [diffOf("src/new.js", ["a", "b"])],
+    threads: threadsOf([1, OPEN]),
+  });
+
+  const text = JSON.stringify(payload);
+  assert.ok(!text.includes(item.textFingerprint));
+  assert.ok(!text.includes("src/"));
+  assert.deepEqual(Object.keys(payload.findings[0]).sort(), [
+    "fingerprint",
+    "lineUnchanged",
+    "threadResolved",
+    "thumbsDown",
+  ]);
 });

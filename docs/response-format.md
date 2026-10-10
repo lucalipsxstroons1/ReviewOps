@@ -93,8 +93,8 @@ pull request is reviewed again, step 4 does nothing.
 ### Earlier reviews
 
 A run reads the reviews and the review comments of the pull request. Only an
-item that starts with the marker `<!-- reviewops -->` and whose author is a
-bot counts as an item of ReviewOps. Everything else is never used and never
+item that starts with the marker `<!-- reviewops -->` and whose author is the
+account of the token of the run counts as an item of ReviewOps. Everything else is never used and never
 changed.
 
 - The `commit_id` of the newest review of ReviewOps is the last reviewed
@@ -106,9 +106,12 @@ changed.
   the comparison answers 404, `diverged` or `behind` (force-push, rebase), or
   when GitHub did not list every file of the comparison.
 - The second line of every inline comment is
-  `<!-- reviewops-fingerprint: <16 hex characters> severity: <severity> -->`.
+  `<!-- reviewops-fingerprint: <16 hex characters> severity: <severity> text: <16 hex characters> -->`.
   The severity lets a later run count the findings that are still open (see
-  below); a line in the head of a review text has none. The fingerprint is the
+  below), and `text` is the text fingerprint of the line: the start of the
+  SHA-256 hash over the text of the line alone. `text` follows a severity and
+  is missing for a line without a letter or a digit and in comments from before
+  it was written; a line in the head of a review text has neither. The fingerprint is the
   start of the SHA-256 hash over the path, the text of the line and the text of
   the line before it in the hunk (white space reduced to one space), taken from the masked diff. It stays the same when the
   line moves and changes when the text changes. A line with a known fingerprint
@@ -129,9 +132,15 @@ The outputs `findings-count` and `critical-count`, the job summary and
 `fail-on` count the open findings:
 
 - the findings of this run after step 5, before the limit of step 7;
-- the earlier inline comments of ReviewOps whose fingerprint is still the one
-  of an added line of the pull request, once per fingerprint, with the most
-  serious severity, unless the thread of the comment is resolved.
+- the earlier inline comments of ReviewOps that are still current, once per
+  line as it is now, with the most serious severity, unless the thread of the
+  comment is resolved. A comment is current when its fingerprint is still the
+  one of an added line of the pull request, or when its text fingerprint stands
+  at an added line of its file (a file without a diff any more: of any file),
+  or when the diff of its file is not available. A rename or a change of the
+  line above does not end a finding; a change of the line itself does.
 
 A finding of this run that step 5 drops counts through its earlier comment,
-so nothing counts twice.
+so nothing counts twice. For step 5, a line counts as commented before also
+when an earlier comment is at it by its text fingerprint and the text stands at
+exactly one line of the pull request.

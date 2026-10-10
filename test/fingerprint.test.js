@@ -5,6 +5,8 @@ import {
   FINGERPRINT_LENGTH,
   lineFingerprint,
   lineFingerprintsOf,
+  textFingerprint,
+  textFingerprintsOf,
 } from "../src/fingerprint.js";
 import { SECRET_PLACEHOLDER, maskSecrets } from "../src/secrets.js";
 
@@ -106,4 +108,37 @@ test("lineFingerprintsOf() starts every hunk without a line before", () => {
 
 test("lineFingerprintsOf() accepts a file without hunks", () => {
   assert.deepEqual([...lineFingerprintsOf({ path: "a.js" })], []);
+});
+
+// --- Text fingerprint (#107) ---------------------------------------------------
+
+test("a text fingerprint is 16 lowercase hex characters", () => {
+  assert.match(textFingerprint("let x = 1;"), /^[0-9a-f]{16}$/);
+});
+
+test("a text fingerprint depends on the text alone", () => {
+  assert.equal(textFingerprint("let  x = 1;  "), textFingerprint("let x = 1;"));
+  assert.notEqual(textFingerprint("let x = 1;"), textFingerprint("let x = 2;"));
+  // Not the fingerprint of the line: the domains are apart.
+  assert.notEqual(
+    textFingerprint("let x = 1;"),
+    lineFingerprint("", "let x = 1;", ""),
+  );
+});
+
+test("a line without a letter or a digit has no text fingerprint", () => {
+  for (const line of ["}", ");", "  ", "", "  });  ", "// --", "-----"]) {
+    assert.equal(textFingerprint(line), null, JSON.stringify(line));
+  }
+  assert.notEqual(textFingerprint("}  // x"), null);
+  assert.notEqual(textFingerprint("1"), null);
+  assert.notEqual(textFingerprint(String.fromCodePoint(0xe4)), null);
+});
+
+test("textFingerprintsOf() skips lines without substance and removed lines", () => {
+  const { hunks } = parsePatch("@@ -1,2 +1,3 @@\n a\n-gone\n+}\n+let b;");
+  const prints = textFingerprintsOf({ hunks });
+  assert.deepEqual([...prints.keys()], [1, 3]);
+  assert.equal(prints.get(3), textFingerprint("let b;"));
+  assert.equal(textFingerprintsOf({}).size, 0);
 });

@@ -650,3 +650,64 @@ ${fingerprintLine(FINGERPRINT)}`,
   assert.ok(!body.includes(INCOMPLETE_LINE));
   assert.ok(!body.includes("reviewops-fingerprint"));
 });
+
+// --- The text fingerprint in the fingerprint line (#107) -------------------------
+
+const TEXT_FINGERPRINT = "fedcba9876543210";
+
+test("writes the text fingerprint after the severity of an inline comment", () => {
+  const body = commentBody(finding(), "gpt-4.1", FINGERPRINT, TEXT_FINGERPRINT);
+
+  assert.equal(
+    body.split("\n")[1],
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} severity: critical text: ${TEXT_FINGERPRINT} -->`,
+  );
+  assert.equal(
+    body.split("\n")[1],
+    fingerprintLine(FINGERPRINT, "critical", TEXT_FINGERPRINT),
+  );
+});
+
+test("writes no text fingerprint for a line that has none, and none without a severity", () => {
+  assert.equal(
+    commentBody(finding(), "gpt-4.1", FINGERPRINT, null).split("\n")[1],
+    fingerprintLine(FINGERPRINT, "critical"),
+  );
+  assert.equal(
+    fingerprintLine(FINGERPRINT, null, TEXT_FINGERPRINT),
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`,
+  );
+  assert.equal(
+    fingerprintLine(FINGERPRINT, "blocker", TEXT_FINGERPRINT),
+    `<!-- reviewops-fingerprint: ${FINGERPRINT} -->`,
+  );
+});
+
+test("posts the text fingerprints of the findings with their comments", async () => {
+  const octokit = createFakeOctokit();
+  await postReview({
+    octokit,
+    pullRequest: PULL_REQUEST,
+    model: "gpt-4.1",
+    summaries: [],
+    selection: {
+      inline: [finding(), finding({ line: 11 })],
+      fingerprints: [FINGERPRINT, "aaaaaaaaaaaaaaaa"],
+      textFingerprints: [TEXT_FINGERPRINT, null],
+      unplaced: [],
+      dropped: { overLimit: 0 },
+    },
+    maxComments: 10,
+    skipped: [],
+  });
+
+  const [first, second] = octokit.reviews[0].comments;
+  assert.equal(
+    first.body.split("\n")[1],
+    fingerprintLine(FINGERPRINT, "critical", TEXT_FINGERPRINT),
+  );
+  assert.equal(
+    second.body.split("\n")[1],
+    fingerprintLine("aaaaaaaaaaaaaaaa", "critical"),
+  );
+});

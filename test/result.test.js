@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lineFingerprint } from "../src/fingerprint.js";
+import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
 import {
   apiFile,
@@ -219,4 +219,152 @@ test("a resolved thread takes an earlier critical finding out of the count", asy
   assert.equal(result.outputs["critical-count"], "0");
   assert.match(shown(result.summary), /^No findings\.$/m);
   assert.match(shown(result.summary), /1 earlier findings are left out/);
+});
+
+// --- A rename and a changed line above (#107) --------------------------------
+
+const EARLIER = "a".repeat(40);
+
+/** A comment with the text fingerprint, as a run writes it today. */
+const commentWithText = (severity = "critical", path = "src/app.js") => ({
+  id: 77,
+  path,
+  body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint(path, "let b = 2;", "let a = 1;"), severity, textFingerprint("let b = 2;"))}\n\ntext`,
+  user: OWN_ACCOUNT,
+});
+
+test("a pure rename keeps the finding open and fail-on stays red", async (t) => {
+  const api = await startApis(t, {
+    files: [
+      apiFile("src/renamed.js", {
+        status: "renamed",
+        previous_filename: "src/app.js",
+        additions: 2,
+        deletions: 0,
+        patch: "@@ -0,0 +1,2 @@\n+let a = 1;\n+let b = 2;",
+      }),
+    ],
+    existingReviews: [{ ...reviewedHead, commit_id: EARLIER }],
+    existingComments: [commentWithText()],
+    compare: () => ({
+      status: 200,
+      body: {
+        status: "ahead",
+        files: [
+          {
+            filename: "src/renamed.js",
+            previous_filename: "src/app.js",
+            status: "renamed",
+            changes: 0,
+          },
+        ],
+      },
+    }),
+  });
+
+  const result = await run(api, { "INPUT_FAIL-ON": "critical" });
+
+  assert.equal(result.status, 1, result.output);
+  assert.equal(api.openai.requests.length, 0);
+  assert.deepEqual(api.reviews, []);
+  assert.equal(result.outputs["findings-count"], "1");
+  assert.equal(result.outputs["critical-count"], "1");
+});
+
+test("a changed line above keeps the finding open, once, and posts nothing again", async (t) => {
+  const api = await startApis(
+    t,
+    {
+      files: [
+        apiFile("src/app.js", {
+          additions: 2,
+          deletions: 0,
+          patch: "@@ -0,0 +1,2 @@\n+let a2 = 1;\n+let b = 2;",
+        }),
+      ],
+      existingComments: [commentWithText()],
+    },
+    reviewCompletion([finding("critical")]),
+  );
+
+  const result = await run(api, { "INPUT_FAIL-ON": "critical" });
+
+  assert.equal(result.status, 1, result.output);
+  assert.equal(api.openai.requests.length, 1);
+  assert.deepEqual(api.reviews, []);
+  assert.equal(result.outputs["findings-count"], "1");
+  assert.equal(result.outputs["critical-count"], "1");
+  assert.match(result.stdout, /1 at lines that were commented before/);
+});
+
+test("the same change in an incremental run keeps the count at one", async (t) => {
+  const api = await startApis(
+    t,
+    {
+      files: [
+        apiFile("src/app.js", {
+          additions: 2,
+          deletions: 0,
+          patch: "@@ -0,0 +1,2 @@\n+let a2 = 1;\n+let b = 2;",
+        }),
+      ],
+      existingReviews: [{ ...reviewedHead, commit_id: EARLIER }],
+      existingComments: [commentWithText()],
+      compare: () => ({
+        status: 200,
+        body: {
+          status: "ahead",
+          files: [
+            {
+              filename: "src/app.js",
+              status: "modified",
+              changes: 2,
+              patch: "@@ -1,2 +1,2 @@\n-let a = 1;\n+let a2 = 1;\n let b = 2;",
+            },
+          ],
+        },
+      }),
+    },
+    reviewCompletion([finding("critical")]),
+  );
+
+  const result = await run(api, { "INPUT_FAIL-ON": "critical" });
+
+  assert.equal(result.status, 1, result.output);
+  assert.deepEqual(api.reviews, []);
+  assert.equal(result.outputs["findings-count"], "1");
+});
+
+test("a changed line itself takes the finding out of the count, as before", async (t) => {
+  const api = await startApis(t, {
+    files: [
+      apiFile("src/app.js", {
+        additions: 2,
+        deletions: 0,
+        patch: "@@ -0,0 +1,2 @@\n+let a = 1;\n+let b = 3;",
+      }),
+    ],
+    existingComments: [commentWithText()],
+  });
+
+  const result = await run(api, { "INPUT_FAIL-ON": "critical" });
+
+  assert.equal(result.status, 0, result.output);
+  assert.equal(result.outputs["findings-count"], "0");
+});
+
+test("a finding in a file without a diff counts as open", async (t) => {
+  const api = await startApis(t, {
+    files: [apiFile("src/big.js", { patch: undefined })],
+    existingComments: [commentWithText("critical", "src/big.js")],
+  });
+
+  const result = await run(api, { "INPUT_FAIL-ON": "critical" });
+
+  assert.equal(result.status, 1, result.output);
+  assert.equal(result.outputs["critical-count"], "1");
+  assert.match(
+    result.stdout,
+    /^1 earlier findings count as open because the diff of their file is not available\.$/m,
+  );
 });

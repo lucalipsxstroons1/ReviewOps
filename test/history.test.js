@@ -274,8 +274,20 @@ test("lists the earlier findings of own inline comments with id and severity", a
     ],
   });
   assert.deepEqual(history.earlierFindings, [
-    { id: 11, fingerprint: FP, severity: "critical" },
-    { id: 12, fingerprint: FP2, severity: "minor" },
+    {
+      id: 11,
+      path: null,
+      fingerprint: FP,
+      severity: "critical",
+      textFingerprint: null,
+    },
+    {
+      id: 12,
+      path: null,
+      fingerprint: FP2,
+      severity: "minor",
+      textFingerprint: null,
+    },
   ]);
   assert.deepEqual([...history.fingerprints].sort(), [FP, FP2].sort());
 });
@@ -298,7 +310,13 @@ test("reads back the severity that commentBody() writes", async () => {
     existingComments: [{ id: 5, body, user: OWN_ACCOUNT }],
   });
   assert.deepEqual(history.earlierFindings, [
-    { id: 5, fingerprint: FP, severity: "major" },
+    {
+      id: 5,
+      path: null,
+      fingerprint: FP,
+      severity: "major",
+      textFingerprint: null,
+    },
   ]);
 });
 
@@ -358,7 +376,13 @@ test("takes only the first fingerprint line of a comment as its finding", async 
     ],
   });
   assert.deepEqual(history.earlierFindings, [
-    { id: 21, fingerprint: FP, severity: "minor" },
+    {
+      id: 21,
+      path: null,
+      fingerprint: FP,
+      severity: "minor",
+      textFingerprint: null,
+    },
   ]);
 });
 
@@ -847,4 +871,131 @@ test("reads no account for a first run, even when it could not be read", async (
     existingReviews: [],
   });
   assert.equal(history.mode, "full");
+});
+
+// --- The text fingerprint (#107) ----------------------------------------------
+
+const TEXT = "fedcba9876543210";
+
+test("reads the text fingerprint that commentBody() writes", async () => {
+  const body = commentBody(
+    {
+      severity: "major",
+      category: "security",
+      path: "a.js",
+      line: 1,
+      title: "Title",
+      comment: "Comment",
+      suggestion: "Suggestion",
+    },
+    "gpt-4.1",
+    FP,
+    TEXT,
+  );
+  const history = await read({
+    existingComments: [{ id: 5, path: "a.js", body, user: OWN_ACCOUNT }],
+  });
+
+  assert.deepEqual(history.earlierFindings, [
+    {
+      id: 5,
+      path: "a.js",
+      fingerprint: FP,
+      severity: "major",
+      textFingerprint: TEXT,
+    },
+  ]);
+  assert.deepEqual(history.inlineComments, [
+    { id: 5, path: "a.js", fingerprint: FP, textFingerprint: TEXT },
+  ]);
+  assert.deepEqual([...history.fingerprints], [FP]);
+});
+
+test("reads every kind of fingerprint line, with both line endings", async () => {
+  for (const ending of ["\n", "\r\n"]) {
+    const comment = (id, line) => ({
+      id,
+      path: "a.js",
+      body: [REVIEW_MARKER, line, "", "text"].join(ending),
+      user: OWN_ACCOUNT,
+    });
+    const history = await read({
+      existingComments: [
+        comment(1, fingerprintLine(FP)),
+        comment(2, fingerprintLine(FP, "minor")),
+        comment(3, fingerprintLine(FP2, "critical", TEXT)),
+      ],
+    });
+
+    assert.deepEqual(
+      history.inlineComments.map(({ id, textFingerprint }) => [
+        id,
+        textFingerprint,
+      ]),
+      [
+        [1, null],
+        [2, null],
+        [3, TEXT],
+      ],
+    );
+    assert.deepEqual(
+      history.earlierFindings.map(({ id, severity }) => [id, severity]),
+      [
+        [2, "minor"],
+        [3, "critical"],
+      ],
+    );
+  }
+});
+
+test("reads no text fingerprint without a severity or in another shape", async () => {
+  const lines = [
+    `<!-- reviewops-fingerprint: ${FP} text: ${TEXT} -->`,
+    `<!-- reviewops-fingerprint: ${FP} severity: minor text: ${TEXT.toUpperCase()} -->`,
+    `<!-- reviewops-fingerprint: ${FP} severity: minor text: ${TEXT.slice(1)} -->`,
+    `<!-- reviewops-fingerprint: ${FP} severity: minor text: ${TEXT}0 -->`,
+    `<!-- reviewops-fingerprint: ${FP} severity: minor text:${TEXT} -->`,
+    `<!-- reviewops-fingerprint: ${FP} text: ${TEXT} severity: minor -->`,
+  ];
+  const history = await read({
+    existingComments: lines.map((line, index) => ({
+      id: index + 1,
+      path: "a.js",
+      body: `${REVIEW_MARKER}\n${line}\n\ntext`,
+      user: OWN_ACCOUNT,
+    })),
+  });
+
+  assert.deepEqual(history.inlineComments, []);
+  assert.equal(history.fingerprints.size, 0);
+});
+
+test("the text fingerprint is read from the head of a comment only", async () => {
+  const history = await read({
+    existingComments: [
+      {
+        id: 1,
+        path: "a.js",
+        body: `${REVIEW_MARKER}\n${fingerprintLine(FP, "minor")}\n\n${fingerprintLine(FP2, "critical", TEXT)}`,
+        user: OWN_ACCOUNT,
+      },
+    ],
+  });
+
+  assert.equal(history.earlierFindings.length, 1);
+  assert.equal(history.earlierFindings[0].textFingerprint, null);
+});
+
+test("an earlier finding names the path of its comment, or none", async () => {
+  const history = await read({
+    existingComments: [
+      ownFinding(1, FP, "minor", { path: "src/a.js" }),
+      ownFinding(2, FP2, "minor", { path: "" }),
+      ownFinding(3, FP, "minor", { path: 7 }),
+    ],
+  });
+  assert.deepEqual(
+    history.earlierFindings.map(({ path }) => path),
+    ["src/a.js", null, null],
+  );
 });

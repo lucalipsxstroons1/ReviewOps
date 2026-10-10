@@ -9,9 +9,10 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
 // is read; anything else in a comment is ignored. An inline comment adds the
-// severity of its finding; the line in the text of a review has none.
+// severity of its finding and, after it, the text fingerprint of its line
+// (#107); the line in the text of a review has neither.
 const FINGERPRINT_LINE = new RegExp(
-  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")}))? -->$`,
+  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")})(?: text: ([0-9a-f]{${FINGERPRINT_LENGTH}}))?)? -->$`,
 );
 
 // A comparison lists at most this many files, 100 per request.
@@ -88,10 +89,23 @@ const hasMarker = (item) =>
  *   fingerprints: Set<string>,
  *   ownReviews: number,
  *   ownComments: number,
- *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
- *   inlineComments: { id: number, path: string, fingerprint: string }[],
+ *   earlierFindings: {
+ *     id: number,
+ *     path: string | null,
+ *     fingerprint: string,
+ *     severity: string,
+ *     textFingerprint: string | null,
+ *   }[],
+ *   inlineComments: {
+ *     id: number,
+ *     path: string,
+ *     fingerprint: string,
+ *     textFingerprint: string | null,
+ *   }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
- *   of their finding, with the id GitHub gave them. In `incremental` mode,
+ *   of their finding, with the id GitHub gave them and the path GitHub names
+ *   for the comment. `textFingerprint` is `null` for a comment from before
+ *   it was written. In `incremental` mode,
  *   `since` is the last reviewed commit and `newLines` holds the added lines
  *   of the comparison by path. `null` as the value of a path stands for every
  *   line of that file. A path that is missing has no new line. In `full`
@@ -155,7 +169,16 @@ export async function readHistory(
   for (const comment of ownComments) {
     const [head] = readHead(comment.body).fingerprints;
     if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
-      earlierFindings.push({ id: comment.id, ...head });
+      earlierFindings.push({
+        id: comment.id,
+        path:
+          typeof comment.path === "string" && comment.path !== ""
+            ? comment.path
+            : null,
+        fingerprint: head.fingerprint,
+        severity: head.severity,
+        textFingerprint: head.text,
+      });
     }
   }
 
@@ -175,6 +198,7 @@ export async function readHistory(
         id: comment.id,
         path: comment.path,
         fingerprint: head.fingerprint,
+        textFingerprint: head.text,
       });
     }
   }
@@ -260,7 +284,11 @@ export function scopeDiffs(diffs, newLines) {
  *
  * @param {string} body
  * @returns {{
- *   fingerprints: { fingerprint: string, severity: string | null }[],
+ *   fingerprints: {
+ *     fingerprint: string,
+ *     severity: string | null,
+ *     text: string | null,
+ *   }[],
  *   incomplete: boolean,
  * }}
  */
@@ -272,6 +300,7 @@ function readHead(body) {
       result.fingerprints.push({
         fingerprint: match[1],
         severity: match[2] ?? null,
+        text: match[3] ?? null,
       });
     } else if (line === INCOMPLETE_LINE) result.incomplete = true;
     else break;
