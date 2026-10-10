@@ -117,7 +117,7 @@ jobs:
 | `max-files` | no | `50` | Maximum number of files that are reviewed, from 1. Files after the limit are skipped and named in the log. |
 | `max-diff-chars` | no | `200000` | Maximum size of the diffs that are reviewed, counted in characters of the annotated diff, from 1. A file that no longer fits is skipped. 200000 is about 50000 to 65000 tokens. |
 | `max-comments` | no | `10` | Maximum number of findings the review shows, from 1. The most serious come first. Findings at a line of the diff become inline comments, the others are listed in the text of the review. |
-| `fail-on` | no | `none` | Lets the step fail when open findings reach this severity: `none`, `critical` or `major` (`major` includes `critical`). The step fails only after the review is posted. |
+| `fail-on` | no | `none` | Lets the step fail when open findings reach this severity: `none`, `critical` or `major` (`major` includes `critical`). The step fails only after the review is posted. It is a reminder to deal with open findings on purpose, not a protection against the author of a pull request: see [What fail-on is, and what it is not](SECURITY.md#what-fail-on-is-and-what-it-is-not). |
 | `review-drafts` | no | `false` | Whether draft pull requests are reviewed: `true` or `false`. A draft is left out by default, and the review starts when it is marked ready for review ([Skipping pull requests](#skipping-pull-requests)). |
 | `skip-label` | no | `no-ai-review` | Name of a label that leaves out the review of a pull request that has it, without regard to case, at most 50 characters. Empty switches the label off. |
 | `review-bots` | no | `false` | Whether pull requests that a bot opened, such as Dependabot, are reviewed: `true` or `false`. They are left out by default. |
@@ -132,7 +132,7 @@ jobs:
 | `critical-count` | Number of open findings with the severity `critical`, counted like `findings-count`. |
 | `review-url` | Address of the review that this run posted. Empty when the run posted no review. |
 
-A run that fails with an error sets no output. Every run also writes a job summary with the reviewed and the skipped files, the open findings by severity and the tokens that were used.
+`fail-on` and the counts are a reminder, not a protection against the author of a pull request: see [What fail-on is, and what it is not](SECURITY.md#what-fail-on-is-and-what-it-is-not). A run that fails with an error sets no output. Every run also writes a job summary with the reviewed and the skipped files, the open findings by severity and the tokens that were used.
 
 ## Skipping pull requests
 

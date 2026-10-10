@@ -355,3 +355,80 @@ test("says how the status report is addressed, when it is sent and what it never
   assert.match(section, /no additional request to GitHub/);
   assert.match(section, /every GitHub user/);
 });
+
+// --- What fail-on is, and what it is not (#109) ----------------------------------
+
+const FAIL_ON_HEADING = "What fail-on is, and what it is not";
+const FAIL_ON_SENTENCE =
+  "`fail-on` is a reminder to deal with open findings on purpose: fix the code or resolve the thread. It is no protection against an author who wants to get around the check.";
+
+/** The anchor GitHub makes of a heading. */
+const anchorOf = (heading) =>
+  heading
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N} -]/gu, "")
+    .replaceAll(" ", "-");
+
+test("says in one section what fail-on is and what it is not", () => {
+  const section = sectionOf("Job summary, outputs and fail-on");
+
+  assert.ok(section.includes(`### ${FAIL_ON_HEADING}\n`));
+  assert.ok(section.includes(FAIL_ON_SENTENCE));
+  // The three groups of limits.
+  for (const group of [
+    "A green check does not mean that the code was checked",
+    "A finding can leave the count without being fixed",
+    "Whoever may write can change the check",
+  ]) {
+    assert.ok(section.includes(`**${group}**`), `${group} is missing`);
+  }
+});
+
+test("the README links the section of fail-on at the input and at the outputs", () => {
+  const readme = readFileSync(fromRoot("README.md"), "utf8");
+  const anchors = [...readme.matchAll(/\]\(SECURITY\.md#([^)]+)\)/g)].map(
+    (match) => match[1],
+  );
+  const headings = [...doc.matchAll(/^#{2,3} (.+)$/gm)].map((match) =>
+    anchorOf(match[1]),
+  );
+
+  assert.ok(anchors.includes(anchorOf(FAIL_ON_HEADING)));
+  for (const anchor of anchors) {
+    assert.ok(headings.includes(anchor), `${anchor} is no heading`);
+  }
+
+  const inputRow = readme
+    .split("\n")
+    .find((line) => line.startsWith("| `fail-on` |"));
+  assert.ok(
+    inputRow.includes("SECURITY.md#what-fail-on-is-and-what-it-is-not"),
+  );
+  const afterOutputs = readme.slice(readme.indexOf("| `critical-count` |"));
+  const nextHeading = afterOutputs.search(/\n#+ /);
+  assert.ok(
+    afterOutputs
+      .slice(0, nextHeading)
+      .includes("SECURITY.md#what-fail-on-is-and-what-it-is-not"),
+    "the outputs do not link the section",
+  );
+});
+
+test("the other sections of SECURITY.md point to the section of fail-on", () => {
+  const link = `(#${anchorOf(FAIL_ON_HEADING)})`;
+  for (const heading of [
+    "Repeated runs on one pull request",
+    "Events, forks and Dependabot",
+    "What happens with the answer of the model",
+  ]) {
+    assert.ok(sectionOf(heading).includes(link), `${heading} has no link`);
+  }
+});
+
+test("the description of fail-on in action.yml says it is a reminder", () => {
+  const action = parse(readFileSync(fromRoot("action.yml"), "utf8"));
+  assert.match(
+    action.inputs["fail-on"].description,
+    /It is a reminder, not a protection against the author of a pull request: see SECURITY\.md\./,
+  );
+});
