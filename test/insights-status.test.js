@@ -23,7 +23,11 @@ import {
 } from "../src/insights/status.js";
 import { buildSummary } from "../src/summary.js";
 import { createFakeCore } from "./helpers/fake-core.js";
-import { apiThread, createFakeOctokit } from "./helpers/github-api.js";
+import {
+  apiThread,
+  createFakeOctokit,
+  OWN_ACCOUNT,
+} from "./helpers/github-api.js";
 import {
   INSIGHTS_TEST_SECRET,
   startInsightsApi,
@@ -248,12 +252,11 @@ test("still returns the resolved comments for the count of open findings", async
 
 // --- The earlier comments -------------------------------------------------------
 
-const BOT = { type: "Bot", login: "github-actions[bot]" };
 const MARKER = "<!-- reviewops -->";
 const ownComment = (id, fingerprint, fields = {}) => ({
   id,
   body: `${MARKER}\n${fingerprintLine(fingerprint)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
   ...fields,
 });
@@ -265,12 +268,17 @@ test("lists every own inline comment with a fingerprint, with or without a sever
       {
         id: 2,
         body: `${MARKER}\n${fingerprintLine("b".repeat(16), "major")}\n\ntext`,
-        user: BOT,
+        user: OWN_ACCOUNT,
         path: "src/other.js",
       },
       // Not read: written by a person, no fingerprint, no id, no path.
       ownComment(3, "c".repeat(16), { user: { type: "User", login: "x" } }),
-      { id: 4, body: `${MARKER}\n\ntext`, user: BOT, path: "src/app.js" },
+      {
+        id: 4,
+        body: `${MARKER}\n\ntext`,
+        user: OWN_ACCOUNT,
+        path: "src/app.js",
+      },
       ownComment(0, "d".repeat(16)),
       ownComment(5, "e".repeat(16), { path: "" }),
     ],
@@ -293,7 +301,7 @@ test("compares no commits when asked not to", async () => {
       {
         id: 9,
         body: `${MARKER}\n\n### ReviewOps`,
-        user: BOT,
+        user: OWN_ACCOUNT,
         state: "COMMENTED",
         commit_id: "a".repeat(40),
       },

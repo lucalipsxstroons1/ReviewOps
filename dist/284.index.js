@@ -1,8 +1,8 @@
-export const id = 130;
-export const ids = [130];
+export const id = 284;
+export const ids = [284];
 export const modules = {
 
-/***/ 8130:
+/***/ 4284:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -2282,6 +2282,79 @@ function skipReason(entry) {
   return contentIsUnchanged ? SKIP_REASONS.unchanged : SKIP_REASONS.noPatch;
 }
 
+;// CONCATENATED MODULE: ./src/github/identity.js
+
+
+// `viewer` is the account of the token of this run: `github-actions[bot]` for
+// the `GITHUB_TOKEN`, the app for an app token, the owner for a PAT. Its
+// `databaseId` is the same number REST names as `user.id` and does not change
+// when the account is renamed.
+const QUERY = `query { viewer { databaseId } }`;
+
+/**
+ * GitHub did not tell which account the token belongs to. Only an answer of
+ * the API (or a missing one, or one of another shape) becomes this error;
+ * anything else is a defect and is passed on as it is.
+ */
+class IdentityUnavailableError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "IdentityUnavailableError";
+  }
+}
+
+const IDENTITY_HINTS = Object.freeze({
+  403: "The token may not read its own account. Check the `github-token` input.",
+});
+
+/**
+ * Reads the id of the account that the token of this run belongs to. A review
+ * or a comment is the action's own only if its author has this id.
+ *
+ * The answer is untrusted: only a positive whole number is accepted. Nothing
+ * from the answer is put into a message, and nothing in here writes to the
+ * log.
+ *
+ * @param {ReturnType<typeof import("@actions/github").getOctokit>} octokit
+ * @returns {Promise<number>}
+ * @throws {IdentityUnavailableError} When GitHub does not answer the query
+ *   or the answer holds no usable id, with a message that says what to do.
+ */
+async function readOwnAccountId(octokit) {
+  let data;
+  try {
+    data = await octokit.graphql(QUERY);
+  } catch (error) {
+    throw describeIdentityError(error);
+  }
+
+  const id = data?.viewer?.databaseId;
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new IdentityUnavailableError(
+      "GitHub did not name the account of the token, so ReviewOps cannot tell its own reviews from others. Run the workflow again later.",
+    );
+  }
+  return id;
+}
+
+/**
+ * An error of the query. GitHub can answer a GraphQL query with status 200
+ * and a list of errors; their text is not taken over, it may repeat parts of
+ * the query.
+ */
+function describeIdentityError(error) {
+  if (Number.isInteger(error?.status)) {
+    const described = describeApiError(error, IDENTITY_HINTS);
+    return new IdentityUnavailableError(described.message, { cause: error });
+  }
+  if (Array.isArray(error?.errors)) {
+    return new IdentityUnavailableError(
+      "GitHub did not answer the query for the account of the token, so ReviewOps cannot tell its own reviews from others. Run the workflow again later.",
+    );
+  }
+  return error;
+}
+
 ;// CONCATENATED MODULE: ./src/github/markdown.js
 // Turns text from the model into Markdown that GitHub renders as nothing but
 // text and code. The model can be steered by the diff, so its text could
@@ -2977,6 +3050,7 @@ function capLength(text) {
 
 
 
+
 const history_COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
@@ -3021,28 +3095,20 @@ const FULL_REASONS = Object.freeze({
     "GitHub did not list every file of the comparison with the earlier commit",
 });
 
-/**
- * Tells whether GitHub shows an account as an automation account. Only such
- * accounts count as the author of an earlier review: a person, who could
- * copy the marker into a comment, is never read.
- *
- * @param {{ user?: { type?: unknown } | null }} item
- */
-const isBot = (item) => item?.user?.type === "Bot";
-
-/** A review or a comment that this action posted: the marker and a bot. */
-const isOwn = (item) =>
-  isBot(item) &&
-  typeof item.body === "string" &&
-  item.body.startsWith(REVIEW_MARKER);
+/** Whether the text of a review or comment starts with the marker. */
+const hasMarker = (item) =>
+  typeof item?.body === "string" && item.body.startsWith(REVIEW_MARKER);
 
 /**
  * Reads what ReviewOps already did on this pull request, so a new run does
  * not repeat it.
  *
  * - The reviews of this action are the ones with the marker at the start of
- *   their text and a bot as author. The `commit_id` of the newest one is the
- *   last commit that was reviewed.
+ *   their text and the account of the token as author (`user.id` is the id
+ *   `viewer` names). Any other account, a bot or a person, is never read,
+ *   even with the marker. The account is asked for only if something starts
+ *   with the marker. The `commit_id` of the newest one is the last commit
+ *   that was reviewed.
  * - The fingerprints come from the second line of every inline comment of
  *   this action, including old and resolved ones.
  * - The lines that are new since the last reviewed commit come from a
@@ -3071,11 +3137,13 @@ const isOwn = (item) =>
  *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
  *   inlineComments: { id: number, path: string, fingerprint: string }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
- *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
- *   `newLines` holds the added lines of the comparison by path. `null` as
- *   the value of a path stands for every line of that file. A path that is
- *   missing has no new line. In `full` mode, `newLines` is `null` and
- *   `reason` is one of {@link FULL_REASONS}.
+ *   of their finding, with the id GitHub gave them. In `incremental` mode,
+ *   `since` is the last reviewed commit and `newLines` holds the added lines
+ *   of the comparison by path. `null` as the value of a path stands for every
+ *   line of that file. A path that is missing has no new line. In `full`
+ *   mode, `newLines` is `null` and `reason` is one of {@link FULL_REASONS}.
+ * @throws {import("./identity.js").IdentityUnavailableError} When something
+ *   starts with the marker and GitHub does not name the account of the token.
  */
 async function readHistory(
   octokit,
@@ -3105,8 +3173,20 @@ async function readHistory(
     throw describeApiError(error, LIST_HINTS);
   }
 
-  const ownReviews = reviews.filter(isOwn);
-  const ownComments = comments.filter(isOwn);
+  // Only an item that starts with the marker can be an own one. Without one,
+  // there is nothing to tell apart, and the account is not asked for.
+  const marked = {
+    reviews: reviews.filter(hasMarker),
+    comments: comments.filter(hasMarker),
+  };
+  let ownReviews = [];
+  let ownComments = [];
+  if (marked.reviews.length > 0 || marked.comments.length > 0) {
+    const ownId = await readOwnAccountId(octokit);
+    const isOwn = (item) => item.user?.id === ownId;
+    ownReviews = marked.reviews.filter(isOwn);
+    ownComments = marked.comments.filter(isOwn);
+  }
   const fingerprints = new Set();
   for (const item of [...ownComments, ...ownReviews]) {
     for (const { fingerprint } of readHead(item.body).fingerprints) {
@@ -3352,7 +3432,7 @@ const CURSOR = /^[A-Za-z0-9+/=:_-]{1,200}$/;
 
 // Only GraphQL can say whether a thread is resolved. The first comment of a
 // thread is the comment that opened it; this action only ever opens threads.
-const QUERY = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+const threads_QUERY = `query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       reviewThreads(first: ${PAGE_SIZE}, after: $cursor) {
@@ -3416,7 +3496,7 @@ async function readThreadStates(octokit, { owner, repo, pullNumber }) {
   for (let page = 0; page < MAX_PAGES; page += 1) {
     let data;
     try {
-      data = await octokit.graphql(QUERY, {
+      data = await octokit.graphql(threads_QUERY, {
         owner,
         repo,
         number: pullNumber,
@@ -5456,6 +5536,7 @@ function summary_pathCode(path) {
 
 
 
+
 // `pull_request_target` is left out on purpose: it hands secrets and a write
 // token to pull requests from forks.
 const SUPPORTED_EVENT = "pull_request";
@@ -6220,6 +6301,7 @@ function unknownPathsOf(listing, diffs) {
 /** An error of reading from GitHub, as opposed to a defect of the action. */
 const isReadingError = (error) =>
   error instanceof ThreadsUnavailableError ||
+  error instanceof IdentityUnavailableError ||
   Number.isInteger(error?.cause?.status);
 
 /**

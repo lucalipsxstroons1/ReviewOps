@@ -1,6 +1,20 @@
 import { createServer } from "node:http";
 
 /**
+ * The account of the token in the tests: `github-actions[bot]`, as the probe
+ * of #106 showed it for the `GITHUB_TOKEN`. The id is what `viewer` answers
+ * with and what REST names as `user.id` of an own review or comment.
+ */
+export const OWN_ACCOUNT = Object.freeze({
+  login: "github-actions[bot]",
+  id: 41898282,
+  type: "Bot",
+});
+
+/** The query of `readOwnAccountId()`, told apart from the one for threads. */
+const isViewerQuery = (query) => /\bviewer\b/.test(String(query));
+
+/**
  * One entry of GitHub's "list pull request files" response.
  *
  * @param {string} filename
@@ -97,6 +111,10 @@ export const apiFiles = (count) =>
  * @param {object[] | ((variables: object) => object | Error)} [options.threads]
  *   The review threads (`apiThread()`), served in pages, or a function that
  *   answers the GraphQL query. Without it, the pull request has no threads.
+ * @param {number | ((variables: object) => object | Error)} [options.viewer]
+ *   The id of the account of the token, or a function that answers the query
+ *   for it. Without it, `OWN_ACCOUNT.id`. The queries are recorded in
+ *   `viewerQueries`, apart from `queries`, which holds the ones for threads.
  */
 export function createFakeOctokit(
   entries = [],
@@ -106,9 +124,11 @@ export function createFakeOctokit(
     existingComments = [],
     compare,
     threads = [],
+    viewer = OWN_ACCOUNT.id,
   } = {},
 ) {
   const calls = [];
+  const viewerQueries = [];
   const reviews = [];
   const comparisons = [];
   const queries = [];
@@ -124,7 +144,17 @@ export function createFakeOctokit(
     reviews,
     comparisons,
     queries,
-    graphql: async (query, variables) => {
+    viewerQueries,
+    graphql: async (query, variables = {}) => {
+      if (isViewerQuery(query)) {
+        viewerQueries.push({ query, variables });
+        const answer =
+          typeof viewer === "function"
+            ? viewer(variables)
+            : { viewer: { databaseId: viewer } };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      }
       queries.push({ query, variables });
       const answer =
         typeof threads === "function"
@@ -236,6 +266,9 @@ export function apiFailure(status, { headers = {}, message = "Failure" } = {}) {
  * @param {object[] | ((variables: object) => { status: number, body: object })} [answer.threads]
  *   The review threads (`apiThread()`) for the GraphQL query, served in pages,
  *   or a function that answers the query. Without it, there are no threads.
+ * @param {number | (() => { status: number, body: object })} [answer.viewer]
+ *   The id of the account of the token, or a function that answers the query
+ *   for it. Without it, `OWN_ACCOUNT.id`.
  * @returns {Promise<{
  *   url: string,
  *   requests: { method: string, path: string, authorization: string | undefined, body: any }[],
@@ -254,6 +287,7 @@ export async function startGitHubApi(
     existingComments = [],
     compare,
     threads = [],
+    viewer = OWN_ACCOUNT.id,
     pull = apiPullRequest,
   } = {},
 ) {
@@ -308,6 +342,17 @@ export async function startGitHubApi(
 
     if (request.method === "POST" && url.pathname === "/graphql") {
       const variables = body?.variables ?? {};
+      if (isViewerQuery(body?.query)) {
+        const answered =
+          typeof viewer === "function"
+            ? viewer()
+            : {
+                status: 200,
+                body: { data: { viewer: { databaseId: viewer } } },
+              };
+        json(answered.status, answered.body);
+        return;
+      }
       const chosen =
         typeof threads === "function"
           ? threads(variables)

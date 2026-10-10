@@ -21,6 +21,7 @@ import {
   apiFile,
   apiFiles,
   apiPullRequest,
+  OWN_ACCOUNT,
   startGitHubApi,
 } from "./helpers/github-api.js";
 import { fromRoot } from "./helpers/run-action.js";
@@ -193,7 +194,7 @@ test("every run is a first review: the earlier reviews of ReviewOps are not read
           id: 5,
           commit_id: "3".repeat(40),
           body: marker,
-          user: { type: "Bot", login: "github-actions[bot]" },
+          user: OWN_ACCOUNT,
         },
       ],
     },
@@ -209,6 +210,9 @@ test("every run is a first review: the earlier reviews of ReviewOps are not read
       .messages("info")
       .some((line) => /Earlier work of ReviewOps/.test(line)),
   );
+  // The lists are empty, so nothing carries the marker and the account of the
+  // token is not asked for: the guard would block the query.
+  assert.ok(!s.api.requests.some(({ path }) => path === "/graphql"));
 });
 
 // --- The way through the action is the one of run() --------------------------

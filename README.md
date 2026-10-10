@@ -110,7 +110,7 @@ jobs:
 | Name | Required | Default | Description |
 |---|---|---|---|
 | `openai-api-key` | yes | | OpenAI API key. Pass it from a repository secret, never as plain text. |
-| `github-token` | no | `${{ github.token }}` | Token used to read the pull request and post the review. It needs `pull-requests: write`. The token of the workflow run is enough. A personal access token makes the action fail to recognise its own earlier comments. |
+| `github-token` | no | `${{ github.token }}` | Token used to read the pull request and post the review. It needs `pull-requests: write`. The token of the workflow run is enough. The action recognises its own earlier reviews and comments by the account of the token, so a changed token (for example from `GITHUB_TOKEN` to an app) starts the pull request over. |
 | `openai-model` | no | `gpt-6-luna` | OpenAI model that writes the review, for example `gpt-6-luna` or `gpt-6.1-sol`. It has to support Structured Outputs. A model with a low token limit per minute can fail on large pull requests. |
 | `language` | no | `en` | Language of the feedback: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `ja`, `zh` or `ko`. Code, identifiers, file paths, severities and categories stay in English. |
 | `exclude` | no | empty | More glob patterns for files to leave out, one per line. They extend the built-in list (lockfiles, build output, generated code, binary files). A pattern without a slash applies in every directory, a pattern with a slash from the root of the repository. At most 50 patterns, and no negation, braces, parentheses or backslashes. A pattern has at most two `*` and two `**`. |
@@ -253,7 +253,7 @@ Files and findings over a limit are left out. The log and the job summary say wh
 - The model sometimes raises a false alarm, for example for code in a test that shows an attack on purpose ([#61](https://github.com/lucalipsxstroons1/ReviewOps/issues/61)).
 - For a defect inside a method, the comment can sit at the head of the method and not at the faulty line ([#70](https://github.com/lucalipsxstroons1/ReviewOps/issues/70)).
 - The model finds only part of the real defects. In the comparison of #41, the default model found 4 of 12 documented defects in at least two of three runs, and 7 of 9 defects in real projects were found by no model. Treat the review as a help, not as a check.
-- With a personal access token as `github-token`, the action does not recognise its own comments and reviews the whole pull request on every run.
+- The action recognises its earlier reviews and comments by the account of the token. After you change `github-token` to another account, the earlier ones are not recognised: the whole pull request is reviewed again and the earlier comments repeat. All workflows that use the `GITHUB_TOKEN` share the account `github-actions[bot]`.
 - A run without findings posts no review, so it leaves the starting point of the next run where it was.
 
 ## License

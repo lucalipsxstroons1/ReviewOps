@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
-import { apiFile, apiThread, startGitHubApi } from "./helpers/github-api.js";
+import {
+  apiFile,
+  apiThread,
+  OWN_ACCOUNT,
+  startGitHubApi,
+} from "./helpers/github-api.js";
 import { reviewCompletion, startOpenAiApi } from "./helpers/openai-api.js";
 import { loadEvent } from "./helpers/fake-context.js";
 import {
@@ -20,7 +25,6 @@ import {
 // stand-ins, and every test counts the requests to both.
 
 const HEAD = "1".repeat(40);
-const BOT = { type: "Bot", login: "github-actions[bot]" };
 
 // The event files of the tests, removed when all of them are done.
 const folders = [];
@@ -282,13 +286,13 @@ test("takes another label off: the run is left out", async (t) => {
 const earlierComment = (severity) => ({
   id: 77,
   body: `<!-- reviewops -->\n${fingerprintLine(lineFingerprint("src/app.js", "let b = 2;", "let a = 1;"), severity)}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
 });
 const reviewedHead = {
   id: 5,
   body: "<!-- reviewops -->\n\n### ReviewOps",
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id: HEAD,
 };

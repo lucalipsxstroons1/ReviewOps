@@ -27,6 +27,7 @@ import {
 } from "./github/context.js";
 import { SKIP_REASONS, listChangedFiles } from "./github/files.js";
 import { readHistory, scopeDiffs } from "./github/history.js";
+import { IdentityUnavailableError } from "./github/identity.js";
 import { postReview, reviewUrl, serverUrlOf } from "./github/review.js";
 import {
   ThreadsUnavailableError,
@@ -815,6 +816,7 @@ function unknownPathsOf(listing, diffs) {
 /** An error of reading from GitHub, as opposed to a defect of the action. */
 const isReadingError = (error) =>
   error instanceof ThreadsUnavailableError ||
+  error instanceof IdentityUnavailableError ||
   Number.isInteger(error?.cause?.status);
 
 /**

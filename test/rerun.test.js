@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
 import { fingerprintLine } from "../src/github/review.js";
-import { apiFile, startGitHubApi } from "./helpers/github-api.js";
+import { apiFile, OWN_ACCOUNT, startGitHubApi } from "./helpers/github-api.js";
 import { reviewCompletion, startOpenAiApi } from "./helpers/openai-api.js";
 import {
   PULL_REQUEST_EVENT,
@@ -18,8 +18,12 @@ import {
 const HEAD = "1".repeat(40);
 const EARLIER = "a".repeat(40);
 
-const BOT = { type: "Bot", login: "github-actions[bot]" };
 const MARKER = "<!-- reviewops -->";
+
+const viewerRequests = (api) =>
+  api.requests.filter(
+    ({ path, body }) => path === "/graphql" && /\bviewer\b/.test(body?.query),
+  );
 
 const run = (api) =>
   startAction(
@@ -48,7 +52,7 @@ const fingerprintOf = (content, previous = "") =>
 const ownReview = (commit_id, fields = {}) => ({
   id: 5,
   body: `${MARKER}\n\n### ReviewOps`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   state: "COMMENTED",
   commit_id,
   ...fields,
@@ -56,7 +60,7 @@ const ownReview = (commit_id, fields = {}) => ({
 const ownComment = (content, fields = {}) => ({
   id: 6,
   body: `${MARKER}\n${fingerprintLine(fingerprintOf(content))}\n\ntext`,
-  user: BOT,
+  user: OWN_ACCOUNT,
   path: "src/app.js",
   ...fields,
 });
@@ -87,8 +91,6 @@ const compareWithNewLine = () => ({
   },
 });
 
-const methodsOf = (api) => api.requests.map((request) => request.method);
-
 test("a second run on unchanged code posts nothing and does not ask the model", async (t) => {
   const api = await startApis(t, {
     files: [FILE],
@@ -109,6 +111,12 @@ test("a second run on unchanged code posts nothing and does not ask the model", 
     ),
   );
   assert.equal(result.stderr, "");
+  // The own reviews are known by the account of the token: one query for it.
+  assert.match(
+    result.stdout,
+    /Earlier work of ReviewOps on this pull request: 1 reviews, 1 comments\./,
+  );
+  assert.equal(viewerRequests(api).length, 1);
 });
 
 test("an empty commit after a review posts nothing and does not ask the model", async (t) => {
@@ -255,6 +263,8 @@ test("the first run reviews everything and says nothing about earlier reviews", 
   assert.equal(result.status, 0, result.output);
   assert.equal(api.reviews.length, 1);
   assert.doesNotMatch(result.stdout, /Earlier work of ReviewOps/);
+  // Without a review or comment of the action, nobody asks for the account.
+  assert.equal(viewerRequests(api).length, 0);
   // Files, reviews and comments were read before the review was posted.
   assert.deepEqual(
     api.requests.map((request) => request.path),
@@ -267,9 +277,54 @@ test("the first run reviews everything and says nothing about earlier reviews", 
   );
 });
 
+test("a review of another bot with the marker and the head does not end the run without a review", async (t) => {
+  const otherBot = { type: "Bot", login: "some-other-app[bot]", id: 49699333 };
+  const api = await startApis(
+    t,
+    {
+      files: [FILE],
+      existingReviews: [ownReview(HEAD, { user: otherBot })],
+      existingComments: [ownComment("a", { user: otherBot })],
+    },
+    reviewCompletion([finding(1)]),
+  );
+
+  const result = await run(api);
+
+  assert.equal(result.status, 0, result.output);
+  assert.equal(api.openai.requests.length, 1);
+  assert.equal(api.reviews.length, 1);
+  // The comment of the other bot hides nothing: line 1 is commented on.
+  assert.deepEqual(
+    api.reviews[0].body.comments.map(({ line }) => line),
+    [1],
+  );
+  assert.doesNotMatch(result.stdout, /no new lines/);
+  assert.doesNotMatch(result.stdout, /Earlier work of ReviewOps/);
+});
+
+test("fails before the model is asked when the account of the token cannot be read", async (t) => {
+  const api = await startApis(t, {
+    files: [FILE],
+    existingReviews: [ownReview(HEAD)],
+    viewer: () => ({ status: 403, body: { message: "Forbidden" } }),
+  });
+
+  const result = await run(api);
+
+  assert.equal(result.status, 1);
+  assert.equal(api.openai.requests.length, 0);
+  assert.deepEqual(api.reviews, []);
+  assert.match(
+    result.stdout,
+    /^::error::GitHub API request failed \(HTTP 403\)\. .*`github-token`/m,
+  );
+  assert.doesNotMatch(withoutMaskCommands(result.output), new RegExp(TOKEN));
+});
+
 test("comments of other reviewers and bots stay untouched and are not used", async (t) => {
-  const human = { type: "User", login: "octocat" };
-  const otherBot = { type: "Bot", login: "dependabot[bot]" };
+  const human = { type: "User", login: "octocat", id: 583231 };
+  const otherBot = { type: "Bot", login: "dependabot[bot]", id: 49699333 };
   const api = await startApis(
     t,
     {
@@ -302,10 +357,13 @@ test("comments of other reviewers and bots stay untouched and are not used", asy
     api.reviews[0].body.comments.map(({ line }) => line),
     [1],
   );
-  // Apart from reading, the run only posts its one new review: it never
-  // edits, replaces or deletes anything.
+  // Apart from reading (the query for the account of the token is a POST
+  // to GraphQL), the run only posts its one new review: it never edits,
+  // replaces or deletes anything.
   assert.deepEqual(
-    methodsOf(api).filter((method) => method !== "GET"),
+    api.requests
+      .filter(({ method, path }) => method !== "GET" && path !== "/graphql")
+      .map(({ method }) => method),
     ["POST"],
   );
   assert.doesNotMatch(withoutMaskCommands(result.output), new RegExp(TOKEN));

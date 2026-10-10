@@ -2,6 +2,7 @@ import { SEVERITIES } from "../ai/schema.js";
 import { PatchFormatError, parsePatch } from "../diff/parse.js";
 import { FINGERPRINT_LENGTH } from "../fingerprint.js";
 import { describeApiError } from "./api-error.js";
+import { readOwnAccountId } from "./identity.js";
 import { INCOMPLETE_LINE, REVIEW_MARKER } from "./review.js";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
@@ -48,28 +49,20 @@ export const FULL_REASONS = Object.freeze({
     "GitHub did not list every file of the comparison with the earlier commit",
 });
 
-/**
- * Tells whether GitHub shows an account as an automation account. Only such
- * accounts count as the author of an earlier review: a person, who could
- * copy the marker into a comment, is never read.
- *
- * @param {{ user?: { type?: unknown } | null }} item
- */
-const isBot = (item) => item?.user?.type === "Bot";
-
-/** A review or a comment that this action posted: the marker and a bot. */
-const isOwn = (item) =>
-  isBot(item) &&
-  typeof item.body === "string" &&
-  item.body.startsWith(REVIEW_MARKER);
+/** Whether the text of a review or comment starts with the marker. */
+const hasMarker = (item) =>
+  typeof item?.body === "string" && item.body.startsWith(REVIEW_MARKER);
 
 /**
  * Reads what ReviewOps already did on this pull request, so a new run does
  * not repeat it.
  *
  * - The reviews of this action are the ones with the marker at the start of
- *   their text and a bot as author. The `commit_id` of the newest one is the
- *   last commit that was reviewed.
+ *   their text and the account of the token as author (`user.id` is the id
+ *   `viewer` names). Any other account, a bot or a person, is never read,
+ *   even with the marker. The account is asked for only if something starts
+ *   with the marker. The `commit_id` of the newest one is the last commit
+ *   that was reviewed.
  * - The fingerprints come from the second line of every inline comment of
  *   this action, including old and resolved ones.
  * - The lines that are new since the last reviewed commit come from a
@@ -98,11 +91,13 @@ const isOwn = (item) =>
  *   earlierFindings: { id: number, fingerprint: string, severity: string }[],
  *   inlineComments: { id: number, path: string, fingerprint: string }[],
  * }>} `earlierFindings` are the own inline comments that name the severity
- *   of their finding, with the id GitHub gave them. In `incremental` mode, `since` is the last reviewed commit and
- *   `newLines` holds the added lines of the comparison by path. `null` as
- *   the value of a path stands for every line of that file. A path that is
- *   missing has no new line. In `full` mode, `newLines` is `null` and
- *   `reason` is one of {@link FULL_REASONS}.
+ *   of their finding, with the id GitHub gave them. In `incremental` mode,
+ *   `since` is the last reviewed commit and `newLines` holds the added lines
+ *   of the comparison by path. `null` as the value of a path stands for every
+ *   line of that file. A path that is missing has no new line. In `full`
+ *   mode, `newLines` is `null` and `reason` is one of {@link FULL_REASONS}.
+ * @throws {import("./identity.js").IdentityUnavailableError} When something
+ *   starts with the marker and GitHub does not name the account of the token.
  */
 export async function readHistory(
   octokit,
@@ -132,8 +127,20 @@ export async function readHistory(
     throw describeApiError(error, LIST_HINTS);
   }
 
-  const ownReviews = reviews.filter(isOwn);
-  const ownComments = comments.filter(isOwn);
+  // Only an item that starts with the marker can be an own one. Without one,
+  // there is nothing to tell apart, and the account is not asked for.
+  const marked = {
+    reviews: reviews.filter(hasMarker),
+    comments: comments.filter(hasMarker),
+  };
+  let ownReviews = [];
+  let ownComments = [];
+  if (marked.reviews.length > 0 || marked.comments.length > 0) {
+    const ownId = await readOwnAccountId(octokit);
+    const isOwn = (item) => item.user?.id === ownId;
+    ownReviews = marked.reviews.filter(isOwn);
+    ownComments = marked.comments.filter(isOwn);
+  }
   const fingerprints = new Set();
   for (const item of [...ownComments, ...ownReviews]) {
     for (const { fingerprint } of readHead(item.body).fingerprints) {
