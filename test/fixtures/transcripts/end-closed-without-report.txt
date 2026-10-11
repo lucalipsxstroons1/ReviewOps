@@ -1,0 +1,6 @@
+core.setSecret
+core.notice "ReviewOps left out the review: the pull request is merged. The final state goes to ReviewOps Insights only with `insights-url` (a path that ends on `/review`) and `insights-secret`, and at least one of them was not usable in this run."
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps left out the review\\: the pull request is merged\\. The final state goes to ReviewOps Insights only with \\`insights\\-url\\` \\(a path that ends on \\`\\/review\\`\\) and \\`insights\\-secret\\`\\, and at least one of them was not usable in this run\\.\n\n"

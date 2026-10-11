@@ -1,0 +1,17 @@
+core.setSecret
+core.info "ReviewOps started."
+core.info "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "graphql viewer"
+core.info "Earlier work of ReviewOps on this pull request: 1 reviews, 1 comments."
+core.info "Reviewing only the changes since commit 1111111111111111111111111111111111111111."
+github "graphql threads" {"owner":"octo-org","repo":"demo","number":42,"cursor":null}
+core.notice "ReviewOps left out the review: the pull request has the label \"no-ai-review\" (input skip-label). A green run does not mean that this pull request was reviewed."
+core.info "Open findings: 1 (1 critical, 0 major, 0 minor, 0 info), 1 of them from earlier comments; 0 earlier findings are left out because their thread is resolved."
+core.setFailed "ReviewOps found 1 open findings at or above the severity \"critical\" (fail-on: critical): octo-org/demo#42. Fix them, or resolve the thread of a finding that needs no change."
+core.setOutput "findings-count=1"
+core.setOutput "critical-count=1"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps left out the review\\: the pull request has the label \\\"no\\-ai\\-review\\\" \\(input skip\\-label\\)\\. A green run does not mean that this pull request was reviewed\\.\n\n### Findings\n\n| Severity | Open |\n|---|---:|\n| 🔴 Critical | 1 |\n| 🟠 Major | 0 |\n| 🟡 Minor | 0 |\n| 🔵 Info | 0 |\n| **Total** | **1** |\n\n0 found in this run, 1 from earlier comments whose line has not changed.\n\n**fail-on: critical** — 1 open findings reach the threshold, so the step fails.\n\n"

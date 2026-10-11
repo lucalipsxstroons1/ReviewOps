@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { getOctokit } from "@actions/github";
 import {
@@ -9,7 +8,6 @@ import {
   createRecordingCore,
   findingLines,
   metricsLines,
-  readNumbers,
   renderTable,
   runComparison,
   runOnce,
@@ -24,7 +22,6 @@ import {
   OWN_ACCOUNT,
   startGitHubApi,
 } from "./helpers/github-api.js";
-import { fromRoot } from "./helpers/run-action.js";
 
 // Unit tests of the model comparison (#80). GitHub is the local stand-in, the
 // action is the real `run()`, and the model is a fake client: no request
@@ -383,52 +380,6 @@ test("runs every case as often as asked, one after the other", async (t) => {
     ],
   );
   assert.deepEqual(s.api.reviews, []);
-});
-
-// --- Wording of the log of the action ----------------------------------------
-
-test("reads the numbers out of the lines of run()", () => {
-  const numbers = readNumbers({
-    info: [
-      "Checked 4 findings: 1 at an added line, 0 at another line, left out 0 with an empty text, 0 for a file that was not sent, 0 duplicates, 0 outside of the new lines, 0 at lines that were commented before and 3 over the limit of 1 (max-comments).",
-      "Review finished: 1 findings (0 critical, 1 major, 0 minor, 0 info) from 1 of 1 requests.",
-    ],
-    warnings: [
-      "Files left out because of the limits: 2. They are not reviewed. The limits are max-files: 1 and max-diff-chars: 5.",
-      "Files larger than one request to the model: 1. They are not reviewed.",
-      "Requests to the model that failed: 1 of 3. 2 files were not reviewed.",
-    ],
-  });
-
-  assert.deepEqual(numbers, {
-    skippedByLimits: 3,
-    overMaxComments: 3,
-    failedRequests: 1,
-    severities: { critical: 0, major: 1, minor: 0, info: 0 },
-  });
-});
-
-test("the lines that the numbers come from still stand in src/main.js", () => {
-  const source = readFileSync(fromRoot("src/main.js"), "utf8");
-
-  for (const fragment of [
-    "Files left out because of the limits: ${overLimit.length}.",
-    "Files larger than one request to the model: ${tooLarge.length}.",
-    "Requests to the model that failed: ${review.failed.length} of ${batches.length}.",
-    "Review finished: ${shown.length} findings (${counts}) from",
-    "${dropped.overLimit} over the limit of ${limits.maxComments} (max-comments).",
-  ]) {
-    assert.ok(source.includes(fragment), `${fragment} changed`);
-  }
-});
-
-test("reads zeros and no result from a run that did not get that far", () => {
-  assert.deepEqual(readNumbers({ info: [], warnings: [] }), {
-    skippedByLimits: 0,
-    overMaxComments: 0,
-    failedRequests: 0,
-    severities: null,
-  });
 });
 
 // --- Secrets and output ------------------------------------------------------

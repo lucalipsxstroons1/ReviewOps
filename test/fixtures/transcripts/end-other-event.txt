@@ -1,0 +1,5 @@
+core.notice "ReviewOps runs only on the \"pull_request\" event. This run was triggered by \"push\" and was skipped."
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps runs only on the \\\"pull\\_request\\\" event\\. This run was triggered by \\\"push\\\" and was skipped\\.\n\n"

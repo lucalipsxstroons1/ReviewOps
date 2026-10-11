@@ -1,0 +1,14 @@
+core.setSecret
+core.setSecret
+core.info "ReviewOps started."
+core.info "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+core.info "Found 1 changed files: 0 to review, 1 skipped."
+core.info "Skipped package-lock.json: matches the default exclude pattern \"package-lock.json\"."
+core.notice "ReviewOps found no files to review in this pull request. The log lists the skipped files."
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps found no files to review in this pull request\\. The log lists the skipped files\\.\n\n### Findings\n\nNo findings.\n\n### Files\n\n| Files | Count |\n|---|---:|\n| Reviewed | 0 |\n| Skipped | 1 |\n\n#### Skipped files\n\n- `package-lock.json`: matches the default exclude pattern \\\"package\\-lock\\.json\\\"\n\n"
