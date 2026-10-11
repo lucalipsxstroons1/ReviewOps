@@ -37,6 +37,7 @@ const ENDS_OF = {
   "end-nothing-new": "nothing-to-review",
   "end-no-files-to-review": "nothing-to-review",
   "end-no-findings-with-report": "no-findings",
+  "end-posted-with-other-address": "posted",
   "end-posted-with-both-reports": "posted",
   "end-posted-after-rejection-of-the-comments": "posted",
   "error-input-cannot-be-used": "failed",

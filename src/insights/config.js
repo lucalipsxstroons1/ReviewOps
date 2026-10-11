@@ -1,15 +1,9 @@
-/** The longest address that is accepted, in characters. */
-export const MAX_URL_CHARS = 2048;
+import { MAX_URL_CHARS, parseAddress } from "../address.js";
+
+export { MAX_URL_CHARS };
 
 /** The shortest secret, the same rule as `INGEST_SECRET` at Insights. */
 export const MIN_SECRET_CHARS = 32;
-
-// Over plain http the report goes only to the machine of the runner itself:
-// the tests of this repository use it, and nothing else.
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-// Spaces and control characters, line breaks included.
-const UNSAFE_URL_CHARS = /[\s\p{Cc}]/u;
 
 /**
  * Reads the two inputs for the report to ReviewOps Insights and checks them
@@ -35,54 +29,16 @@ export function parseInsightsConfig(inputs) {
   const text = (inputs.insightsUrl ?? "").trim();
   if (text === "") return null;
 
-  const url = parseUrl(text);
+  const url = parseAddress(text, {
+    input: "insights-url",
+    example: "https://insights.example.com/api/v1/ingest/review",
+    secretInput: "insights-secret",
+  });
   return {
     url: url.href,
     host: url.host,
     secret: parseSecret(inputs.insightsSecret ?? ""),
   };
-}
-
-function parseUrl(text) {
-  if (text.length > MAX_URL_CHARS) {
-    throw new Error(
-      `Input \`insights-url\` is too long: at most ${MAX_URL_CHARS} characters.`,
-    );
-  }
-  if (UNSAFE_URL_CHARS.test(text)) {
-    throw new Error(
-      "Input `insights-url` contains a space or a control character.",
-    );
-  }
-  // Looked up in the text: an empty query (`https://host/path?`) is gone from
-  // the parsed address.
-  if (text.includes("?") || text.includes("#")) {
-    throw new Error(
-      "Input `insights-url` must not contain a query (`?`) or a fragment (`#`).",
-    );
-  }
-
-  let url;
-  try {
-    url = new URL(text);
-  } catch {
-    throw new Error(
-      "Input `insights-url` is not a valid address. Use the whole address, for example `https://insights.example.com/api/v1/ingest/review`.",
-    );
-  }
-
-  const local = LOCAL_HOSTS.has(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
-    throw new Error(
-      "Input `insights-url` must start with `https://`. `http://` is accepted only for `localhost` and `127.0.0.1`.",
-    );
-  }
-  if (url.username !== "" || url.password !== "") {
-    throw new Error(
-      "Input `insights-url` must not contain a user name or a password. Pass the secret in `insights-secret`.",
-    );
-  }
-  return url;
 }
 
 function parseSecret(secret) {

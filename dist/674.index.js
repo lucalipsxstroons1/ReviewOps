@@ -1,8 +1,8 @@
-export const id = 284;
-export const ids = [284];
+export const id = 674;
+export const ids = [674];
 export const modules = {
 
-/***/ 4284:
+/***/ 9674:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 
@@ -227,6 +227,84 @@ function isFatal(error) {
   return error instanceof AiError && FATAL_KINDS.has(error.kind);
 }
 
+;// CONCATENATED MODULE: ./src/address.js
+/** The longest address that is accepted, in characters. */
+const MAX_URL_CHARS = 2048;
+
+// Over plain http an address is accepted only for the machine of the runner
+// itself: the tests of this repository use it, and a model or a report on the
+// same machine. Nothing leaves the runner over an unencrypted connection.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+// Spaces and control characters, line breaks included.
+const UNSAFE_URL_CHARS = /[\s\p{Cc}]/u;
+
+/**
+ * Checks an address that an input of the workflow names and that the action
+ * sends something to: the report for ReviewOps Insights, and the API of the
+ * model. Both take the same rules, so there is one check (#40).
+ *
+ * The code, the key or the report goes to this address. A wrong address would
+ * hand it to a stranger, so everything that does not look like a plain address
+ * is refused: only `https` (and `http` for the machine of the runner), no user
+ * name or password in the address, no query, no fragment, no space or control
+ * character.
+ *
+ * The messages name the input and the rule that was broken, never the address
+ * and never a part of it: the address can hold credentials.
+ *
+ * @param {string} text The value of the input, without spaces around it.
+ * @param {object} options
+ * @param {string} options.input The name of the input, for the messages.
+ * @param {string} options.example An address that would be accepted, for the
+ *   message about an address that is not valid.
+ * @param {string} options.secretInput The input that holds the secret that
+ *   belongs to the address, for the message about credentials in the address.
+ * @returns {URL}
+ * @throws {Error} For an address that cannot be used.
+ */
+function parseAddress(text, { input, example, secretInput }) {
+  if (text.length > MAX_URL_CHARS) {
+    throw new Error(
+      `Input \`${input}\` is too long: at most ${MAX_URL_CHARS} characters.`,
+    );
+  }
+  if (UNSAFE_URL_CHARS.test(text)) {
+    throw new Error(
+      `Input \`${input}\` contains a space or a control character.`,
+    );
+  }
+  // Looked up in the text: an empty query (`https://host/path?`) is gone from
+  // the parsed address.
+  if (text.includes("?") || text.includes("#")) {
+    throw new Error(
+      `Input \`${input}\` must not contain a query (\`?\`) or a fragment (\`#\`).`,
+    );
+  }
+
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(
+      `Input \`${input}\` is not a valid address. Use the whole address, for example \`${example}\`.`,
+    );
+  }
+
+  const local = LOCAL_HOSTS.has(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error(
+      `Input \`${input}\` must start with \`https://\`. \`http://\` is accepted only for \`localhost\` and \`127.0.0.1\`.`,
+    );
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new Error(
+      `Input \`${input}\` must not contain a user name or a password. Pass the secret in \`${secretInput}\`.`,
+    );
+  }
+  return url;
+}
+
 ;// CONCATENATED MODULE: ./src/printable.js
 const MAX_LENGTH = 200;
 
@@ -259,6 +337,7 @@ function printable(text) {
 }
 
 ;// CONCATENATED MODULE: ./src/ai/model.js
+
 
 
 // The same value is written into action.yml. A test keeps them equal.
@@ -312,6 +391,46 @@ function acceptsTemperature(model) {
   return typeof model === "string" && TAKES_TEMPERATURE.test(model);
 }
 
+/** The address of the API of OpenAI, the default of `openai-base-url`. */
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+/**
+ * Reads the `openai-base-url` input (#40). An empty value means the address of
+ * OpenAI: it is usually a variable of the workflow that was not set.
+ *
+ * The key and the code of the pull request go to this address, so it is
+ * checked before the first request with the rules of every address the action
+ * sends something to (`parseAddress()`): `https`, `http` only for the machine
+ * of the runner, no user name or password, no query, no fragment. The messages
+ * name the rule and never the address.
+ *
+ * Only this input sets the address. The environment of the runner does not:
+ * the SDK would take `OPENAI_BASE_URL` from it, which is why the address is
+ * passed on to the SDK explicitly.
+ *
+ * @param {string} [value] The value as the workflow passed it.
+ * @returns {{ url: string, host: string, isDefault: boolean }} The address
+ *   without a slash at the end, its host (with the port) for the log, and
+ *   whether it is the address of OpenAI.
+ * @throws {Error} When the value cannot be used as an address.
+ */
+function parseBaseUrl(value = "") {
+  const text = String(value).trim();
+  if (text === "") return describeBaseUrl(DEFAULT_BASE_URL);
+
+  const address = parseAddress(text, {
+    input: "openai-base-url",
+    example: "https://my-resource.openai.azure.com/openai/v1",
+    secretInput: "openai-api-key",
+  });
+  return describeBaseUrl(address.href.replace(/\/+$/, ""));
+}
+
+function describeBaseUrl(url) {
+  const { host } = new URL(url);
+  return { url, host, isDefault: url === DEFAULT_BASE_URL };
+}
+
 ;// CONCATENATED MODULE: ./src/ai/client.js
 
 
@@ -319,10 +438,12 @@ function acceptsTemperature(model) {
 
 
 
-// Fixed on purpose. The SDK would take the address, the organisation and the
-// project from variables of the environment if they were left out, and it
-// would then send the key and the code to wherever the variable points.
-const BASE_URL = "https://api.openai.com/v1";
+// The address, the organisation and the project are always passed on. The SDK
+// would take them from variables of the environment if they were left out, and
+// it would then send the key and the code to wherever the variable points. The
+// address is the one of the input `openai-base-url` (checked by
+// `parseBaseUrl()`) or the standard one; the organisation and the project are
+// fixed.
 const TIMEOUT_MS = 120_000;
 const MAX_RETRIES = 2;
 
@@ -362,7 +483,13 @@ const safe = (value) =>
  *   }>,
  * }}
  */
-function client_createAiClient({ apiKey, model, core, OpenAIClass = openai/* default */.Ay }) {
+function client_createAiClient({
+  apiKey,
+  baseUrl = DEFAULT_BASE_URL,
+  model,
+  core,
+  OpenAIClass = openai/* default */.Ay,
+}) {
   if (typeof apiKey !== "string" || apiKey === "") {
     throw new Error("The AI client needs an API key.");
   }
@@ -370,7 +497,7 @@ function client_createAiClient({ apiKey, model, core, OpenAIClass = openai/* def
 
   const sdk = new OpenAIClass({
     apiKey,
-    baseURL: BASE_URL,
+    baseURL: baseUrl,
     organization: null,
     project: null,
     logLevel: "off",
@@ -3824,6 +3951,7 @@ function describeThreadError(error) {
  *   githubToken: string,
  *   openaiApiKey: string,
  *   openaiModel: string,
+ *   openaiBaseUrl: string,
  *   language: string,
  *   exclude: string,
  *   maxFiles: string,
@@ -3837,7 +3965,7 @@ function describeThreadError(error) {
  *   insightsSecret: string,
  * }} The model, the language, the limits, `fail-on`, the inputs that say
  *   which pull requests are reviewed and the two inputs for the report stay
- *   text here: `parseModel()`, `parseLanguage()`, `parseLimits()`,
+ *   text here: `parseModel()`, `parseBaseUrl()`, `parseLanguage()`, `parseLimits()`,
  *   `parseFailOn()`, `parseSkipOptions()` and `parseInsightsConfig()` check
  *   them.
  */
@@ -3846,6 +3974,7 @@ function readInputs(core) {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     openaiModel: core.getInput("openai-model"),
+    openaiBaseUrl: core.getInput("openai-base-url"),
     language: core.getInput("language"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),
@@ -3915,18 +4044,12 @@ function assertKey(inputs) {
 }
 
 ;// CONCATENATED MODULE: ./src/insights/config.js
-/** The longest address that is accepted, in characters. */
-const MAX_URL_CHARS = 2048;
+
+
+
 
 /** The shortest secret, the same rule as `INGEST_SECRET` at Insights. */
 const MIN_SECRET_CHARS = 32;
-
-// Over plain http the report goes only to the machine of the runner itself:
-// the tests of this repository use it, and nothing else.
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-// Spaces and control characters, line breaks included.
-const UNSAFE_URL_CHARS = /[\s\p{Cc}]/u;
 
 /**
  * Reads the two inputs for the report to ReviewOps Insights and checks them
@@ -3952,54 +4075,16 @@ function parseInsightsConfig(inputs) {
   const text = (inputs.insightsUrl ?? "").trim();
   if (text === "") return null;
 
-  const url = parseUrl(text);
+  const url = parseAddress(text, {
+    input: "insights-url",
+    example: "https://insights.example.com/api/v1/ingest/review",
+    secretInput: "insights-secret",
+  });
   return {
     url: url.href,
     host: url.host,
     secret: parseSecret(inputs.insightsSecret ?? ""),
   };
-}
-
-function parseUrl(text) {
-  if (text.length > MAX_URL_CHARS) {
-    throw new Error(
-      `Input \`insights-url\` is too long: at most ${MAX_URL_CHARS} characters.`,
-    );
-  }
-  if (UNSAFE_URL_CHARS.test(text)) {
-    throw new Error(
-      "Input `insights-url` contains a space or a control character.",
-    );
-  }
-  // Looked up in the text: an empty query (`https://host/path?`) is gone from
-  // the parsed address.
-  if (text.includes("?") || text.includes("#")) {
-    throw new Error(
-      "Input `insights-url` must not contain a query (`?`) or a fragment (`#`).",
-    );
-  }
-
-  let url;
-  try {
-    url = new URL(text);
-  } catch {
-    throw new Error(
-      "Input `insights-url` is not a valid address. Use the whole address, for example `https://insights.example.com/api/v1/ingest/review`.",
-    );
-  }
-
-  const local = LOCAL_HOSTS.has(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
-    throw new Error(
-      "Input `insights-url` must start with `https://`. `http://` is accepted only for `localhost` and `127.0.0.1`.",
-    );
-  }
-  if (url.username !== "" || url.password !== "") {
-    throw new Error(
-      "Input `insights-url` must not contain a user name or a password. Pass the secret in `insights-secret`.",
-    );
-  }
-  return url;
 }
 
 function parseSecret(secret) {
@@ -6236,6 +6321,7 @@ function readSettings({ core, context, getOctokit }, inputs) {
   const excludeReason = createExcludeFilter(inputs.exclude);
   const limits = parseLimits(inputs);
   const model = parseModel(inputs.openaiModel);
+  const baseUrl = parseBaseUrl(inputs.openaiBaseUrl);
   const language = parseLanguage(inputs.language);
   const failOn = parseFailOn(inputs.failOn);
   // The report leaves the runner, so the address is checked before the
@@ -6268,6 +6354,11 @@ function readSettings({ core, context, getOctokit }, inputs) {
   }
 
   core.info("ReviewOps started.");
+  if (!baseUrl.isDefault && !skip && !closed) {
+    core.info(
+      `The requests to the model go to ${printable(baseUrl.host)}, not to OpenAI.`,
+    );
+  }
   if (insights) {
     core.info(
       `The report of this run goes to ReviewOps Insights at ${printable(insights.host)}.`,
@@ -6292,6 +6383,7 @@ function readSettings({ core, context, getOctokit }, inputs) {
       excludeReason,
       limits,
       model,
+      baseUrl,
       language,
       failOn,
       insights,
@@ -6764,7 +6856,7 @@ function limitFiles(ctx, settings, read) {
  */
 async function askModel(ctx, settings, limited, read) {
   const { core, redact, createAiClient, planBatches } = ctx;
-  const { limits, inputs, model, language } = settings;
+  const { limits, inputs, model, baseUrl, language } = settings;
   const { selected, skipped } = limited;
 
   const batches = planBatches({ files: selected });
@@ -6781,6 +6873,7 @@ async function askModel(ctx, settings, limited, read) {
   );
   const client = createAiClient({
     apiKey: inputs.openaiApiKey,
+    baseUrl: baseUrl.url,
     model,
     core,
   });

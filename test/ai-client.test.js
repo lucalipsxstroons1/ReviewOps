@@ -978,10 +978,15 @@ test("refuses a prompt that is not text", async (t) => {
 test("only the tests decide where the SDK sends its requests", () => {
   const source = readFileSync(fromRoot("src/ai/client.js"), "utf8");
 
-  // One fixed address, and nothing that reads one from outside.
-  assert.equal(source.match(/https?:\/\//g)?.length, 1);
+  // The client has no address of its own: it takes the one of its caller, and
+  // it reads none from outside.
+  assert.equal(source.match(/https?:\/\//g), null);
   assert.doesNotMatch(source, /process\.env|OPENAI_BASE_URL/);
   assert.doesNotMatch(source, /console\./);
+  // The standard address stands once, in the module that checks the input.
+  const model = readFileSync(fromRoot("src/ai/model.js"), "utf8");
+  assert.equal(model.match(/"https:\/\/api\.openai\.com\/v1"/g)?.length, 1);
+  assert.doesNotMatch(model, /process\.env/);
 });
 
 // --- The review format -------------------------------------------------------
@@ -1233,4 +1238,82 @@ test("names the errors after which no further request is worth a try", () => {
   }
   assert.equal(isFatal(new Error("auth")), false);
   assert.equal(isFatal({ kind: "auth" }), false);
+});
+
+// --- The address of the API (#40) --------------------------------------------
+
+test("passes the address it is given to the SDK, and nothing else changes", () => {
+  const received = [];
+  class Recorder {
+    constructor(options) {
+      received.push(options);
+    }
+  }
+
+  createAiClient({
+    apiKey: KEY,
+    baseUrl: "https://my-resource.openai.azure.com/openai/v1",
+    core: createFakeCore(),
+    OpenAIClass: Recorder,
+  });
+
+  assert.deepEqual(received, [
+    {
+      apiKey: KEY,
+      baseURL: "https://my-resource.openai.azure.com/openai/v1",
+      organization: null,
+      project: null,
+      logLevel: "off",
+      timeout: 120_000,
+      maxRetries: 2,
+    },
+  ]);
+});
+
+test("sends the request to the address it is given, with the key", async (t) => {
+  const api = await startOpenAiApi(t);
+  // The real SDK without an override of the address: the one of the client counts.
+  const client = createAiClient({
+    apiKey: KEY,
+    baseUrl: api.url,
+    core: createFakeCore(),
+    OpenAIClass: class extends OpenAI {
+      constructor(options) {
+        super({ ...options, timeout: 400 });
+      }
+    },
+  });
+
+  await client.complete(PROMPT);
+
+  assert.equal(api.requests.length, 1);
+  assert.equal(api.requests[0].path, "/v1/chat/completions");
+  assert.equal(api.requests[0].authorization, `Bearer ${KEY}`);
+});
+
+test("a variable of the environment changes neither the standard nor the given address", (t) => {
+  const before = process.env.OPENAI_BASE_URL;
+  t.after(() => {
+    if (before === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = before;
+  });
+  process.env.OPENAI_BASE_URL = "http://127.0.0.1:1/trap";
+
+  const created = [];
+  class Probe extends OpenAI {
+    constructor(options) {
+      super(options);
+      created.push(this);
+    }
+  }
+  createAiClient({ apiKey: KEY, core: createFakeCore(), OpenAIClass: Probe });
+  createAiClient({
+    apiKey: KEY,
+    baseUrl: "https://gateway.example.com/v1",
+    core: createFakeCore(),
+    OpenAIClass: Probe,
+  });
+
+  assert.equal(created[0].baseURL, "https://api.openai.com/v1");
+  assert.equal(created[1].baseURL, "https://gateway.example.com/v1");
 });

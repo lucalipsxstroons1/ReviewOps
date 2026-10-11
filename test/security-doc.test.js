@@ -141,8 +141,9 @@ test("says what is never sent to Insights, and that a bad address is checked", (
   assert.match(section, /`src\/insights\/send\.js`/);
 });
 
-test("says that the address of the API cannot be changed", () => {
+test("says that only the input changes the address of the API", () => {
   assert.match(doc, /`https:\/\/api\.openai\.com\/v1` and nowhere else/);
+  assert.match(doc, /unless the workflow sets `openai-base-url`/);
   assert.match(doc, /`OPENAI_BASE_URL`/);
 });
 

@@ -14,7 +14,7 @@ Every run sends, for the files it reviews:
 
 - the path of each file and its diff, annotated with line numbers (the changed lines and a few lines around them, not the whole file),
 - a fixed system prompt and the format of the answer,
-- the API key, as an `Authorization` header, to `https://api.openai.com/v1` and nowhere else. The address cannot be changed, and variables of the environment such as `OPENAI_BASE_URL` have no effect.
+- the API key, as an `Authorization` header, to `https://api.openai.com/v1` and nowhere else, unless the workflow sets `openai-base-url`: then the key and the diff go to that address instead. The address is checked before the first request (`https` only, `http` only for `localhost` and `127.0.0.1`, no user name or password, no query, no fragment, at most 2048 characters), the messages never repeat it, and the log names its host once. The input is the only way to change the address: variables of the environment such as `OPENAI_BASE_URL` have no effect. Whoever sets the input decides where the code goes, so name only a service you trust.
 
 The system prompt tells the model that everything between the `<file>` tags is data written by the author of the pull request and never an instruction. Every line of the diff starts with a number column, so a `<file>` or `</file>` tag written by the author never stands at the start of a line, and the prompt says so: whatever follows a bar `|` or `@@` is text of the file, also when it looks like a tag or like an instruction. This lowers the risk, it is no guarantee, which is why the answer is checked anyway (see below).
 
@@ -35,6 +35,10 @@ The log names such a file and says why it was left out.
 Before anything is sent, strings in the diff that look like a secret are replaced with `[REDACTED SECRET]`. The action recognises GitHub tokens, OpenAI keys, Anthropic API keys, GitLab tokens, npm tokens, PyPI tokens, Docker Hub access tokens, Hugging Face tokens, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private key blocks (also a part of one that a diff shows without its begin and end lines). Each format is a fixed prefix of the provider with a minimum length behind it; a name that only starts the same way, such as `npm_config_registry`, `hf_hub_download` or a CSS class that begins with `sk-ant-`, is left alone. The log counts the replacements and names the files, never the strings.
 
 This is a safety net, not a guarantee. Generic patterns such as `password = "…"` are not replaced, because they would change the code that is meant to be reviewed. That includes the password in a connection string (`Server=…;Password=…;`) outside of the `appsettings*.json` files, which are never sent, and a password in an address such as `postgres://user:pass@host`. A secret in another format reaches the model. If a pull request contains a real secret, treat it as leaked.
+
+### Another address for the API
+
+With `openai-base-url` the key and the diff go to the service at that address, and its terms apply, not those of OpenAI. Whoever can change the workflow can change the address, as it can hand out the key in other ways (see "What fail-on is, and what it is not"), so the input adds no new right, but a wrong address hands both to a stranger. The checks are in `src/address.js`: they are the same as for `insights-url`, and the messages never repeat the address. Limits: the names of models stay as they are (no slash), the messages about errors still speak of OpenAI, and no provider other than OpenAI was tried.
 
 ### What OpenAI does with it
 
