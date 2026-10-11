@@ -25,7 +25,7 @@ import {
   OWN_ACCOUNT,
 } from "./helpers/github-api.js";
 import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
-import { fingerprintLine } from "../src/github/review.js";
+import { fingerprintLine } from "../src/github/marker.js";
 import { REVIEWING_LINE } from "./helpers/run-action.js";
 
 const VALID_INPUTS = {

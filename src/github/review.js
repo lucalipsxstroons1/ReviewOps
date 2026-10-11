@@ -1,13 +1,7 @@
 import { SEVERITIES } from "../ai/schema.js";
 import { describeApiError } from "./api-error.js";
 import { inlineCode, modelMarkdown, pathCode, plainText } from "./markdown.js";
-
-/**
- * Marks every comment and every review text of this action. It always
- * stands at the very start of a body; text from the model can never put it
- * there, and its `<` is escaped anywhere else.
- */
-export const REVIEW_MARKER = "<!-- reviewops -->";
+import { commentHead, reviewHead } from "./marker.js";
 
 /**
  * The longest body this action sends. GitHub accepts 65536 characters.
@@ -56,55 +50,6 @@ export function aiLabel(model) {
 }
 
 /**
- * The line that carries the fingerprint of the commented line. It is the
- * second line of an inline comment, right below the marker. `readHistory()`
- * reads it back with a strict pattern.
- *
- * An inline comment adds the severity of its finding, so a later run can
- * count the findings that are still open without reading the text of the
- * model. Only one of `SEVERITIES` is written. An inline comment adds the
- * text fingerprint of its line as well (#107), so a later run can tell that
- * the line is unchanged after a rename or a change of the line above. It
- * only ever follows a severity.
- *
- * @param {string} fingerprint 16 hex characters from `lineFingerprint()`.
- * @param {string | null} [severity] The severity of the finding.
- * @param {string | null} [text] 16 hex characters from `textFingerprint()`.
- * @returns {string}
- */
-export const fingerprintLine = (fingerprint, severity = null, text = null) => {
-  if (!SEVERITIES.includes(severity)) {
-    return `<!-- reviewops-fingerprint: ${fingerprint} -->`;
-  }
-  const textPart = text ? ` text: ${text}` : "";
-  return `<!-- reviewops-fingerprint: ${fingerprint} severity: ${severity}${textPart} -->`;
-};
-
-/**
- * The line that marks a review as not complete: files were left out or a
- * request failed. It stands right below the marker. A later run does not
- * start at such a review, so what was missed is checked again.
- */
-export const INCOMPLETE_LINE = "<!-- reviewops-incomplete -->";
-
-/**
- * The first block of a body: the marker, then the line for an incomplete
- * review and the fingerprints of the findings that stand in the text. A later
- * run reads only these lines, directly below the marker, never the text of
- * the model further down.
- *
- * @param {{ incomplete: boolean, fingerprints: (string | null)[] }} options
- * @returns {string}
- */
-function reviewHead({ incomplete, fingerprints }) {
-  return [
-    REVIEW_MARKER,
-    ...(incomplete ? [INCOMPLETE_LINE] : []),
-    ...fingerprints.filter(Boolean).map((print) => fingerprintLine(print)),
-  ].join("\n");
-}
-
-/**
  * The body of one inline comment.
  *
  * @param {import("../ai/schema.js").Finding} finding
@@ -119,12 +64,11 @@ export function commentBody(
   fingerprint = null,
   textFingerprint = null,
 ) {
-  const head = [
-    REVIEW_MARKER,
-    ...(fingerprint
-      ? [fingerprintLine(fingerprint, finding.severity, textFingerprint)]
-      : []),
-  ].join("\n");
+  const head = commentHead({
+    fingerprint,
+    severity: finding.severity,
+    text: textFingerprint,
+  });
   return [head, findingMarkdown(finding), "---", aiLabel(model)].join("\n\n");
 }
 

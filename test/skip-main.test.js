@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
-import { fingerprintLine } from "../src/github/review.js";
+import { fingerprintLine } from "../src/github/marker.js";
 import { run } from "../src/main.js";
 import { createFakeContext, loadEvent } from "./helpers/fake-context.js";
 import { createFakeCore } from "./helpers/fake-core.js";

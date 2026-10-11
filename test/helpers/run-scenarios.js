@@ -1,7 +1,7 @@
 import { AiError } from "../../src/ai/error.js";
 import { buildUserPrompt } from "../../src/ai/user-prompt.js";
 import { lineFingerprint, textFingerprint } from "../../src/fingerprint.js";
-import { fingerprintLine } from "../../src/github/review.js";
+import { fingerprintLine } from "../../src/github/marker.js";
 import { loadEvent } from "./fake-context.js";
 import {
   OWN_ACCOUNT,
