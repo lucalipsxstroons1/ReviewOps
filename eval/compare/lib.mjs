@@ -216,30 +216,14 @@ export function buildContext({ owner, repo, pull }) {
  * @param {Record<string, string>} options.inputs
  */
 export function createRecordingCore({ real, label, inputs }) {
-  const record = {
-    info: [],
-    notices: [],
-    warnings: [],
-    failures: [],
-    summaries: [],
-    outputs: {},
-  };
+  const record = { failures: [], summaries: [], outputs: {} };
   const tagged = (message) => `[${label}] ${message}`;
   const core = {
     getInput: (name) => inputs[name] ?? "",
     setSecret: (secret) => real.setSecret(secret),
-    info(message) {
-      record.info.push(message);
-      real.info(tagged(message));
-    },
-    notice(message) {
-      record.notices.push(message);
-      real.notice(tagged(message));
-    },
-    warning(message) {
-      record.warnings.push(message);
-      real.warning(tagged(message));
-    },
+    info: (message) => real.info(tagged(message)),
+    notice: (message) => real.notice(tagged(message)),
+    warning: (message) => real.warning(tagged(message)),
     debug: (message) => real.debug(tagged(message)),
     setFailed: (message) => record.failures.push(String(message)),
     setOutput: (name, value) => {
@@ -303,53 +287,6 @@ export function createCountingClient(createAiClient) {
   return { create, stats };
 }
 
-// --- What the log of the action says -----------------------------------------
-
-const lineOf = (lines, pattern) => {
-  for (const line of lines) {
-    const match = pattern.exec(line);
-    if (match) return match;
-  }
-  return null;
-};
-
-/**
- * Reads the numbers out of the log of the action. They stand in lines of
- * `run()`; a test fails as soon as one of the wordings changes.
- *
- * @param {{ info: string[], warnings: string[] }} record
- */
-export function readNumbers({ info, warnings }) {
-  const count = (lines, pattern) => Number(lineOf(lines, pattern)?.[1] ?? 0);
-  const finished = lineOf(
-    info,
-    /^Review finished: \d+ findings \((\d+) critical, (\d+) major, (\d+) minor, (\d+) info\)/,
-  );
-  return {
-    // Files over `max-files` or `max-diff-chars`, and files larger than one
-    // request: not reviewed, and named in the log of the action.
-    skippedByLimits:
-      count(warnings, /^Files left out because of the limits: (\d+)\./) +
-      count(warnings, /^Files larger than one request to the model: (\d+)\./),
-    overMaxComments: count(
-      info,
-      /(\d+) over the limit of \d+ \(max-comments\)\./,
-    ),
-    failedRequests: count(
-      warnings,
-      /^Requests to the model that failed: (\d+) of \d+\./,
-    ),
-    severities: finished
-      ? Object.fromEntries(
-          SEVERITIES.map((severity, index) => [
-            severity,
-            Number(finished[index + 1]),
-          ]),
-        )
-      : null,
-  };
-}
-
 // --- Findings as a reader sees them ------------------------------------------
 
 // A line of a finding is cut into pieces this long. `printable()` shortens
@@ -406,7 +343,7 @@ export function findingLines(review) {
  * @param {string} options.token
  */
 export async function runOnce({ deps, context, label, inputs, token }) {
-  const { core, record } = createRecordingCore({
+  const { core } = createRecordingCore({
     real: deps.core,
     label,
     inputs,
@@ -414,20 +351,21 @@ export async function runOnce({ deps, context, label, inputs, token }) {
   const counting = createCountingClient(deps.createAiClient);
   const { octokit, posted } = createReadOnlyOctokit(deps.getOctokit(token));
 
-  await deps.run({
+  // The figures of the run come from its result, not from lines of the log.
+  const result = await deps.run({
     core,
     context,
     getOctokit: () => octokit,
     createAiClient: counting.create,
   });
 
-  const numbers = readNumbers(record);
+  const { selection } = result;
   const { stats } = counting;
   const failedKinds = Object.values(stats.failed).reduce((a, b) => a + b, 0);
   return {
-    error: record.failures[0] ?? null,
+    error: result.error,
     calls: stats.calls,
-    failedRequests: Math.max(numbers.failedRequests, failedKinds),
+    failedRequests: Math.max(selection.failedRequests, failedKinds),
     failed: stats.failed,
     tokens: {
       input: stats.inputTokens,
@@ -435,9 +373,9 @@ export async function runOnce({ deps, context, label, inputs, token }) {
       total: stats.totalTokens,
       withoutUsage: stats.withoutUsage,
     },
-    skippedByLimits: numbers.skippedByLimits,
-    overMaxComments: numbers.overMaxComments,
-    severities: numbers.severities,
+    skippedByLimits: selection.skippedByLimits,
+    overMaxComments: selection.overMaxComments,
+    severities: selection.shown,
     lines: posted.length > 0 ? findingLines(posted[0]) : [],
     postedReviews: posted.length,
   };
