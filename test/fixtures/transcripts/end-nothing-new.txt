@@ -1,0 +1,19 @@
+core.setSecret
+core.setSecret
+core.setSecret
+core.info "ReviewOps started."
+core.info "The report of this run goes to ReviewOps Insights at insights.example.com."
+core.info "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "graphql viewer"
+core.info "Earlier work of ReviewOps on this pull request: 1 reviews, 0 comments."
+core.info "Reviewing only the changes since commit 1111111111111111111111111111111111111111."
+core.info "Found 1 changed files: 0 to review, 0 skipped."
+core.info "1 files have no new line since commit 1111111111111111111111111111111111111111 and are not sent again."
+core.notice "ReviewOps found no new lines to review since commit 1111111111111111111111111111111111111111. A green run does not mean that new changes were reviewed."
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps found no new lines to review since commit 1111111111111111111111111111111111111111\\. A green run does not mean that new changes were reviewed\\.\n\n### Findings\n\nNo findings.\n\n### Files\n\n| Files | Count |\n|---|---:|\n| Reviewed | 0 |\n| Skipped | 0 |\n| No new line since `1111111` | 1 |\n\n"

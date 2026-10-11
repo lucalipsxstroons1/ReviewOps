@@ -1,0 +1,18 @@
+core.setSecret
+core.setSecret
+core.setSecret
+core.info "ReviewOps started."
+core.info "The report of this run goes to ReviewOps Insights at insights.example.com."
+core.info "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+core.info "Found 1 changed files: 1 to review, 0 skipped."
+core.info "Parsed the diffs of 1 files: 2 added lines can receive comments."
+core.info "Diff size: 75 of 200000 characters."
+core.info "Sending 1 files to gpt-6-luna in 1 requests."
+model "client" "gpt-6-luna"
+model "request" "0" ["src/app.js"] 73
+core.setFailed "OpenAI did not answer within 120 seconds, also after 2 retries. Run the workflow again later."
+core.debug "AiError: OpenAI did not answer within 120 seconds, also after 2 retries. Run the workflow again later. [stack]"
+summary "## ReviewOps\n\nReviewOps failed\\.\n\n**Error:** OpenAI did not answer within 120 seconds\\, also after 2 retries\\. Run the workflow again later\\.\n\n### Files\n\n| Files | Count |\n|---|---:|\n| Reviewed | 0 |\n| Skipped | 0 |\n\n"

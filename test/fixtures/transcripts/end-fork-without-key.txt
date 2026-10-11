@@ -1,0 +1,6 @@
+core.setSecret
+core.notice "ReviewOps did not review this pull request: it comes from a fork, and GitHub does not pass secrets to workflows of such pull requests, so the OpenAI API key is not available. A green run does not mean that this pull request was reviewed."
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+summary "## ReviewOps\n\nReviewOps did not review this pull request\\: it comes from a fork\\, and GitHub does not pass secrets to workflows of such pull requests\\, so the OpenAI API key is not available\\. A green run does not mean that this pull request was reviewed\\.\n\n"

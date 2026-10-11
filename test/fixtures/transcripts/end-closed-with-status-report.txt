@@ -1,0 +1,17 @@
+core.setSecret
+core.setSecret
+core.info "ReviewOps started."
+core.info "The report of this run goes to ReviewOps Insights at insights.example.com."
+core.info "Reporting the state of octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+core.notice "ReviewOps left out the review: the pull request is merged. Only the final state of the earlier findings goes to ReviewOps Insights."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "graphql viewer"
+github "graphql threads" {"owner":"octo-org","repo":"demo","number":42,"cursor":null}
+core.setOutput "findings-count=0"
+core.setOutput "critical-count=0"
+core.setOutput "review-url="
+insights "status"
+core.info "Status report delivered to ReviewOps Insights (HTTP 200), 1 attempt."
+summary "## ReviewOps\n\nReviewOps left out the review\\: the pull request is merged\\. Only the final state of the earlier findings goes to ReviewOps Insights\\.\n\n### ReviewOps Insights\n\nThe status report reached ReviewOps Insights\\.\n\n"

@@ -1,0 +1,12 @@
+core.setSecret
+core.setSecret
+core.info "ReviewOps started."
+core.info "Reviewing octo-org/demo#42 at commit 1111111111111111111111111111111111111111."
+github "paginate" "listFiles" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviews" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "paginate" "listReviewComments" {"owner":"octo-org","repo":"demo","pull_number":42,"per_page":100}
+github "graphql viewer"
+core.setFailed "GitHub API request failed (HTTP 403). The token may not read its own account. Check the `github-token` input."
+core.debug "IdentityUnavailableError: GitHub API request failed (HTTP 403). The token may not read its own account. Check the `github-token` input. [stack]"
+core.debug "Caused by: Failure"
+summary "## ReviewOps\n\nReviewOps failed\\.\n\n**Error:** GitHub API request failed \\(HTTP 403\\)\\. The token may not read its own account\\. Check the \\`github\\-token\\` input\\.\n\n"

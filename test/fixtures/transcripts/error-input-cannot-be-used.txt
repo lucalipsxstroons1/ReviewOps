@@ -1,0 +1,5 @@
+core.setSecret
+core.setSecret
+core.setFailed "Input `openai-model` must be the name of an OpenAI model (letters, digits, \".\", \"-\", \"_\" and \":\", at most 100 characters), but is \"not a model name!\"."
+core.debug "Error: Input `openai-model` must be the name of an OpenAI model (letters, digits, \".\", \"-\", \"_\" and \":\", at most 100 characters), but is \"not a model name!\". [stack]"
+summary "## ReviewOps\n\nReviewOps failed\\.\n\n**Error:** Input \\`openai\\-model\\` must be the name of an OpenAI model \\(letters\\, digits\\, \\\"\\.\\\"\\, \\\"\\-\\\"\\, \\\"\\_\\\" and \\\"\\:\\\"\\, at most 100 characters\\)\\, but is \\\"not a model name\\!\\\"\\.\n\n"
