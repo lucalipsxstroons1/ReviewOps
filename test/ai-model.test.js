@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  DEFAULT_BASE_URL,
   DEFAULT_MODEL,
   acceptsTemperature,
+  parseBaseUrl,
   parseModel,
 } from "../src/ai/model.js";
 import { fromRoot } from "./helpers/run-action.js";
@@ -86,7 +88,9 @@ test("does not load the SDK, so that run() does not pull it into the bundle", ()
   const imports = [...source.matchAll(/^import .* from "(.*)";$/gm)].map(
     (match) => match[1],
   );
-  assert.deepEqual(imports, ["../printable.js"]);
+  // Two modules of this action, no package: the check of an address and the
+  // way to print a value from the workflow.
+  assert.deepEqual(imports, ["../address.js", "../printable.js"]);
 });
 
 // --- Which models take `temperature` (#122) -----------------------------------
@@ -141,4 +145,151 @@ test("anything that is not a name does not take temperature", () => {
   for (const value of [undefined, null, 4, {}, ["gpt-4o"]]) {
     assert.equal(acceptsTemperature(value), false);
   }
+});
+
+// --- The address of the API (#40) -------------------------------------------------
+
+const STANDARD = "https://api.openai.com/v1";
+
+test("an empty or missing address means the standard address", () => {
+  for (const value of [undefined, "", "  ", "\n"]) {
+    assert.deepEqual(parseBaseUrl(value), {
+      url: STANDARD,
+      host: "api.openai.com",
+      isDefault: true,
+    });
+  }
+  assert.equal(DEFAULT_BASE_URL, STANDARD);
+});
+
+test("the standard address, written out, counts as the standard", () => {
+  for (const value of [
+    STANDARD,
+    `${STANDARD}/`,
+    "https://API.OPENAI.COM/v1",
+    "  https://api.openai.com/v1  ",
+  ]) {
+    const result = parseBaseUrl(value);
+    assert.equal(result.isDefault, true, value);
+    assert.equal(result.url, STANDARD, value);
+  }
+});
+
+test("takes an address with its path and port, without a slash at the end", () => {
+  assert.deepEqual(
+    parseBaseUrl("https://my-resource.openai.azure.com/openai/v1/"),
+    {
+      url: "https://my-resource.openai.azure.com/openai/v1",
+      host: "my-resource.openai.azure.com",
+      isDefault: false,
+    },
+  );
+  assert.deepEqual(parseBaseUrl("https://gateway.example.com:8443/proxy///"), {
+    url: "https://gateway.example.com:8443/proxy",
+    host: "gateway.example.com:8443",
+    isDefault: false,
+  });
+  // No path is demanded: the SDK adds `/chat/completions` to what it gets.
+  assert.equal(
+    parseBaseUrl("https://gateway.example.com").url,
+    "https://gateway.example.com",
+  );
+});
+
+test("accepts http only for the machine of the runner", () => {
+  for (const value of [
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:11434/v1/",
+    "http://localhost/v1",
+  ]) {
+    const result = parseBaseUrl(value);
+    assert.equal(result.isDefault, false, value);
+    assert.match(result.url, /^http:\/\/(localhost|127\.0\.0\.1)/);
+  }
+  for (const value of [
+    "http://example.com/v1",
+    "http://localhost.evil.example/v1",
+    "http://127.0.0.1.evil.example/v1",
+    "http://[::1]:11434/v1",
+    "http://192.168.0.5/v1",
+    "http://api.openai.com/v1",
+    "ftp://example.com/v1",
+    "ws://example.com/v1",
+  ]) {
+    assert.throws(
+      () => parseBaseUrl(value),
+      /must start with `https:\/\/`/,
+      value,
+    );
+  }
+});
+
+const TOO_LONG = `https://example.com/${"a".repeat(2100)}`;
+const UNUSABLE = [
+  [
+    "a user name and a password",
+    "https://user:SECRETWORD@example.com/v1",
+    /user name or a password/,
+  ],
+  [
+    "a user name alone",
+    "https://SECRETUSER@example.com/v1",
+    /user name or a password/,
+  ],
+  ["a query", "https://example.com/v1?key=SECRETWORD", /query/],
+  ["an empty query", "https://example.com/v1?", /query/],
+  ["a fragment", "https://example.com/v1#SECRETWORD", /fragment/],
+  ["a space", "https://example.com/v 1", /space or a control character/],
+  [
+    "a line break",
+    "https://example.com/v1\nSECRETWORD",
+    /space or a control character/,
+  ],
+  ["a tab", "https://example.com/\tv1", /space or a control character/],
+  [
+    "a control character",
+    `https://example.com/${String.fromCodePoint(0x1b)}v1`,
+    /space or a control character/,
+  ],
+  [
+    "no address at all",
+    "not an address SECRETWORD",
+    /space or a control character/,
+  ],
+  ["no protocol", "example.com/v1", /not a valid address/],
+  ["only a protocol", "https://", /not a valid address/],
+  ["too many characters", TOO_LONG, /too long/],
+];
+
+for (const [name, value, rule] of UNUSABLE) {
+  test(`refuses an address with ${name}, and names no part of it`, () => {
+    assert.throws(
+      () => parseBaseUrl(value),
+      (error) => {
+        assert.match(error.message, rule);
+        assert.match(error.message, /^Input `openai-base-url` /);
+        // Not the address, not a host, not a word of it.
+        assert.doesNotMatch(
+          error.message,
+          /SECRETWORD|SECRETUSER|example\.com/,
+        );
+        return true;
+      },
+    );
+  });
+}
+
+test("the message about credentials names the key input, not the key", () => {
+  assert.throws(
+    () => parseBaseUrl("https://user:pw@example.com/v1"),
+    /Pass the secret in `openai-api-key`\./,
+  );
+});
+
+test("the address that is accepted is checked as the address of the report is", () => {
+  // The same function: the limit and the rules are those of `insights-url`.
+  assert.equal(
+    parseBaseUrl(`https://example.com/${"a".repeat(2048 - 20)}`).isDefault,
+    false,
+  );
 });

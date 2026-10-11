@@ -133,7 +133,13 @@ export async function recordRun(
 
   const requests = [];
   const createAiClient = (options) => {
-    events.push(line("model", "client", options.model));
+    // The address only when it is not the standard one, so that the runs with
+    // the standard address keep their transcripts.
+    events.push(
+      options.baseUrl && options.baseUrl !== "https://api.openai.com/v1"
+        ? line("model", "client", options.model, options.baseUrl)
+        : line("model", "client", options.model),
+    );
     return {
       async complete(request) {
         const index = requests.length;

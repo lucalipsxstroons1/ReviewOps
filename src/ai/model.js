@@ -1,3 +1,4 @@
+import { parseAddress } from "../address.js";
 import { printable } from "../printable.js";
 
 // The same value is written into action.yml. A test keeps them equal.
@@ -49,4 +50,44 @@ const TAKES_TEMPERATURE = /^(?:ft:)?(?:gpt-4\.1|gpt-4o)(?:[-:]|$)/;
  */
 export function acceptsTemperature(model) {
   return typeof model === "string" && TAKES_TEMPERATURE.test(model);
+}
+
+/** The address of the API of OpenAI, the default of `openai-base-url`. */
+export const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+/**
+ * Reads the `openai-base-url` input (#40). An empty value means the address of
+ * OpenAI: it is usually a variable of the workflow that was not set.
+ *
+ * The key and the code of the pull request go to this address, so it is
+ * checked before the first request with the rules of every address the action
+ * sends something to (`parseAddress()`): `https`, `http` only for the machine
+ * of the runner, no user name or password, no query, no fragment. The messages
+ * name the rule and never the address.
+ *
+ * Only this input sets the address. The environment of the runner does not:
+ * the SDK would take `OPENAI_BASE_URL` from it, which is why the address is
+ * passed on to the SDK explicitly.
+ *
+ * @param {string} [value] The value as the workflow passed it.
+ * @returns {{ url: string, host: string, isDefault: boolean }} The address
+ *   without a slash at the end, its host (with the port) for the log, and
+ *   whether it is the address of OpenAI.
+ * @throws {Error} When the value cannot be used as an address.
+ */
+export function parseBaseUrl(value = "") {
+  const text = String(value).trim();
+  if (text === "") return describeBaseUrl(DEFAULT_BASE_URL);
+
+  const address = parseAddress(text, {
+    input: "openai-base-url",
+    example: "https://my-resource.openai.azure.com/openai/v1",
+    secretInput: "openai-api-key",
+  });
+  return describeBaseUrl(address.href.replace(/\/+$/, ""));
+}
+
+function describeBaseUrl(url) {
+  const { host } = new URL(url);
+  return { url, host, isDefault: url === DEFAULT_BASE_URL };
 }

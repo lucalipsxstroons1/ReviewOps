@@ -9,6 +9,7 @@
  *   githubToken: string,
  *   openaiApiKey: string,
  *   openaiModel: string,
+ *   openaiBaseUrl: string,
  *   language: string,
  *   exclude: string,
  *   maxFiles: string,
@@ -22,7 +23,7 @@
  *   insightsSecret: string,
  * }} The model, the language, the limits, `fail-on`, the inputs that say
  *   which pull requests are reviewed and the two inputs for the report stay
- *   text here: `parseModel()`, `parseLanguage()`, `parseLimits()`,
+ *   text here: `parseModel()`, `parseBaseUrl()`, `parseLanguage()`, `parseLimits()`,
  *   `parseFailOn()`, `parseSkipOptions()` and `parseInsightsConfig()` check
  *   them.
  */
@@ -31,6 +32,7 @@ export function readInputs(core) {
     githubToken: core.getInput("github-token"),
     openaiApiKey: core.getInput("openai-api-key"),
     openaiModel: core.getInput("openai-model"),
+    openaiBaseUrl: core.getInput("openai-base-url"),
     language: core.getInput("language"),
     exclude: core.getInput("exclude"),
     maxFiles: core.getInput("max-files"),

@@ -1,13 +1,15 @@
 import OpenAI from "openai";
 import { AiError } from "./error.js";
-import { acceptsTemperature, parseModel } from "./model.js";
+import { DEFAULT_BASE_URL, acceptsTemperature, parseModel } from "./model.js";
 
 export { AiError };
 
-// Fixed on purpose. The SDK would take the address, the organisation and the
-// project from variables of the environment if they were left out, and it
-// would then send the key and the code to wherever the variable points.
-const BASE_URL = "https://api.openai.com/v1";
+// The address, the organisation and the project are always passed on. The SDK
+// would take them from variables of the environment if they were left out, and
+// it would then send the key and the code to wherever the variable points. The
+// address is the one of the input `openai-base-url` (checked by
+// `parseBaseUrl()`) or the standard one; the organisation and the project are
+// fixed.
 export const TIMEOUT_MS = 120_000;
 export const MAX_RETRIES = 2;
 
@@ -47,7 +49,13 @@ const safe = (value) =>
  *   }>,
  * }}
  */
-export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
+export function createAiClient({
+  apiKey,
+  baseUrl = DEFAULT_BASE_URL,
+  model,
+  core,
+  OpenAIClass = OpenAI,
+}) {
   if (typeof apiKey !== "string" || apiKey === "") {
     throw new Error("The AI client needs an API key.");
   }
@@ -55,7 +63,7 @@ export function createAiClient({ apiKey, model, core, OpenAIClass = OpenAI }) {
 
   const sdk = new OpenAIClass({
     apiKey,
-    baseURL: BASE_URL,
+    baseURL: baseUrl,
     organization: null,
     project: null,
     logLevel: "off",

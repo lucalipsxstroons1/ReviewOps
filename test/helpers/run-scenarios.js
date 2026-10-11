@@ -165,6 +165,15 @@ export const ENDS = {
     answer: () => answerWith(),
   }),
 
+  "end-posted-with-other-address": () => ({
+    inputs: {
+      ...INPUTS,
+      "openai-base-url": "https://gateway.example.com:8443/openai/v1/",
+    },
+    octokit: createFakeOctokit([APP]),
+    answer: () => answerWith([finding("src/app.js", 2, "major", "Problem")]),
+  }),
+
   "end-posted-with-both-reports": () => ({
     inputs: { ...INPUTS, ...INSIGHTS, "fail-on": "major" },
     octokit: createFakeOctokit([APP, OTHER], {

@@ -112,6 +112,7 @@ jobs:
 | `openai-api-key` | yes | | OpenAI API key. Pass it from a repository secret, never as plain text. |
 | `github-token` | no | `${{ github.token }}` | Token used to read the pull request and post the review. It needs `pull-requests: write`. The token of the workflow run is enough. The action recognises its own earlier reviews and comments by the account of the token, so a changed token (for example from `GITHUB_TOKEN` to an app) starts the pull request over. |
 | `openai-model` | no | `gpt-6-luna` | OpenAI model that writes the review, for example `gpt-6-luna` or `gpt-6.1-sol`. It has to support Structured Outputs. A model with a low token limit per minute can fail on large pull requests. |
+| `openai-base-url` | no | empty | Address of the API that answers the request, for a gateway, an Azure OpenAI resource or a local server that speaks the OpenAI chat completions protocol, for example `https://my-resource.openai.azure.com/openai/v1`. Only `https` is accepted, `http` only for `localhost` and `127.0.0.1`; no user name, query or fragment. Empty means the OpenAI API at `https://api.openai.com/v1`. The API key and the diff go to this address, so name only a service you trust. |
 | `language` | no | `en` | Language of the feedback: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `ja`, `zh` or `ko`. Code, identifiers, file paths, severities and categories stay in English. |
 | `exclude` | no | empty | More glob patterns for files to leave out, one per line. They extend the built-in list (lockfiles, build output, generated code, binary files). A pattern without a slash applies in every directory, a pattern with a slash from the root of the repository. At most 50 patterns, and no negation, braces, parentheses or backslashes. A pattern has at most two `*` and two `**`. |
 | `max-files` | no | `50` | Maximum number of files that are reviewed, from 1. Files after the limit are skipped and named in the log. |
@@ -213,8 +214,9 @@ A second, smaller report tells Insights what became of the findings of earlier r
 
 ## Security & privacy
 
-**ReviewOps sends the diff of your pull request, with the path of each file, to the OpenAI API.** That is a part of your code: the changed lines and a few lines around them, not the whole file. What OpenAI does with it depends on the terms of your OpenAI account and the data controls of the project of your key.
+**ReviewOps sends the diff of your pull request, with the path of each file, to the OpenAI API.** That is a part of your code: the changed lines and a few lines around them, not the whole file. What OpenAI does with it depends on the terms of your OpenAI account and the data controls of the project of your key. With `openai-base-url` the diff goes to the address you set instead, and the terms of that service apply.
 
+- **Another address, only if you set it:** with `openai-base-url`, the API key and the diff go to that address and not to OpenAI. A wrong address hands both to a stranger, so name only a service you trust. See [Another API address](#another-api-address).
 - **Never sent:** files that may hold secrets (`.env*`, key and certificate files, `id_rsa*`, `.npmrc`, `.netrc`, `credentials.json`, `secrets.*`, `appsettings*.json`, Terraform variable and state files, PuTTY keys and a few more), under their new and their old name. The list is fixed, and no input can change it. The title, the description and the author of the pull request are not sent either.
 - **Masked before sending:** strings that look like GitHub tokens, OpenAI keys, Anthropic API keys, GitLab, npm, PyPI, Docker Hub and Hugging Face tokens, AWS access key IDs, Slack tokens, Stripe live keys, Google API keys and private keys. This is a safety net, not a guarantee: a password in a connection string outside of `appsettings*.json` is not recognised. If a pull request contains a real secret, treat it as leaked.
 - **Rights:** the workflow needs `contents: read` and `pull-requests: write`, nothing else.
@@ -224,6 +226,27 @@ A second, smaller report tells Insights what became of the findings of earlier r
 - **Not in the log:** the prompt, the answer of the model, the content of a diff, the title of the pull request and every key.
 
 [SECURITY.md](SECURITY.md) describes this in detail and says how to report a vulnerability.
+
+## Another API address
+
+`openai-base-url` points the requests at another API that speaks the OpenAI chat completions protocol, for example a gateway of your company, an Azure OpenAI resource or a local server. The address is checked before the first request: `https` only (`http` only for `localhost` and `127.0.0.1`), no user name or password, no query, no fragment. The log names the host once. The variable `OPENAI_BASE_URL` has no effect; only the input sets the address.
+
+```yaml
+      - uses: lucalipsxstroons1/ReviewOps@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_KEY }}
+          openai-base-url: https://my-resource.openai.azure.com/openai/v1
+          openai-model: my-deployment
+```
+
+This example follows the documentation of Azure OpenAI for its v1 interface. **It was not measured:** no provider other than OpenAI was tried with ReviewOps, and the tests of this repository run against a local stand-in. The limits:
+
+- The key and the diff go to the address you set. Whoever can change the workflow can change the address.
+- The names of models stay as they are: letters, digits and `.`, `-`, `_`, `:`. Names with a slash, as some gateways use, are not accepted.
+- The messages about errors still speak of OpenAI, and the hints for a missing quota or a model without Structured Outputs rely on what OpenAI sends. Another provider usually ends in the general message.
+- The model has to support Structured Outputs and the parameter `max_completion_tokens`. `temperature` is sent only to the model names that OpenAI accepts it for, so a deployment with its own name gets none.
+- A slower provider needs more `timeout-minutes` than the example workflow sets.
+- The key stays required. Servers that need none, such as a local one, are not covered yet ([#126](https://github.com/lucalipsxstroons1/ReviewOps/issues/126)).
 
 ## Costs & limits
 

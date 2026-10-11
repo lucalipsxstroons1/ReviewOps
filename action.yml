@@ -18,6 +18,10 @@ inputs:
     description: OpenAI model that writes the review, for example gpt-6-luna or gpt-6.1-sol. It has to support Structured Outputs. A model with a low token limit per minute can fail on large pull requests. The default is gpt-6-luna.
     required: false
     default: gpt-6-luna
+  openai-base-url:
+    description: Address of the API that answers the request, for a gateway, an Azure OpenAI resource or a local server that speaks the OpenAI chat completions protocol, for example https://my-resource.openai.azure.com/openai/v1. Only https is accepted, http only for localhost and 127.0.0.1. The API key and the code of the pull request go to this address, so name only a service you trust. Empty means the OpenAI API at https://api.openai.com/v1.
+    required: false
+    default: ""
   language:
     description: Language of the feedback, as one of the codes en, de, fr, es, it, pt, nl, pl, tr, ja, zh and ko. Code, identifiers, file paths, severities and categories stay in English. The default is en.
     required: false

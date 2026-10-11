@@ -11,7 +11,7 @@ import {
   requestSize,
 } from "./ai/batch.js";
 import { createAiClient as aiCreateClient } from "./ai/client.js";
-import { parseModel } from "./ai/model.js";
+import { parseBaseUrl, parseModel } from "./ai/model.js";
 import { buildSystemPrompt, parseLanguage } from "./ai/prompt.js";
 import { SEVERITIES } from "./ai/schema.js";
 import { UNUSABLE_PATH_REASON, isUsablePath } from "./ai/user-prompt.js";
@@ -351,6 +351,7 @@ function readSettings({ core, context, getOctokit }, inputs) {
   const excludeReason = createExcludeFilter(inputs.exclude);
   const limits = parseLimits(inputs);
   const model = parseModel(inputs.openaiModel);
+  const baseUrl = parseBaseUrl(inputs.openaiBaseUrl);
   const language = parseLanguage(inputs.language);
   const failOn = parseFailOn(inputs.failOn);
   // The report leaves the runner, so the address is checked before the
@@ -383,6 +384,11 @@ function readSettings({ core, context, getOctokit }, inputs) {
   }
 
   core.info("ReviewOps started.");
+  if (!baseUrl.isDefault && !skip && !closed) {
+    core.info(
+      `The requests to the model go to ${printable(baseUrl.host)}, not to OpenAI.`,
+    );
+  }
   if (insights) {
     core.info(
       `The report of this run goes to ReviewOps Insights at ${printable(insights.host)}.`,
@@ -407,6 +413,7 @@ function readSettings({ core, context, getOctokit }, inputs) {
       excludeReason,
       limits,
       model,
+      baseUrl,
       language,
       failOn,
       insights,
@@ -879,7 +886,7 @@ function limitFiles(ctx, settings, read) {
  */
 async function askModel(ctx, settings, limited, read) {
   const { core, redact, createAiClient, planBatches } = ctx;
-  const { limits, inputs, model, language } = settings;
+  const { limits, inputs, model, baseUrl, language } = settings;
   const { selected, skipped } = limited;
 
   const batches = planBatches({ files: selected });
@@ -896,6 +903,7 @@ async function askModel(ctx, settings, limited, read) {
   );
   const client = createAiClient({
     apiKey: inputs.openaiApiKey,
+    baseUrl: baseUrl.url,
     model,
     core,
   });

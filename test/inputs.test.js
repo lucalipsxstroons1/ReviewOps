@@ -19,12 +19,14 @@ test("reads all inputs", () => {
     "review-bots": "true",
     "insights-url": "https://insights.example.com/ingest",
     "insights-secret": "insights-secret-value",
+    "openai-base-url": "https://gateway.example.com/v1",
   });
 
   assert.deepEqual(readInputs(core), {
     githubToken: "token-value",
     openaiApiKey: "key-value",
     openaiModel: "gpt-4.1",
+    openaiBaseUrl: "https://gateway.example.com/v1",
     language: "de",
     exclude: "docs/**\n*.txt",
     maxFiles: "10",
