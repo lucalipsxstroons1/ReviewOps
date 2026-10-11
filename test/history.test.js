@@ -999,3 +999,37 @@ test("an earlier finding names the path of its comment, or none", async () => {
     ["src/a.js", null, null],
   );
 });
+
+// --- The reason when nothing is compared (#113) ---------------------------------
+
+test("names the reason when a run reads the earlier reviews and does not compare them", async () => {
+  const octokit = createFakeOctokit([], {
+    existingReviews: [ownReview(FIRST)],
+  });
+
+  const history = await readHistory(octokit, PULL_REQUEST, { compare: false });
+
+  assert.equal(history.mode, "full");
+  assert.equal(history.reason, FULL_REASONS.notCompared);
+  assert.equal(history.ownReviews, 1);
+  assert.equal(octokit.comparisons.length, 0);
+});
+
+test("still names no earlier review when there is none, without a comparison as well", async () => {
+  const history = await readHistory(createFakeOctokit([]), PULL_REQUEST, {
+    compare: false,
+  });
+  assert.equal(history.reason, FULL_REASONS.noReview);
+});
+
+test("takes the newest complete review as before, with several reviews of each kind", async () => {
+  const history = await read({
+    existingReviews: [
+      ownReview(FIRST),
+      ownReview(SECOND, { body: `${REVIEW_MARKER}\n${INCOMPLETE_LINE}\n` }),
+      ownReview(HEAD, { state: "PENDING" }),
+    ],
+    compare: () => ahead(),
+  });
+  assert.equal(history.since, FIRST);
+});

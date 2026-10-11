@@ -202,8 +202,10 @@ export async function run({
     // Only checked values reach the log: the title of the pull request is
     // written by its author and stays out.
     const pullRequest = readPullRequest(context);
+    // Checked values only: the place of the pull request in a log line.
+    const pullRequestName = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
     core.info(
-      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
+      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequestName} at commit ${pullRequest.headSha}.`,
     );
 
     const octokit = getOctokit(inputs.githubToken);
@@ -249,11 +251,7 @@ export async function run({
         const earlierWork = await readHistory(octokit, pullRequest, {
           compare: false,
         });
-        const closedFiles = prepareFiles(
-          files,
-          createExcludeFilter(inputs.exclude),
-          parsePatch,
-        );
+        const closedFiles = prepareFiles(files, excludeReason, parsePatch);
         if (earlierWork.inlineComments.length > 0) {
           const threads = await readThreadStates(octokit, pullRequest);
           planStatusReport({
@@ -407,9 +405,7 @@ export async function run({
       const reached = findingsAtThreshold(open.bySeverity, failOn);
       report.threshold = { failOn, reached };
       if (reached > 0) {
-        const where =
-          url ??
-          `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
+        const where = url ?? pullRequestName;
         core.setFailed(
           `ReviewOps found ${reached} open findings at or above the severity "${failOn}" (fail-on: ${failOn}): ${where}. Fix them, or resolve the thread of a finding that needs no change.`,
         );
@@ -706,18 +702,22 @@ export async function run({
     });
     const where =
       posted.reviewId === null
-        ? `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`
+        ? pullRequestName
         : reviewUrl(
             serverUrlOf(context.serverUrl),
             pullRequest,
             posted.reviewId,
           );
+    // The sentence for the summary ends with a full stop, the line of the
+    // log names the place instead.
     if (posted.fallback) {
-      report.status = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review.`;
-      core.warning(`${report.status.slice(0, -1)}: ${where}`);
+      const sentence = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review`;
+      report.status = `${sentence}.`;
+      core.warning(`${sentence}: ${where}`);
     } else {
-      report.status = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text.`;
-      core.info(`${report.status.slice(0, -1)}: ${where}`);
+      const sentence = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text`;
+      report.status = `${sentence}.`;
+      core.info(`${sentence}: ${where}`);
     }
     conclude({
       newCounts,

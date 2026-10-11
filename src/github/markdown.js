@@ -57,6 +57,12 @@ export function visible(text) {
     );
 }
 
+// A longer file name is cut where a list of names is shown (the text of a
+// review, the job summary). GitHub allows much longer paths, and the list is
+// meant to be read. The limit of the report for Insights is another one
+// (`MAX_PATH_CHARS` in `src/insights/payload.js`).
+export const MAX_SHOWN_PATH_CHARS = 200;
+
 /**
  * Text as inline code: a run of backticks around it that is longer than any
  * run inside, so nothing in the text can end the code early. A line break
@@ -73,6 +79,21 @@ export function inlineCode(text) {
   // removes one space on each side again.
   const padded = /^`|`$|^ .* $/.test(code) ? ` ${code} ` : code;
   return `${fence}${padded}${fence}`;
+}
+
+/**
+ * A file name as inline code, cut at `MAX_SHOWN_PATH_CHARS`. File names come
+ * from the pull request.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+export function pathCode(path) {
+  return inlineCode(
+    path.length > MAX_SHOWN_PATH_CHARS
+      ? `${path.slice(0, MAX_SHOWN_PATH_CHARS)}…`
+      : path,
+  );
 }
 
 /**

@@ -2,10 +2,10 @@ import { SEVERITIES } from "../ai/schema.js";
 import { PatchFormatError, parsePatch } from "../diff/parse.js";
 import { FINGERPRINT_LENGTH } from "../fingerprint.js";
 import { describeApiError } from "./api-error.js";
+import { isCommitSha } from "./context.js";
+import { hasNoContentChange } from "./files.js";
 import { readOwnAccountId } from "./identity.js";
 import { INCOMPLETE_LINE, REVIEW_MARKER } from "./review.js";
-
-const COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 // The second line of an inline comment of this action. Only this exact shape
 // is read; anything else in a comment is ignored. An inline comment adds the
@@ -23,14 +23,6 @@ const COMPARE_FILE_LIMIT = 3000;
 const AHEAD = "ahead";
 const IDENTICAL = "identical";
 
-// Statuses of a file where a missing patch means the content is the same.
-const STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
-  "renamed",
-  "copied",
-  "changed",
-  "unchanged",
-]);
-
 // What a 403 or a 404 means when the earlier reviews are read.
 const LIST_HINTS = Object.freeze({
   403: "The token may not read this pull request. The workflow needs the `pull-requests` permission.",
@@ -44,6 +36,8 @@ const COMPARE_HINTS = Object.freeze({
 /** Why a run reviews the whole pull request instead of the new lines. */
 export const FULL_REASONS = Object.freeze({
   noReview: "there is no earlier review of ReviewOps",
+  notCompared:
+    "the earlier reviews were read, but this run does not compare them with the head",
   notComparable:
     "the commit of the earlier review is no longer part of this branch (force-push or rebase)",
   incomplete:
@@ -155,9 +149,13 @@ export async function readHistory(
     ownReviews = marked.reviews.filter(isOwn);
     ownComments = marked.comments.filter(isOwn);
   }
+  // The head of each body is read once: the lines right below the marker.
+  const commentHeads = ownComments.map((comment) => readHead(comment.body));
+  const reviewHeads = ownReviews.map((review) => readHead(review.body));
+
   const fingerprints = new Set();
-  for (const item of [...ownComments, ...ownReviews]) {
-    for (const { fingerprint } of readHead(item.body).fingerprints) {
+  for (const head of [...commentHeads, ...reviewHeads]) {
+    for (const { fingerprint } of head.fingerprints) {
       fingerprints.add(fingerprint);
     }
   }
@@ -166,8 +164,8 @@ export async function readHistory(
   // that are still open. An inline comment has one fingerprint line; a
   // comment from before the severity was written there is left out.
   const earlierFindings = [];
-  for (const comment of ownComments) {
-    const [head] = readHead(comment.body).fingerprints;
+  for (const [index, comment] of ownComments.entries()) {
+    const [head] = commentHeads[index].fingerprints;
     if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
       earlierFindings.push({
         id: comment.id,
@@ -185,8 +183,8 @@ export async function readHistory(
   // Every own inline comment with a fingerprint, whatever its severity, for
   // the status report (#77). The path is the one GitHub names for the comment.
   const inlineComments = [];
-  for (const comment of ownComments) {
-    const [head] = readHead(comment.body).fingerprints;
+  for (const [index, comment] of ownComments.entries()) {
+    const [head] = commentHeads[index].fingerprints;
     if (
       head &&
       Number.isSafeInteger(comment.id) &&
@@ -218,8 +216,9 @@ export async function readHistory(
     newLines: null,
   });
 
-  const since = lastReviewedCommit(ownReviews);
-  if (since === null || !withComparison) return full(FULL_REASONS.noReview);
+  const since = lastReviewedCommit(ownReviews, reviewHeads);
+  if (since === null) return full(FULL_REASONS.noReview);
+  if (!withComparison) return full(FULL_REASONS.notCompared);
 
   // The head was reviewed already: nothing is new, and nothing is compared.
   if (since === pullRequest.headSha) {
@@ -308,20 +307,22 @@ function readHead(body) {
   return result;
 }
 
-/** `commit_id` of the newest complete review in the list, or `null`. */
-function lastReviewedCommit(ownReviews) {
+/**
+ * `commit_id` of the newest complete review in the list, or `null`.
+ *
+ * @param {object[]} ownReviews
+ * @param {{ incomplete: boolean }[]} heads The head of each review, in the
+ *   same order.
+ */
+function lastReviewedCommit(ownReviews, heads) {
   // GitHub lists reviews from the oldest to the newest. A review that was
   // never submitted is not a finished review, and neither is one that left
   // files or lines out: a later run has to look at those again.
-  for (const review of ownReviews.toReversed()) {
+  for (let index = ownReviews.length - 1; index >= 0; index -= 1) {
+    const review = ownReviews[index];
     if (review.state === "PENDING") continue;
-    if (readHead(review.body).incomplete) continue;
-    if (
-      typeof review.commit_id === "string" &&
-      COMMIT_SHA.test(review.commit_id)
-    ) {
-      return review.commit_id;
-    }
+    if (heads[index].incomplete) continue;
+    if (isCommitSha(review.commit_id)) return review.commit_id;
   }
   return null;
 }
@@ -395,7 +396,5 @@ function addedLinesOfComparison(file) {
       return null;
     }
   }
-  const unchanged =
-    STATUSES_WITHOUT_CONTENT_CHANGE.has(file.status) && !file.changes;
-  return unchanged ? new Set() : null;
+  return hasNoContentChange(file) ? new Set() : null;
 }

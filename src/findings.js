@@ -1,13 +1,10 @@
-import { SEVERITIES } from "./ai/schema.js";
+import { SEVERITIES, SEVERITY_RANK } from "./ai/schema.js";
 import { lineFingerprintsOf, textFingerprintsOf } from "./fingerprint.js";
 
 // A text made of nothing but white space and invisible format characters
 // (such as a zero-width space) cannot become a comment.
 const BLANK = /^[\s\p{Cf}]*$/u;
 const GAPS = /[\s\p{Cf}]+/gu;
-
-// "critical" first, "info" last.
-const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
 
 /**
  * Checks the findings of the model against the diff and chooses the ones the
@@ -204,5 +201,5 @@ function normalize(text) {
 }
 
 function rank(finding) {
-  return RANK.get(finding.severity);
+  return SEVERITY_RANK.get(finding.severity);
 }

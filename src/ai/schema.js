@@ -7,6 +7,11 @@ import { validate } from "./json-schema.js";
 // them equal to the table in docs/response-format.md.
 
 export const SEVERITIES = ["critical", "major", "minor", "info"];
+
+// The place of a severity in the list: 0 is the most serious.
+export const SEVERITY_RANK = new Map(
+  SEVERITIES.map((severity, index) => [severity, index]),
+);
 export const CATEGORIES = [
   "code-quality",
   "react",

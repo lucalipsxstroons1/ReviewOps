@@ -1,8 +1,5 @@
-import { SEVERITIES } from "./ai/schema.js";
+import { SEVERITIES, SEVERITY_RANK } from "./ai/schema.js";
 import { lineFingerprintsOf, textFingerprintsOf } from "./fingerprint.js";
-
-// "critical" first, "info" last.
-const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
 
 /**
  * What became of the line of each earlier inline comment of this action.
@@ -49,6 +46,11 @@ export function assessComments(
   diffs,
   { unknownPaths = new Set(), listingTruncated = false } = {},
 ) {
+  // Without a comment there is nothing to tell apart. The fingerprints of
+  // all added lines of all files are the costly part (seconds for a pull
+  // request with thousands of files), so a first run does not compute them.
+  if (comments.length === 0) return [];
+
   const parsed = new Set(diffs.map(({ path }) => path));
   const current = currentFingerprints(diffs);
   let textIndex = null;
@@ -157,14 +159,6 @@ export function openEarlierFindings(earlierFindings, diffs, options) {
 }
 
 /**
- * The earlier findings that are still open: `open` of
- * {@link openEarlierFindings}.
- */
-export function currentEarlierFindings(earlierFindings, diffs, options) {
-  return openEarlierFindings(earlierFindings, diffs, options).open;
-}
-
-/**
  * The fingerprints of all added lines of the pull request: a line is
  * unchanged since a comment if the fingerprint of the comment is among them.
  *
@@ -201,7 +195,7 @@ export function currentFingerprints(diffs) {
  * @param {Record<string, number>} options.newCounts `counts` of
  *   `selectFindings()`.
  * @param {{ id: number, fingerprint: string, severity: string }[]} options.earlier
- *   What `currentEarlierFindings()` returned.
+ *   `open` of `openEarlierFindings()`.
  * @param {Set<number>} options.resolved Ids of the comments that opened a
  *   resolved thread.
  * @returns {{
@@ -221,7 +215,10 @@ export function countOpenFindings({ newCounts, earlier, resolved }) {
       continue;
     }
     const known = open.get(fingerprint);
-    if (known === undefined || RANK.get(severity) < RANK.get(known)) {
+    if (
+      known === undefined ||
+      SEVERITY_RANK.get(severity) < SEVERITY_RANK.get(known)
+    ) {
       open.set(fingerprint, severity);
     }
   }

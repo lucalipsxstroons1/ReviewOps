@@ -5,7 +5,6 @@ import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import {
   assessComments,
   countOpenFindings,
-  currentEarlierFindings,
   openEarlierFindings,
 } from "../src/open-findings.js";
 
@@ -16,7 +15,7 @@ const diff = (path, patch) => ({ path, ...parsePatch(patch) });
 
 const APP = diff("src/app.js", "@@ -1,2 +1,3 @@\n a\n-old\n+b\n+c");
 
-// --- currentEarlierFindings() ---------------------------------------------------
+// --- openEarlierFindings().open ---------------------------------------------------
 
 test("keeps an earlier finding whose line is still an added line", () => {
   const earlier = [
@@ -31,7 +30,7 @@ test("keeps an earlier finding whose line is still an added line", () => {
       severity: "minor",
     },
   ];
-  assert.deepEqual(currentEarlierFindings(earlier, [APP]), earlier);
+  assert.deepEqual(openEarlierFindings(earlier, [APP]).open, earlier);
 });
 
 test("drops an earlier finding whose line changed or is gone", () => {
@@ -55,7 +54,7 @@ test("drops an earlier finding whose line changed or is gone", () => {
       severity: "major",
     },
   ];
-  assert.deepEqual(currentEarlierFindings(earlier, [APP]), []);
+  assert.deepEqual(openEarlierFindings(earlier, [APP]).open, []);
 });
 
 test("drops an earlier finding at a line that is only context now", () => {
@@ -66,7 +65,7 @@ test("drops an earlier finding at a line that is only context now", () => {
       severity: "critical",
     },
   ];
-  assert.deepEqual(currentEarlierFindings(earlier, [APP]), []);
+  assert.deepEqual(openEarlierFindings(earlier, [APP]).open, []);
 });
 
 test("finds an earlier line that moved", () => {
@@ -78,11 +77,11 @@ test("finds an earlier line that moved", () => {
       severity: "major",
     },
   ];
-  assert.deepEqual(currentEarlierFindings(earlier, [moved]), earlier);
+  assert.deepEqual(openEarlierFindings(earlier, [moved]).open, earlier);
 });
 
 test("has nothing without earlier findings or without files", () => {
-  assert.deepEqual(currentEarlierFindings([], [APP]), []);
+  assert.deepEqual(openEarlierFindings([], [APP]).open, []);
   const earlier = [
     {
       id: 1,
@@ -90,7 +89,7 @@ test("has nothing without earlier findings or without files", () => {
       severity: "major",
     },
   ];
-  assert.deepEqual(currentEarlierFindings(earlier, []), []);
+  assert.deepEqual(openEarlierFindings(earlier, []).open, []);
 });
 
 // --- countOpenFindings() -------------------------------------------------------
@@ -416,15 +415,6 @@ test("a resolved thread still takes the finding out of the count after a rename"
   assert.equal(count.resolved, 1);
 });
 
-test("currentEarlierFindings() returns what openEarlierFindings() calls open", () => {
-  const earlier = [earlierAt(1, "src/old.js", "b", "a")];
-  const diffs = [addedFile("src/new.js", "a", "b")];
-  assert.deepEqual(
-    currentEarlierFindings(earlier, diffs),
-    openEarlierFindings(earlier, diffs).open,
-  );
-});
-
 test("assessComments() tells unchanged, changed and unknown apart", () => {
   const comments = [
     earlierAt(1, "src/app.js", "a", ""),
@@ -435,4 +425,42 @@ test("assessComments() tells unchanged, changed and unknown apart", () => {
     unknownPaths: new Set(["src/big.js"]),
   }).map(({ state }) => state);
   assert.deepEqual(states, ["unchanged", "changed", "unknown"]);
+});
+
+// --- No work without earlier findings (#113) -----------------------------------
+
+/** A file whose diff cannot be read: any look at its lines throws. */
+const unreadable = {
+  path: "src/trap.js",
+  commentableLines: [1, 2],
+  get hunks() {
+    throw new Error("the lines of this file must not be read");
+  },
+};
+
+test("assessComments() reads no line of any file when there is no earlier comment", () => {
+  assert.deepEqual(assessComments([], [unreadable]), []);
+  assert.deepEqual(
+    assessComments([], [unreadable], {
+      unknownPaths: new Set(["a.js"]),
+      listingTruncated: true,
+    }),
+    [],
+  );
+});
+
+test("openEarlierFindings() reads no line of any file when there is no earlier finding", () => {
+  const result = openEarlierFindings([], [unreadable, unreadable]);
+
+  assert.deepEqual(result.open, []);
+  assert.equal(result.commented.size, 0);
+  assert.equal(result.unknown, 0);
+});
+
+test("a comment makes the lines of the files count, as before", () => {
+  const earlier = [earlierAt(1, "src/trap.js", "b", "a")];
+  assert.throws(
+    () => assessComments(earlier, [unreadable]),
+    /must not be read/,
+  );
 });
