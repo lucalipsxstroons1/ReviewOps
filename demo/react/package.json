@@ -1,0 +1,8 @@
+{
+  "name": "demo-react",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "19.1.0"
+  }
+}
