@@ -997,6 +997,11 @@ function check(schema, value, path) {
 // them equal to the table in docs/response-format.md.
 
 const SEVERITIES = ["critical", "major", "minor", "info"];
+
+// The place of a severity in the list: 0 is the most serious.
+const SEVERITY_RANK = new Map(
+  SEVERITIES.map((severity, index) => [severity, index]),
+);
 const CATEGORIES = [
   "code-quality",
   "react",
@@ -1868,9 +1873,6 @@ function textFingerprintsOf(file) {
 const BLANK = /^[\s\p{Cf}]*$/u;
 const findings_GAPS = /[\s\p{Cf}]+/gu;
 
-// "critical" first, "info" last.
-const RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
-
 /**
  * Checks the findings of the model against the diff and chooses the ones the
  * review shows.
@@ -2066,7 +2068,7 @@ function findings_normalize(text) {
 }
 
 function rank(finding) {
-  return RANK.get(finding.severity);
+  return SEVERITY_RANK.get(finding.severity);
 }
 
 ;// CONCATENATED MODULE: ./src/fail-on.js
@@ -2122,6 +2124,16 @@ function findingsAtThreshold(bySeverity, failOn) {
 
 ;// CONCATENATED MODULE: ./src/github/context.js
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * Whether a value is a full commit SHA: 40 lower case hex characters. The
+ * values come from GitHub, but are checked before they are used or shown.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+const isCommitSha = (value) =>
+  typeof value === "string" && COMMIT_SHA.test(value);
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
 
 /**
@@ -2223,7 +2235,7 @@ function readRepository(context) {
 }
 
 function readSha(value, side) {
-  if (typeof value !== "string" || !COMMIT_SHA.test(value)) {
+  if (!isCommitSha(value)) {
     throw new Error(`The event has no valid ${side} commit SHA.`);
   }
   return value;
@@ -2356,6 +2368,18 @@ const STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
 ]);
 
 /**
+ * Whether a file of the list or of a comparison has no change of content: it
+ * was only renamed, copied or had its mode changed, and no line was added or
+ * removed. GitHub then gives no patch, which is no sign of a binary file.
+ *
+ * @param {{ status?: unknown, changes?: unknown }} file
+ * @returns {boolean}
+ */
+function hasNoContentChange({ status, changes }) {
+  return STATUSES_WITHOUT_CONTENT_CHANGE.has(status) && !changes;
+}
+
+/**
  * Loads the changed files of a pull request from the GitHub API.
  *
  * The diff comes from the API only. Nothing here reads the working tree, so
@@ -2417,9 +2441,9 @@ function skipReason(entry) {
   if (entry.status === "removed") return SKIP_REASONS.removed;
   if (typeof entry.patch === "string" && entry.patch !== "") return null;
 
-  const contentIsUnchanged =
-    STATUSES_WITHOUT_CONTENT_CHANGE.has(entry.status) && !entry.changes;
-  return contentIsUnchanged ? SKIP_REASONS.unchanged : SKIP_REASONS.noPatch;
+  return hasNoContentChange(entry)
+    ? SKIP_REASONS.unchanged
+    : SKIP_REASONS.noPatch;
 }
 
 ;// CONCATENATED MODULE: ./src/github/identity.js
@@ -2555,6 +2579,12 @@ function visible(text) {
     );
 }
 
+// A longer file name is cut where a list of names is shown (the text of a
+// review, the job summary). GitHub allows much longer paths, and the list is
+// meant to be read. The limit of the report for Insights is another one
+// (`MAX_PATH_CHARS` in `src/insights/payload.js`).
+const MAX_SHOWN_PATH_CHARS = 200;
+
 /**
  * Text as inline code: a run of backticks around it that is longer than any
  * run inside, so nothing in the text can end the code early. A line break
@@ -2571,6 +2601,21 @@ function inlineCode(text) {
   // removes one space on each side again.
   const padded = /^`|`$|^ .* $/.test(code) ? ` ${code} ` : code;
   return `${fence}${padded}${fence}`;
+}
+
+/**
+ * A file name as inline code, cut at `MAX_SHOWN_PATH_CHARS`. File names come
+ * from the pull request.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+function pathCode(path) {
+  return inlineCode(
+    path.length > MAX_SHOWN_PATH_CHARS
+      ? `${path.slice(0, MAX_SHOWN_PATH_CHARS)}…`
+      : path,
+  );
 }
 
 /**
@@ -2739,14 +2784,14 @@ const MAX_BODY_CHARS = 60000;
 /** File names listed in the review text; the rest is counted. */
 const MAX_LISTED_FILES = 20;
 
-// A longer path is cut in the review text. GitHub allows much longer paths,
-// and the list is meant to be read.
-const MAX_PATH_CHARS = 200;
-
-// The texts of a finding are cut before they are rendered, so the marker and
-// the AI label always stay in a comment. Rendering makes a text at most
-// seven times longer (an invisible character becomes an escaped
-// backslash-u code), so even then a comment stays below MAX_BODY_CHARS.
+// The last guard for the texts of a finding. `boundReview()` already shapes
+// them (150 and 1500 characters, `TEXT_LIMITS` in `src/ai/answer-limits.js`).
+// This cut only makes sure that the marker and the AI label fit into a
+// comment if `postReview()` gets text without limit. It counts UTF-16 units,
+// `boundReview()` counts characters, so the two limits are not the same
+// numbers. Rendering makes a text at most seven times longer (an invisible
+// character becomes an escaped backslash-u code), so even then a comment
+// stays below MAX_BODY_CHARS.
 const MAX_TITLE_CHARS = 200;
 const MAX_TEXT_CHARS = 4000;
 
@@ -3191,13 +3236,6 @@ function skippedList(skipped) {
   );
 }
 
-/** A file name as inline code. File names come from the pull request. */
-function pathCode(path) {
-  const name =
-    path.length > MAX_PATH_CHARS ? `${path.slice(0, MAX_PATH_CHARS)}…` : path;
-  return inlineCode(name);
-}
-
 /** The last guard: a body is never longer than GitHub accepts. */
 function capLength(text) {
   return text.length > MAX_BODY_CHARS
@@ -3213,7 +3251,7 @@ function capLength(text) {
 
 
 
-const history_COMMIT_SHA = /^[0-9a-f]{40}$/;
+
 
 // The second line of an inline comment of this action. Only this exact shape
 // is read; anything else in a comment is ignored. An inline comment adds the
@@ -3231,14 +3269,6 @@ const COMPARE_FILE_LIMIT = 3000;
 const AHEAD = "ahead";
 const IDENTICAL = "identical";
 
-// Statuses of a file where a missing patch means the content is the same.
-const history_STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
-  "renamed",
-  "copied",
-  "changed",
-  "unchanged",
-]);
-
 // What a 403 or a 404 means when the earlier reviews are read.
 const LIST_HINTS = Object.freeze({
   403: "The token may not read this pull request. The workflow needs the `pull-requests` permission.",
@@ -3252,6 +3282,8 @@ const COMPARE_HINTS = Object.freeze({
 /** Why a run reviews the whole pull request instead of the new lines. */
 const FULL_REASONS = Object.freeze({
   noReview: "there is no earlier review of ReviewOps",
+  notCompared:
+    "the earlier reviews were read, but this run does not compare them with the head",
   notComparable:
     "the commit of the earlier review is no longer part of this branch (force-push or rebase)",
   incomplete:
@@ -3363,9 +3395,13 @@ async function readHistory(
     ownReviews = marked.reviews.filter(isOwn);
     ownComments = marked.comments.filter(isOwn);
   }
+  // The head of each body is read once: the lines right below the marker.
+  const commentHeads = ownComments.map((comment) => readHead(comment.body));
+  const reviewHeads = ownReviews.map((review) => readHead(review.body));
+
   const fingerprints = new Set();
-  for (const item of [...ownComments, ...ownReviews]) {
-    for (const { fingerprint } of readHead(item.body).fingerprints) {
+  for (const head of [...commentHeads, ...reviewHeads]) {
+    for (const { fingerprint } of head.fingerprints) {
       fingerprints.add(fingerprint);
     }
   }
@@ -3374,8 +3410,8 @@ async function readHistory(
   // that are still open. An inline comment has one fingerprint line; a
   // comment from before the severity was written there is left out.
   const earlierFindings = [];
-  for (const comment of ownComments) {
-    const [head] = readHead(comment.body).fingerprints;
+  for (const [index, comment] of ownComments.entries()) {
+    const [head] = commentHeads[index].fingerprints;
     if (head?.severity && Number.isSafeInteger(comment.id) && comment.id > 0) {
       earlierFindings.push({
         id: comment.id,
@@ -3393,8 +3429,8 @@ async function readHistory(
   // Every own inline comment with a fingerprint, whatever its severity, for
   // the status report (#77). The path is the one GitHub names for the comment.
   const inlineComments = [];
-  for (const comment of ownComments) {
-    const [head] = readHead(comment.body).fingerprints;
+  for (const [index, comment] of ownComments.entries()) {
+    const [head] = commentHeads[index].fingerprints;
     if (
       head &&
       Number.isSafeInteger(comment.id) &&
@@ -3426,8 +3462,9 @@ async function readHistory(
     newLines: null,
   });
 
-  const since = lastReviewedCommit(ownReviews);
-  if (since === null || !withComparison) return full(FULL_REASONS.noReview);
+  const since = lastReviewedCommit(ownReviews, reviewHeads);
+  if (since === null) return full(FULL_REASONS.noReview);
+  if (!withComparison) return full(FULL_REASONS.notCompared);
 
   // The head was reviewed already: nothing is new, and nothing is compared.
   if (since === pullRequest.headSha) {
@@ -3516,20 +3553,22 @@ function readHead(body) {
   return result;
 }
 
-/** `commit_id` of the newest complete review in the list, or `null`. */
-function lastReviewedCommit(ownReviews) {
+/**
+ * `commit_id` of the newest complete review in the list, or `null`.
+ *
+ * @param {object[]} ownReviews
+ * @param {{ incomplete: boolean }[]} heads The head of each review, in the
+ *   same order.
+ */
+function lastReviewedCommit(ownReviews, heads) {
   // GitHub lists reviews from the oldest to the newest. A review that was
   // never submitted is not a finished review, and neither is one that left
   // files or lines out: a later run has to look at those again.
-  for (const review of ownReviews.toReversed()) {
+  for (let index = ownReviews.length - 1; index >= 0; index -= 1) {
+    const review = ownReviews[index];
     if (review.state === "PENDING") continue;
-    if (readHead(review.body).incomplete) continue;
-    if (
-      typeof review.commit_id === "string" &&
-      history_COMMIT_SHA.test(review.commit_id)
-    ) {
-      return review.commit_id;
-    }
+    if (heads[index].incomplete) continue;
+    if (isCommitSha(review.commit_id)) return review.commit_id;
   }
   return null;
 }
@@ -3603,9 +3642,7 @@ function addedLinesOfComparison(file) {
       return null;
     }
   }
-  const unchanged =
-    history_STATUSES_WITHOUT_CONTENT_CHANGE.has(file.status) && !file.changes;
-  return unchanged ? new Set() : null;
+  return hasNoContentChange(file) ? new Set() : null;
 }
 
 ;// CONCATENATED MODULE: ./src/github/threads.js
@@ -4001,9 +4038,6 @@ function deriveStatusUrl(url) {
 
 
 
-// "critical" first, "info" last.
-const open_findings_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]));
-
 /**
  * What became of the line of each earlier inline comment of this action.
  * One rule for the count of the open findings, for the lines that count as
@@ -4049,6 +4083,11 @@ function assessComments(
   diffs,
   { unknownPaths = new Set(), listingTruncated = false } = {},
 ) {
+  // Without a comment there is nothing to tell apart. The fingerprints of
+  // all added lines of all files are the costly part (seconds for a pull
+  // request with thousands of files), so a first run does not compute them.
+  if (comments.length === 0) return [];
+
   const parsed = new Set(diffs.map(({ path }) => path));
   const current = currentFingerprints(diffs);
   let textIndex = null;
@@ -4157,14 +4196,6 @@ function openEarlierFindings(earlierFindings, diffs, options) {
 }
 
 /**
- * The earlier findings that are still open: `open` of
- * {@link openEarlierFindings}.
- */
-function currentEarlierFindings(earlierFindings, diffs, options) {
-  return openEarlierFindings(earlierFindings, diffs, options).open;
-}
-
-/**
  * The fingerprints of all added lines of the pull request: a line is
  * unchanged since a comment if the fingerprint of the comment is among them.
  *
@@ -4201,7 +4232,7 @@ function currentFingerprints(diffs) {
  * @param {Record<string, number>} options.newCounts `counts` of
  *   `selectFindings()`.
  * @param {{ id: number, fingerprint: string, severity: string }[]} options.earlier
- *   What `currentEarlierFindings()` returned.
+ *   `open` of `openEarlierFindings()`.
  * @param {Set<number>} options.resolved Ids of the comments that opened a
  *   resolved thread.
  * @returns {{
@@ -4221,7 +4252,10 @@ function countOpenFindings({ newCounts, earlier, resolved }) {
       continue;
     }
     const known = open.get(fingerprint);
-    if (known === undefined || open_findings_RANK.get(severity) < open_findings_RANK.get(known)) {
+    if (
+      known === undefined ||
+      SEVERITY_RANK.get(severity) < SEVERITY_RANK.get(known)
+    ) {
       open.set(fingerprint, severity);
     }
   }
@@ -4366,7 +4400,7 @@ const ACTION_VERSION = "1.0.0";
 
 const SCHEMA_VERSION = 1;
 const MAX_FINDINGS = 500;
-const payload_MAX_PATH_CHARS = 1024;
+const MAX_PATH_CHARS = 1024;
 const MAX_REPOSITORY_CHARS = 140;
 
 const UUID_V4 =
@@ -4448,7 +4482,7 @@ function buildInsightsPayload({
   ];
   // `String.length` counts UTF-16 code units, never fewer than code points,
   // so a path that is allowed here is allowed by the contract.
-  const fitting = all.filter((entry) => entry.path.length <= payload_MAX_PATH_CHARS);
+  const fitting = all.filter((entry) => entry.path.length <= MAX_PATH_CHARS);
   const findings = fitting.slice(0, MAX_FINDINGS);
 
   // Taken last, so the time is that of the finished report.
@@ -4806,7 +4840,7 @@ const REVIEW_TEXTS = {
   notBuilt: NOT_BUILT_TEXT,
   omitted: (omitted) =>
     omitted.overLimit > 0 || omitted.longPath > 0
-      ? `Findings left out of the report for Insights: ${omitted.overLimit} over the limit of ${MAX_FINDINGS}, ${omitted.longPath} with a path over ${payload_MAX_PATH_CHARS} characters.`
+      ? `Findings left out of the report for Insights: ${omitted.overLimit} over the limit of ${MAX_FINDINGS}, ${omitted.longPath} with a path over ${MAX_PATH_CHARS} characters.`
       : null,
   nothingToSend: null,
   delivered: (result, attempts) =>
@@ -5681,10 +5715,6 @@ function skip_skipReason(facts, options) {
 /** File names listed in the summary; the rest is counted. */
 const MAX_SUMMARY_FILES = 50;
 
-// A longer path is cut. GitHub allows much longer paths, and the list is
-// meant to be read.
-const summary_MAX_PATH_CHARS = 200;
-
 // The summary of one step may hold 1 MiB. The texts here stay far below.
 const MAX_SUMMARY_CHARS = 60000;
 
@@ -5842,7 +5872,7 @@ function fileBlocks({ reviewed, skipped, alreadyReviewed }, since) {
   if (skipped.length > 0) {
     const lines = skipped
       .slice(0, MAX_SUMMARY_FILES)
-      .map(({ path, reason }) => `- ${summary_pathCode(path)}: ${plainText(reason)}`);
+      .map(({ path, reason }) => `- ${pathCode(path)}: ${plainText(reason)}`);
     if (skipped.length > MAX_SUMMARY_FILES) {
       lines.push(`- and ${skipped.length - MAX_SUMMARY_FILES} more files`);
     }
@@ -5880,13 +5910,6 @@ function usageBlocks({
   }
   if (notes.length > 0) blocks.push(notes.join(" "));
   return blocks;
-}
-
-/** A file name as inline code. File names come from the pull request. */
-function summary_pathCode(path) {
-  return inlineCode(
-    path.length > summary_MAX_PATH_CHARS ? `${path.slice(0, summary_MAX_PATH_CHARS)}…` : path,
-  );
 }
 
 ;// CONCATENATED MODULE: ./src/main.js
@@ -6064,8 +6087,10 @@ async function run({
     // Only checked values reach the log: the title of the pull request is
     // written by its author and stays out.
     const pullRequest = readPullRequest(context);
+    // Checked values only: the place of the pull request in a log line.
+    const pullRequestName = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
     core.info(
-      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber} at commit ${pullRequest.headSha}.`,
+      `${closed ? "Reporting the state of" : "Reviewing"} ${pullRequestName} at commit ${pullRequest.headSha}.`,
     );
 
     const octokit = getOctokit(inputs.githubToken);
@@ -6111,11 +6136,7 @@ async function run({
         const earlierWork = await readHistory(octokit, pullRequest, {
           compare: false,
         });
-        const closedFiles = prepareFiles(
-          files,
-          createExcludeFilter(inputs.exclude),
-          parsePatch,
-        );
+        const closedFiles = prepareFiles(files, excludeReason, parsePatch);
         if (earlierWork.inlineComments.length > 0) {
           const threads = await readThreadStates(octokit, pullRequest);
           planStatusReport({
@@ -6269,9 +6290,7 @@ async function run({
       const reached = findingsAtThreshold(open.bySeverity, failOn);
       report.threshold = { failOn, reached };
       if (reached > 0) {
-        const where =
-          url ??
-          `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`;
+        const where = url ?? pullRequestName;
         core.setFailed(
           `ReviewOps found ${reached} open findings at or above the severity "${failOn}" (fail-on: ${failOn}): ${where}. Fix them, or resolve the thread of a finding that needs no change.`,
         );
@@ -6568,18 +6587,22 @@ async function run({
     });
     const where =
       posted.reviewId === null
-        ? `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.pullNumber}`
+        ? pullRequestName
         : reviewUrl(
             serverUrlOf(context.serverUrl),
             pullRequest,
             posted.reviewId,
           );
+    // The sentence for the summary ends with a full stop, the line of the
+    // log names the place instead.
     if (posted.fallback) {
-      report.status = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review.`;
-      core.warning(`${report.status.slice(0, -1)}: ${where}`);
+      const sentence = `GitHub did not accept the inline comments (HTTP 422), so all ${shown.length} findings are listed in the text of the review`;
+      report.status = `${sentence}.`;
+      core.warning(`${sentence}: ${where}`);
     } else {
-      report.status = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text.`;
-      core.info(`${report.status.slice(0, -1)}: ${where}`);
+      const sentence = `Posted a review with ${posted.inlineComments} inline comments and ${unplaced.length} findings in its text`;
+      report.status = `${sentence}.`;
+      core.info(`${sentence}: ${where}`);
     }
     conclude({
       newCounts,

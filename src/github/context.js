@@ -1,4 +1,14 @@
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * Whether a value is a full commit SHA: 40 lower case hex characters. The
+ * values come from GitHub, but are checked before they are used or shown.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export const isCommitSha = (value) =>
+  typeof value === "string" && COMMIT_SHA.test(value);
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
 
 /**
@@ -100,7 +110,7 @@ function readRepository(context) {
 }
 
 function readSha(value, side) {
-  if (typeof value !== "string" || !COMMIT_SHA.test(value)) {
+  if (!isCommitSha(value)) {
     throw new Error(`The event has no valid ${side} commit SHA.`);
   }
   return value;

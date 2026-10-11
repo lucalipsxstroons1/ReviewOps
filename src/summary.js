@@ -1,13 +1,9 @@
 import { SEVERITIES } from "./ai/schema.js";
-import { inlineCode, plainText } from "./github/markdown.js";
+import { inlineCode, pathCode, plainText } from "./github/markdown.js";
 import { SEVERITY_LABELS } from "./github/review.js";
 
 /** File names listed in the summary; the rest is counted. */
 export const MAX_SUMMARY_FILES = 50;
-
-// A longer path is cut. GitHub allows much longer paths, and the list is
-// meant to be read.
-const MAX_PATH_CHARS = 200;
 
 // The summary of one step may hold 1 MiB. The texts here stay far below.
 const MAX_SUMMARY_CHARS = 60000;
@@ -204,11 +200,4 @@ function usageBlocks({
   }
   if (notes.length > 0) blocks.push(notes.join(" "));
   return blocks;
-}
-
-/** A file name as inline code. File names come from the pull request. */
-function pathCode(path) {
-  return inlineCode(
-    path.length > MAX_PATH_CHARS ? `${path.slice(0, MAX_PATH_CHARS)}…` : path,
-  );
 }

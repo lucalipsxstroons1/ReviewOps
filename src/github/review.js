@@ -1,6 +1,6 @@
 import { SEVERITIES } from "../ai/schema.js";
 import { describeApiError } from "./api-error.js";
-import { inlineCode, modelMarkdown, plainText } from "./markdown.js";
+import { inlineCode, modelMarkdown, pathCode, plainText } from "./markdown.js";
 
 /**
  * Marks every comment and every review text of this action. It always
@@ -17,14 +17,14 @@ export const MAX_BODY_CHARS = 60000;
 /** File names listed in the review text; the rest is counted. */
 export const MAX_LISTED_FILES = 20;
 
-// A longer path is cut in the review text. GitHub allows much longer paths,
-// and the list is meant to be read.
-const MAX_PATH_CHARS = 200;
-
-// The texts of a finding are cut before they are rendered, so the marker and
-// the AI label always stay in a comment. Rendering makes a text at most
-// seven times longer (an invisible character becomes an escaped
-// backslash-u code), so even then a comment stays below MAX_BODY_CHARS.
+// The last guard for the texts of a finding. `boundReview()` already shapes
+// them (150 and 1500 characters, `TEXT_LIMITS` in `src/ai/answer-limits.js`).
+// This cut only makes sure that the marker and the AI label fit into a
+// comment if `postReview()` gets text without limit. It counts UTF-16 units,
+// `boundReview()` counts characters, so the two limits are not the same
+// numbers. Rendering makes a text at most seven times longer (an invisible
+// character becomes an escaped backslash-u code), so even then a comment
+// stays below MAX_BODY_CHARS.
 export const MAX_TITLE_CHARS = 200;
 export const MAX_TEXT_CHARS = 4000;
 
@@ -467,13 +467,6 @@ function skippedList(skipped) {
   return [`#### Files not reviewed (${skipped.length})`, lines.join("\n")].join(
     "\n\n",
   );
-}
-
-/** A file name as inline code. File names come from the pull request. */
-function pathCode(path) {
-  const name =
-    path.length > MAX_PATH_CHARS ? `${path.slice(0, MAX_PATH_CHARS)}…` : path;
-  return inlineCode(name);
 }
 
 /** The last guard: a body is never longer than GitHub accepts. */

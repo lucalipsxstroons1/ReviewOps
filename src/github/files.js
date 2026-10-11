@@ -24,6 +24,18 @@ const STATUSES_WITHOUT_CONTENT_CHANGE = new Set([
 ]);
 
 /**
+ * Whether a file of the list or of a comparison has no change of content: it
+ * was only renamed, copied or had its mode changed, and no line was added or
+ * removed. GitHub then gives no patch, which is no sign of a binary file.
+ *
+ * @param {{ status?: unknown, changes?: unknown }} file
+ * @returns {boolean}
+ */
+export function hasNoContentChange({ status, changes }) {
+  return STATUSES_WITHOUT_CONTENT_CHANGE.has(status) && !changes;
+}
+
+/**
  * Loads the changed files of a pull request from the GitHub API.
  *
  * The diff comes from the API only. Nothing here reads the working tree, so
@@ -85,7 +97,7 @@ function skipReason(entry) {
   if (entry.status === "removed") return SKIP_REASONS.removed;
   if (typeof entry.patch === "string" && entry.patch !== "") return null;
 
-  const contentIsUnchanged =
-    STATUSES_WITHOUT_CONTENT_CHANGE.has(entry.status) && !entry.changes;
-  return contentIsUnchanged ? SKIP_REASONS.unchanged : SKIP_REASONS.noPatch;
+  return hasNoContentChange(entry)
+    ? SKIP_REASONS.unchanged
+    : SKIP_REASONS.noPatch;
 }
