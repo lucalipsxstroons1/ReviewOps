@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { lineFingerprint } from "../src/fingerprint.js";
-import { fingerprintLine } from "../src/github/review.js";
+import { fingerprintLine } from "../src/github/marker.js";
 import {
   apiFile,
   apiThread,

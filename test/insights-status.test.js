@@ -5,7 +5,7 @@ import { parsePatch } from "../src/diff/parse.js";
 import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
 import { readPullRequestState } from "../src/github/context.js";
 import { readHistory } from "../src/github/history.js";
-import { fingerprintLine } from "../src/github/review.js";
+import { fingerprintLine } from "../src/github/marker.js";
 import {
   readResolvedComments,
   readThreadStates,

@@ -10,10 +10,10 @@ import {
 } from "../src/github/history.js";
 import {
   REVIEW_MARKER,
-  commentBody,
   fingerprintLine,
   INCOMPLETE_LINE,
-} from "../src/github/review.js";
+} from "../src/github/marker.js";
+import { commentBody } from "../src/github/review.js";
 import {
   apiFailure,
   createFakeOctokit,
@@ -255,6 +255,29 @@ test("reads a fingerprint only from the second line and only in its exact shape"
   });
   assert.equal(history.fingerprints.size, 0);
   assert.equal(history.ownComments, bodies.length);
+});
+
+test("reads the whole head of an own review, however many lines it has (#111)", async () => {
+  const prints = Array.from({ length: 60 }, (_, index) =>
+    index.toString(16).padStart(16, "0"),
+  );
+  const body = [
+    REVIEW_MARKER,
+    INCOMPLETE_LINE,
+    ...prints.map((print) => fingerprintLine(print)),
+    "",
+    "### ReviewOps",
+    fingerprintLine("f".repeat(16)),
+  ].join("\n");
+
+  const history = await read({
+    existingReviews: [ownReview(FIRST, { body })],
+    compare: () => ahead(),
+  });
+
+  assert.deepEqual([...history.fingerprints].sort(), [...prints].sort());
+  // The review is incomplete: it is no starting point.
+  assert.equal(history.since, null);
 });
 
 // --- Earlier findings with their severity --------------------------------------

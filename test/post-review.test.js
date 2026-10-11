@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import MarkdownIt from "markdown-it";
 import {
+  INCOMPLETE_LINE,
+  REVIEW_MARKER,
+  fingerprintLine,
+} from "../src/github/marker.js";
+import {
   MAX_BODY_CHARS,
   MAX_LISTED_FILES,
   MAX_TEXT_CHARS,
   MAX_TITLE_CHARS,
-  REVIEW_MARKER,
   aiLabel,
   commentBody,
-  fingerprintLine,
-  INCOMPLETE_LINE,
   postReview,
   reviewBody,
   reviewUrl,

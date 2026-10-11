@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lineFingerprint, textFingerprint } from "../src/fingerprint.js";
-import { fingerprintLine } from "../src/github/review.js";
+import { fingerprintLine } from "../src/github/marker.js";
 import {
   apiFile,
   apiThread,

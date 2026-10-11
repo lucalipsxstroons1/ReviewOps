@@ -1,19 +1,9 @@
-import { SEVERITIES } from "../ai/schema.js";
 import { PatchFormatError, parsePatch } from "../diff/parse.js";
-import { FINGERPRINT_LENGTH } from "../fingerprint.js";
 import { describeApiError } from "./api-error.js";
 import { isCommitSha } from "./context.js";
 import { hasNoContentChange } from "./files.js";
 import { readOwnAccountId } from "./identity.js";
-import { INCOMPLETE_LINE, REVIEW_MARKER } from "./review.js";
-
-// The second line of an inline comment of this action. Only this exact shape
-// is read; anything else in a comment is ignored. An inline comment adds the
-// severity of its finding and, after it, the text fingerprint of its line
-// (#107); the line in the text of a review has neither.
-const FINGERPRINT_LINE = new RegExp(
-  `^<!-- reviewops-fingerprint: ([0-9a-f]{${FINGERPRINT_LENGTH}})(?: severity: (${SEVERITIES.join("|")})(?: text: ([0-9a-f]{${FINGERPRINT_LENGTH}}))?)? -->$`,
-);
+import { readHead, startsWithMarker } from "./marker.js";
 
 // A comparison lists at most this many files, 100 per request.
 const COMPARE_PAGE_SIZE = 100;
@@ -45,8 +35,7 @@ export const FULL_REASONS = Object.freeze({
 });
 
 /** Whether the text of a review or comment starts with the marker. */
-const hasMarker = (item) =>
-  typeof item?.body === "string" && item.body.startsWith(REVIEW_MARKER);
+const hasMarker = (item) => startsWithMarker(item?.body);
 
 /**
  * Reads what ReviewOps already did on this pull request, so a new run does
@@ -272,39 +261,6 @@ export function scopeDiffs(diffs, newLines) {
     lines.set(diff.path, new Set(fresh));
   }
   return { diffs: kept, newLines: lines };
-}
-
-/**
- * The lines right below the marker of a body of this action: the fingerprints
- * and the note of an incomplete review. The first line that is neither ends
- * the head, so the text further down, which comes from the model, is never
- * read. Both kinds of line ending are accepted: GitHub keeps the ones of an
- * edit.
- *
- * @param {string} body
- * @returns {{
- *   fingerprints: {
- *     fingerprint: string,
- *     severity: string | null,
- *     text: string | null,
- *   }[],
- *   incomplete: boolean,
- * }}
- */
-function readHead(body) {
-  const result = { fingerprints: [], incomplete: false };
-  for (const line of body.split(/\r?\n/, 40).slice(1)) {
-    const match = FINGERPRINT_LINE.exec(line);
-    if (match) {
-      result.fingerprints.push({
-        fingerprint: match[1],
-        severity: match[2] ?? null,
-        text: match[3] ?? null,
-      });
-    } else if (line === INCOMPLETE_LINE) result.incomplete = true;
-    else break;
-  }
-  return result;
 }
 
 /**
