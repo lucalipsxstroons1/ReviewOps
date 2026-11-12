@@ -6,3 +6,6 @@ package-lock.json
 
 # Prose keeps its hand-made layout (tables, skill texts).
 *.md
+
+# Demo code of the end-to-end test is not formatted by us.
+demo/
